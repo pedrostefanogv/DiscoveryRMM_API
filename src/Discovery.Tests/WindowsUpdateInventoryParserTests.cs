@@ -42,6 +42,49 @@ public class WindowsUpdateInventoryParserTests
     }
 
     [Test]
+    public void ParsesThirdPartyUpdateKeys()
+    {
+        // Agente envia chaves canonicas choco:/winget: para apps de terceiros
+        // (WU-19/WU-20). Antes o parser descartava e o pendente sumia da API.
+        var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""
+        [
+          {
+            "updateKey": "winget:Microsoft.PowerToys",
+            "title": "PowerToys (Microsoft.PowerToys)",
+            "classification": "Third-party",
+            "source": "winget",
+            "updateType": "software",
+            "isPending": true,
+            "isInstalled": false,
+            "availableVersion": "0.90.0"
+          },
+          {
+            "updateKey": "choco:notepadplusplus",
+            "title": "Notepad++ (notepadplusplus)",
+            "classification": "Third-party",
+            "source": "choco",
+            "isPending": true
+          },
+          {
+            "updateKey": "winget:",
+            "title": "id vazio deve ser descartado"
+          },
+          {
+            "updateKey": "winget:id:com:dois-pontos",
+            "title": "id com dois-pontos deve ser descartado"
+          }
+        ]
+        """));
+
+        Assert.That(entries, Has.Count.EqualTo(2));
+        Assert.That(entries[0].UpdateKey, Is.EqualTo("winget:Microsoft.PowerToys"));
+        Assert.That(entries[0].Source, Is.EqualTo("winget"));
+        Assert.That(entries[0].IsPending, Is.True);
+        Assert.That(entries[1].UpdateKey, Is.EqualTo("choco:notepadplusplus"));
+        Assert.That(entries[1].Source, Is.EqualTo("choco"));
+    }
+
+    [Test]
     public void ParsesWaaSFeatureUpgradeSyntheticEntry()
     {
         // Item sintetizado pelo agente a partir do WaaSFeatureAssessment

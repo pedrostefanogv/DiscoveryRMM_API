@@ -351,6 +351,31 @@ public static class WindowsUpdateInventoryParser
         return SeveritySources.Contains(value) ? value : null;
     }
 
+    /// <summary>
+    /// Chaves canônicas de apps de terceiros (WU-19/WU-20): "choco:&lt;id&gt;",
+    /// "winget:&lt;id&gt;" e "msi:&lt;id&gt;". Antes eram descartadas pelo parser
+    /// (o agente contava o pendente, mas a API não gravava a linha). O ID é
+    /// validado aqui apenas como transporte: o agente revalida por allowlist
+    /// antes de usá-lo como argumento de processo.
+    /// </summary>
+    private static string? NormalizeThirdPartyKey(string key)
+    {
+        foreach (var source in new[] { "choco", "winget", "msi" })
+        {
+            var prefix = source + ":";
+            if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var id = key[prefix.Length..].Trim();
+            if (id.Length is 0 or > 200)
+                return null;
+            if (id.Any(ch => char.IsWhiteSpace(ch) || char.IsControl(ch) || ch == ':'))
+                return null;
+            return source + ":" + id;
+        }
+        return null;
+    }
+
     private static string? NormalizeUpdateKey(
         string? rawKey,
         string? updateId,
@@ -358,6 +383,9 @@ public static class WindowsUpdateInventoryParser
         IReadOnlyList<string> kbIds)
     {
         var key = rawKey?.Trim() ?? string.Empty;
+        var thirdPartyKey = NormalizeThirdPartyKey(key);
+        if (thirdPartyKey is not null)
+            return thirdPartyKey;
         if (key.StartsWith("guid:", StringComparison.OrdinalIgnoreCase) && key.Count(ch => ch == ':') == 2)
             return key.ToLowerInvariant();
         if (key.StartsWith("kb:", StringComparison.OrdinalIgnoreCase))
