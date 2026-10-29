@@ -6,6 +6,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
+using static Discovery.Infrastructure.Cqrs.Patches.PatchUpdateGuards;
 
 namespace Discovery.Infrastructure.Cqrs.Patches;
 
@@ -61,6 +62,20 @@ public sealed class ScanAgentWindowsUpdatesCommandHandler(
     }
 }
 
+/// <summary>
+/// Guardas compartilhadas dos comandos de patch.
+/// </summary>
+internal static class PatchUpdateGuards
+{
+    /// <summary>
+    /// Upgrade de versao sintetizado a partir da avaliacao WaaS (source "waas"):
+    /// existe no inventario para visibilidade, mas nao tem pacote/UpdateID no WUA
+    /// para instalar via RMM. A aplicacao e feita pelo Windows Update do host.
+    /// </summary>
+    public static bool IsWaaSFeatureUpdate(AgentWindowsUpdate update) =>
+        string.Equals(update.Source, "waas", StringComparison.OrdinalIgnoreCase);
+}
+
 public sealed class InstallAgentWindowsUpdateCommandHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
@@ -85,6 +100,14 @@ public sealed class InstallAgentWindowsUpdateCommandHandler(
 
         if (!update.IsPending)
             return Result<Guid>.Failure(Error.Validation("updateKey", "A atualização não está pendente neste agente."));
+
+        // Upgrade sintetizado pelo WaaS (fonte "waas"): o RMM nao tem um pacote
+        // WUA para instalar. A aplicacao e feita pelo Windows Update/Installation
+        // Assistant no host; evita dispatch que sempre falharia por chave ausente.
+        if (IsWaaSFeatureUpdate(update))
+            return Result<Guid>.Failure(Error.Validation(
+                "updateKey",
+                "Atualizacao de versao do Windows nao e instalavel pelo RMM; aplique pelo Windows Update do host."));
 
         if (update.ApprovalState == PatchApprovalState.Denied && !cmd.Force)
         {
@@ -170,6 +193,7 @@ public sealed class InstallAgentApprovedWindowsUpdatesCommandHandler(
         var pending = await patchRepo.GetPendingForAgentAsync(cmd.AgentId, ct);
         var approved = pending
             .Where(update => update.ApprovalState is PatchApprovalState.Approved or PatchApprovalState.AutoApproved)
+            .Where(update => !IsWaaSFeatureUpdate(update))
             .Take(100)
             .ToList();
 
@@ -228,6 +252,11 @@ public sealed class SetAgentWindowsUpdateApprovalCommandHandler(
         if (update is null)
             return Result<PatchApprovalDto>.Failure(Error.NotFound("Windows update not found for this agent."));
 
+        if (IsWaaSFeatureUpdate(update))
+            return Result<PatchApprovalDto>.Failure(Error.Validation(
+                "updateKey",
+                "Atualizacao de versao do Windows e apenas informativa no RMM; aplique pelo Windows Update do host."));
+
         var dto = await PatchOperations.SetApprovalAsync(
             patchRepo, resolver, agent, site, update, cmd.Scope, cmd.Action,
             cmd.Reason, cmd.ChangedBy, cmd.IpAddress, cmd.TargetScopeId, ct);
@@ -267,6 +296,7 @@ public sealed class ApproveAgentPendingWindowsUpdatesCommandHandler(
 
         var pending = await patchRepo.GetPendingForAgentAsync(cmd.AgentId, ct);
         var targets = pending
+            .Where(update => !IsWaaSFeatureUpdate(update))
             .GroupBy(update => update.GroupKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .Take(200)
