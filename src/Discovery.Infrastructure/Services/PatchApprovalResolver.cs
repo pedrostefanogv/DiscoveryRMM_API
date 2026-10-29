@@ -315,12 +315,17 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         {
             if (!PatchSourcePolicy.ThirdPartyConsented(policy.Sources, policy.AllowThirdPartyApps))
                 return false;
-            // WU-21/D24: sem versão curada e ativa, terceiro fica aguardando
-            // aprovação manual — o catálogo é a barreira de integridade.
-            var appId = Discovery.Infrastructure.Cqrs.Patches.PatchCommandPayloads.ExtractAppId(update.UpdateKey);
-            var key = (update.Source ?? string.Empty).Trim().ToLowerInvariant() + ":" + appId.Trim().ToLowerInvariant();
-            if (!catalogKeys.Contains(key))
-                return false;
+            // WU-21/D24: só o caminho de DOWNLOAD DIRETO (msi) exige versão curada
+            // e ativa — ali hash/assinatura vêm do catálogo. winget/choco são
+            // gerenciadores de pacote e validam o próprio feed.
+            if (PatchSourcePolicy.RequiresCuratedCatalog(update.Source))
+            {
+                var appId = Discovery.Infrastructure.Cqrs.Patches.PatchCommandPayloads.ExtractAppId(update.UpdateKey);
+                var key = (update.Source ?? string.Empty).Trim().ToLowerInvariant() + ":" +
+                          appId.Trim().ToLowerInvariant();
+                if (!catalogKeys.Contains(key))
+                    return false;
+            }
         }
         else if (!PatchSourcePolicy.AllowsOs(policy.Sources))
         {

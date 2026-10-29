@@ -113,6 +113,12 @@ public interface IPatchRepository
         DateTime decidedAt,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Chaves de apps de terceiros presentes no inventário (WU-21), para o job de
+    /// ingestão de manifestos. Devolve pares "source:appId" distintos.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetThirdPartyAppKeysAsync(int limit, CancellationToken ct = default);
+
     /// <summary>Marca instalações sem resultado há mais de <paramref name="maxAge"/> como Failed.</summary>
     Task<int> ExpireStaleInstallingAsync(TimeSpan maxAge, CancellationToken ct = default);
 

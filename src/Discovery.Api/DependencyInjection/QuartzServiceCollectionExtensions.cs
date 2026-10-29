@@ -237,6 +237,20 @@ public static class QuartzServiceCollectionExtensions
                     .WithDescription("Consome a política de reboot para agentes com reinício pendente (nunca reinicia)"));
             }
 
+            // WU-21: ingestão de manifestos do winget-pkgs (off por padrão: usa
+            // rede pública; habilitar por configuração explícita).
+            var catalogIngestionEnabled = configuration.GetValue<bool?>("BackgroundJobs:AppCatalogIngestion:Enabled") ?? false;
+            if (catalogIngestionEnabled)
+            {
+                var catalogIngestionHour = Math.Clamp(configuration
+                    .GetValue<int?>("BackgroundJobs:AppCatalogIngestion:HourUtc") ?? 5, 0, 23);
+
+                q.ScheduleJob<AppCatalogIngestionJob>(trigger => trigger
+                    .WithIdentity(AppCatalogIngestionJob.Key.Name, AppCatalogIngestionJob.Key.Group)
+                    .WithCronSchedule($"0 40 {catalogIngestionHour} * * ?")
+                    .WithDescription("Ingere manifestos do winget-pkgs no catálogo curado (pending)"));
+            }
+
             var patchMaintenanceEnabled = configuration.GetValue<bool?>("BackgroundJobs:PatchMaintenance:Enabled") ?? true;
             if (patchMaintenanceEnabled)
             {

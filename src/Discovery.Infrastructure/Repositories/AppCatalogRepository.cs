@@ -21,7 +21,9 @@ public sealed class AppCatalogRepository(DiscoveryDbContext db) : IAppCatalogRep
 
     private static readonly HashSet<string> Statuses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "active", "revoked"
+        // pending: importado de manifesto e aguardando curadoria humana (D24).
+        // Só "active" habilita auto-aprovação.
+        "pending", "active", "revoked"
     };
 
     private static readonly Regex Sha256Pattern = new("^[a-fA-F0-9]{64}$", RegexOptions.Compiled);
@@ -50,7 +52,7 @@ public sealed class AppCatalogRepository(DiscoveryDbContext db) : IAppCatalogRep
 
         var status = string.IsNullOrWhiteSpace(entry.Status) ? "active" : entry.Status.Trim().ToLowerInvariant();
         if (!Statuses.Contains(status))
-            throw new ArgumentException("status precisa ser active ou revoked.", nameof(entry));
+            throw new ArgumentException("status precisa ser pending, active ou revoked.", nameof(entry));
 
         var now = DateTime.UtcNow;
         var existing = await db.AppCatalogEntries.FirstOrDefaultAsync(
@@ -73,6 +75,11 @@ public sealed class AppCatalogRepository(DiscoveryDbContext db) : IAppCatalogRep
             await db.SaveChangesAsync(ct);
             return entry;
         }
+
+        // Re-ingestão do mesmo manifesto NÃO rebaixa uma versão já curada:
+        // "active" só sai por revogação explícita (RevokeAsync).
+        if (existing.Status == "active" && status == "pending")
+            status = "active";
 
         existing.Name = name;
         existing.Publisher = entry.Publisher ?? existing.Publisher;
@@ -110,6 +117,22 @@ public sealed class AppCatalogRepository(DiscoveryDbContext db) : IAppCatalogRep
         entry.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    public async Task<AppCatalogEntry?> ActivateAsync(Guid id, string? curatedBy, CancellationToken ct = default)
+    {
+        var entry = await db.AppCatalogEntries.FirstOrDefaultAsync(item => item.Id == id, ct);
+        if (entry is null)
+            return null;
+
+        entry.Status = "active";
+        entry.RevokedAt = null;
+        entry.RevokedBy = null;
+        entry.CuratedBy = string.IsNullOrWhiteSpace(curatedBy) ? entry.CuratedBy : curatedBy.Trim();
+        entry.CuratedAt = DateTime.UtcNow;
+        entry.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return entry;
     }
 
     public async Task<IReadOnlyList<AppCatalogEntry>> ListAsync(

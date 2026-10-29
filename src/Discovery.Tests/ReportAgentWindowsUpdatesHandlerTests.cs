@@ -211,6 +211,9 @@ public class ReportAgentWindowsUpdatesHandlerTests
         public Task<IReadOnlyList<Guid>> GetAgentsWithPendingRebootAsync(int limit, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Guid>>([]);
 
+        public Task<IReadOnlyList<string>> GetThirdPartyAppKeysAsync(int limit, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
         public Task UpdateRebootActionAsync(
             Guid agentId, Discovery.Core.Enums.PatchRebootAction action, string reason, DateTime decidedAt,
             CancellationToken ct = default)

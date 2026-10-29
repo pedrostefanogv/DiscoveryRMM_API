@@ -125,6 +125,8 @@ builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();
 builder.Services.AddSingleton(TimeProvider.System);
+// WU-21: fonte de manifestos do winget-pkgs (HttpClient interno com User-Agent).
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.WingetManifestSource>();
 
 // Presenca de visualizacao do chat de suporte: singleton porque o estado
 // ("quem esta com a janela da conversa aberta agora") e por PROCESSO, nao por

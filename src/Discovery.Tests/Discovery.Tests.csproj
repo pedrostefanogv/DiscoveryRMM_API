@@ -31,6 +31,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Fixtures reais (manifestos winget-pkgs) usados pelos testes do catálogo. -->
+    <Content Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Discovery.Core\Discovery.Core.csproj" />
     <ProjectReference Include="..\Discovery.Migrations\Discovery.Migrations.csproj" />
     <ProjectReference Include="..\Discovery.Infrastructure\Discovery.Infrastructure.csproj" />

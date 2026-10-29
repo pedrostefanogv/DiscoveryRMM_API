@@ -46,6 +46,65 @@ public sealed class UpsertAppCatalogEntryCommandHandler(
     }
 }
 
+/// <summary>
+/// Ingestão de manifesto do winget-pkgs (WU-21/D24): parseia, valida
+/// integridade e grava como <c>pending</c>. Não ativa sozinho — curadoria é
+/// humana por decisão de produto (evita promover às cegas o que a comunidade
+/// publicou).
+/// </summary>
+public sealed class IngestWingetManifestCommandHandler(
+    IAppCatalogRepository catalogRepo
+) : IRequestHandler<IngestWingetManifestCommand, Result<AppCatalogEntryDto>>
+{
+    public async Task<Result<AppCatalogEntryDto>> Handle(IngestWingetManifestCommand cmd, CancellationToken ct)
+    {
+        var (manifest, error) = Discovery.Core.Catalog.WingetManifestParser.Parse(cmd.ManifestYaml);
+        if (manifest is null)
+            return Result<AppCatalogEntryDto>.Failure(Error.Validation("manifest", error ?? "manifesto invalido"));
+
+        try
+        {
+            var saved = await catalogRepo.UpsertAsync(new AppCatalogEntry
+            {
+                Source = "winget",
+                PackageId = manifest.PackageIdentifier,
+                Name = string.IsNullOrWhiteSpace(manifest.PackageName)
+                    ? manifest.PackageIdentifier
+                    : manifest.PackageName!,
+                Publisher = manifest.Publisher,
+                Version = manifest.PackageVersion,
+                InstallerUrl = manifest.Installer.InstallerUrl,
+                Sha256 = manifest.Installer.Sha256,
+                InstallerType = manifest.Installer.InstallerType,
+                SilentArgs = manifest.Installer.SilentArgs,
+                ProductCode = manifest.Installer.ProductCode,
+                ReleaseDate = manifest.ReleaseDate,
+                CuratedBy = cmd.CuratedBy,
+                Status = "pending"
+            }, ct);
+
+            return Result<AppCatalogEntryDto>.Success(AppCatalogEntryDto.FromEntity(saved));
+        }
+        catch (ArgumentException ex)
+        {
+            return Result<AppCatalogEntryDto>.Failure(Error.Validation("manifest", ex.Message));
+        }
+    }
+}
+
+public sealed class ActivateAppCatalogEntryCommandHandler(
+    IAppCatalogRepository catalogRepo
+) : IRequestHandler<ActivateAppCatalogEntryCommand, Result<AppCatalogEntryDto>>
+{
+    public async Task<Result<AppCatalogEntryDto>> Handle(ActivateAppCatalogEntryCommand cmd, CancellationToken ct)
+    {
+        var activated = await catalogRepo.ActivateAsync(cmd.Id, cmd.CuratedBy, ct);
+        return activated is null
+            ? Result<AppCatalogEntryDto>.Failure(Error.NotFound("Entrada de catálogo não encontrada."))
+            : Result<AppCatalogEntryDto>.Success(AppCatalogEntryDto.FromEntity(activated));
+    }
+}
+
 public sealed class RevokeAppCatalogEntryCommandHandler(
     IAppCatalogRepository catalogRepo
 ) : IRequestHandler<RevokeAppCatalogEntryCommand, Result<AppCatalogEntryDto>>

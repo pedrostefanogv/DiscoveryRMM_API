@@ -29,8 +29,12 @@ public static class PatchSourcePolicy
     {
         if (string.IsNullOrWhiteSpace(source))
             return false;
-        return string.Equals(source.Trim(), "choco", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(source.Trim(), "winget", StringComparison.OrdinalIgnoreCase);
+        var normalized = source.Trim();
+        return string.Equals(normalized, "choco", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "winget", StringComparison.OrdinalIgnoreCase) ||
+               // msi: catálogo próprio com download direto (WU-21). É origem de
+               // terceiros para efeito de consentimento e curadoria.
+               string.Equals(normalized, "msi", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Origens efetivas da política (vazio/ausente = só "os").</summary>
@@ -47,6 +51,18 @@ public static class PatchSourcePolicy
     /// <summary>A política permite updates de OS?</summary>
     public static bool AllowsOs(string? sourcesJson) =>
         EffectiveSources(sourcesJson).Contains(Os, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Origem que EXIGE entrada ativa no catálogo para auto-aprovação.
+    ///
+    /// Só o caminho de DOWNLOAD DIRETO (MSI corporativo) precisa disso: o agente
+    /// baixa da URL do fornecedor, então hash/assinatura vêm do catálogo.
+    /// winget/choco são gerenciadores de pacote — validam checksum/assinatura no
+    /// próprio feed; exigir catálogo ali transformaria toda atualização de app em
+    /// aprovação manual (beco sem saída operacional).
+    /// </summary>
+    public static bool RequiresCuratedCatalog(string? source) =>
+        string.Equals(source?.Trim(), "msi", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Duplo consentimento para terceiros (Sources + AllowThirdPartyApps).</summary>
     public static bool ThirdPartyConsented(string? sourcesJson, bool allowThirdPartyApps) =>

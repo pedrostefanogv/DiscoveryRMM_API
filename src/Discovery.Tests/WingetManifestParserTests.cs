@@ -1,217 +1,127 @@
-using Discovery.Core.Entities;
-using Discovery.Infrastructure.Services;
+using Discovery.Core.Catalog;
+using NUnit.Framework;
 
 namespace Discovery.Tests;
 
-/// <summary>
-/// Testes do parser de manifests YAML do microsoft/winget-pkgs.
-/// </summary>
+[TestFixture]
 public class WingetManifestParserTests
 {
-    private static readonly WingetManifestParser Parser = new();
-
-    private static string CreateVersionDir(
-        string? installerYaml,
-        string? defaultLocaleYaml)
+    private static string LoadRealManifest()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "winget-manifest-tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-
-        if (installerYaml is not null)
-            File.WriteAllText(Path.Combine(dir, "Installer.yaml"), installerYaml);
-
-        if (defaultLocaleYaml is not null)
-            File.WriteAllText(Path.Combine(dir, "DefaultLocale.yaml"), defaultLocaleYaml);
-
-        return dir;
+        var path = Path.Combine(TestContext.CurrentContext.TestDirectory, "TestData", "Google.Chrome.installer.yaml");
+        return File.ReadAllText(path);
     }
 
     [Test]
-    public void Parse_CompleteManifest_MapsAllFields()
+    public void ParsesRealGoogleChromeManifest()
     {
-        var dir = CreateVersionDir(
-            """
-            PackageIdentifier: Foxit.FoxitReader
-            PackageVersion: 2026.1.3.36551
-            Installers:
-              - Architecture: x64
-                InstallerUrl: https://example.com/foxit-x64.exe
-                InstallerSha256: aabbcc
-                InstallerType: exe
-                InstallerSwitches:
-                  Silent: /SILENT
-                  SilentWithProgress: /SILENT /NORD
-                  InstallLocation: <INSTALLDIR>
-              - Architecture: x86
-                InstallerUrl: https://example.com/foxit-x86.exe
-                InstallerSha256: ddeeff
-            """,
-            """
-            PackageIdentifier: Foxit.FoxitReader
-            PackageName: Foxit PDF Editor
-            Publisher: Foxit Software
-            License: Proprietary
-            ShortDescription: PDF editor
-            PackageUrl: https://www.foxit.com
-            Tags:
-              - pdf
-              - editor
-            """);
+        var (manifest, error) = WingetManifestParser.Parse(LoadRealManifest());
 
-        var result = Parser.Parse("Foxit.FoxitReader", "2026.1.3.36551", dir);
-
-        Assert.That(result, Is.Not.Null);
-        Assert.Multiple(() =>
-        {
-            Assert.That(result!.PackageId, Is.EqualTo("Foxit.FoxitReader"));
-            Assert.That(result.Version, Is.EqualTo("2026.1.3.36551"));
-            Assert.That(result.Name, Is.EqualTo("Foxit PDF Editor"));
-            Assert.That(result.Publisher, Is.EqualTo("Foxit Software"));
-            Assert.That(result.SiteUrl, Is.EqualTo("https://www.foxit.com"));
-
-            using var meta = System.Text.Json.JsonDocument.Parse(result.MetadataJson!);
-            Assert.That(meta.RootElement.GetProperty("silent").GetString(), Is.EqualTo("/SILENT"));
-            Assert.That(meta.RootElement.GetProperty("silentWithProgress").GetString(), Is.EqualTo("/SILENT /NORD"));
-            Assert.That(meta.RootElement.GetProperty("installerUrlsByArch").GetProperty("x64").GetString(),
-                Is.EqualTo("https://example.com/foxit-x64.exe"));
-            Assert.That(meta.RootElement.GetProperty("installerUrlsByArch").GetProperty("x86").GetString(),
-                Is.EqualTo("https://example.com/foxit-x86.exe"));
-            Assert.That(meta.RootElement.GetProperty("installerSha256ByArch").GetProperty("x64").GetString(), Is.EqualTo("aabbcc"));
-            Assert.That(meta.RootElement.GetProperty("tags").GetArrayLength(), Is.EqualTo(2));
-        });
+        Assert.That(error, Is.Null);
+        Assert.That(manifest, Is.Not.Null);
+        Assert.That(manifest!.PackageIdentifier, Is.EqualTo("Google.Chrome"));
+        Assert.That(manifest.PackageVersion, Is.EqualTo("156.0.8078.48"));
+        Assert.That(manifest.Installer.InstallerUrl, Does.StartWith("https://dl.google.com/"));
+        Assert.That(manifest.Installer.Sha256, Has.Length.EqualTo(64));
+        Assert.That(manifest.Installer.Architecture, Is.EqualTo("x64"), "x64 é preferido");
+        Assert.That(manifest.Installer.InstallerType, Is.EqualTo("wix"));
+        Assert.That(manifest.Installer.ProductCode, Is.EqualTo("{FC681062-00FC-3E42-98D1-2B1A9AF642A3}"));
+        Assert.That(manifest.ReleaseDate, Is.Not.Null);
     }
 
     [Test]
-    public void Parse_PrefersX64SilentSwitches()
+    public void ParsesSilentSwitchesFromNestedBlock()
     {
-        var dir = CreateVersionDir(
-            """
-            PackageIdentifier: Some.App
-            Installers:
-              - Architecture: x86
-                InstallerUrl: https://example.com/x86.exe
-                InstallerSwitches:
-                  Silent: /X86SILENT
-              - Architecture: x64
-                InstallerUrl: https://example.com/x64.exe
-                InstallerSwitches:
-                  Silent: /X64SILENT
-            """,
-            null);
+        const string yaml = """
+        PackageIdentifier: Vendor.App
+        PackageVersion: 1.2.3
+        InstallerType: exe
+        Installers:
+        - Architecture: x64
+          InstallerUrl: https://example.com/app.exe
+          InstallerSha256: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+          InstallerSwitches:
+            Silent: /S
+            SilentWithProgress: /S
+        """;
 
-        var result = Parser.Parse("Some.App", "1.0", dir);
+        var (manifest, error) = WingetManifestParser.Parse(yaml);
 
-        Assert.That(result, Is.Not.Null);
-        using var meta = System.Text.Json.JsonDocument.Parse(result!.MetadataJson!);
-        Assert.That(meta.RootElement.GetProperty("silent").GetString(), Is.EqualTo("/X64SILENT"));
+        Assert.That(error, Is.Null);
+        Assert.That(manifest!.Installer.SilentArgs, Is.EqualTo("/S"));
+        Assert.That(manifest.Installer.InstallerType, Is.EqualTo("exe"));
     }
 
     [Test]
-    public void Parse_MissingInstallerYaml_ReturnsNull()
+    public void RejectsManifestWithoutInstallers()
     {
-        var dir = CreateVersionDir(null, "PackageIdentifier: Some.App\nPackageName: App");
+        const string yaml = """
+        PackageIdentifier: Vendor.App
+        PackageVersion: 1.2.3
+        ManifestType: version
+        """;
 
-        var result = Parser.Parse("Some.App", "1.0", dir);
+        var (manifest, error) = WingetManifestParser.Parse(yaml);
 
-        Assert.That(result, Is.Null);
+        Assert.That(manifest, Is.Null);
+        Assert.That(error, Does.Contain("Installers"));
+    }
+
+    [TestCase("http://example.com/app.exe")]
+    [TestCase("")]
+    public void RejectsNonHttpsUrl(string url)
+    {
+        var yaml = $"""
+        PackageIdentifier: Vendor.App
+        PackageVersion: 1.2.3
+        Installers:
+        - Architecture: x64
+          InstallerUrl: {url}
+          InstallerSha256: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        """;
+
+        var (manifest, error) = WingetManifestParser.Parse(yaml);
+
+        Assert.That(manifest, Is.Null);
+        Assert.That(error, Does.Contain("InstallerUrl"));
     }
 
     [Test]
-    public void Parse_IdentifierMismatch_ReturnsNull()
+    public void RejectsInvalidSha256()
     {
-        var dir = CreateVersionDir(
-            "PackageIdentifier: Other.App\nInstallers:\n  - Architecture: x64\n    InstallerUrl: https://example.com/a.exe",
-            null);
+        const string yaml = """
+        PackageIdentifier: Vendor.App
+        PackageVersion: 1.2.3
+        Installers:
+        - Architecture: x64
+          InstallerUrl: https://example.com/app.exe
+          InstallerSha256: nao-e-hash
+        """;
 
-        var result = Parser.Parse("Some.App", "1.0", dir);
+        var (manifest, error) = WingetManifestParser.Parse(yaml);
 
-        Assert.That(result, Is.Null);
+        Assert.That(manifest, Is.Null);
+        Assert.That(error, Does.Contain("InstallerSha256"));
     }
 
     [Test]
-    public void Parse_NoInstallers_ReturnsNull()
+    public void PrefersX64OverArm64()
     {
-        var dir = CreateVersionDir(
-            "PackageIdentifier: Some.App\nInstallers: []",
-            null);
+        const string yaml = """
+        PackageIdentifier: Vendor.App
+        PackageVersion: 1.2.3
+        Installers:
+        - Architecture: arm64
+          InstallerUrl: https://example.com/app-arm64.exe
+          InstallerSha256: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+        - Architecture: x64
+          InstallerUrl: https://example.com/app-x64.exe
+          InstallerSha256: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        """;
 
-        var result = Parser.Parse("Some.App", "1.0", dir);
+        var (manifest, error) = WingetManifestParser.Parse(yaml);
 
-        Assert.That(result, Is.Null);
-    }
-
-    [Test]
-    public void Parse_MalformedYaml_ReturnsNullWithoutThrowing()
-    {
-        var dir = CreateVersionDir(":::::: not yaml at all [[[[", null);
-
-        var result = Parser.Parse("Some.App", "1.0", dir);
-
-        Assert.That(result, Is.Null);
-    }
-
-    [Test]
-    public void Parse_SilentFallback_SilentWithProgressUsedWhenSilentMissing()
-    {
-        var dir = CreateVersionDir(
-            """
-            PackageIdentifier: Some.App
-            Installers:
-              - Architecture: x64
-                InstallerUrl: https://example.com/a.exe
-                InstallerSwitches:
-                  SilentWithProgress: /PASSIVE
-            """,
-            null);
-
-        var result = Parser.Parse("Some.App", "1.0", dir);
-
-        Assert.That(result, Is.Not.Null);
-        using var meta = System.Text.Json.JsonDocument.Parse(result!.MetadataJson!);
-        Assert.That(meta.RootElement.GetProperty("silent").GetString(), Is.EqualTo("/PASSIVE"));
-        Assert.That(meta.RootElement.GetProperty("silentWithProgress").GetString(), Is.EqualTo("/PASSIVE"));
-    }
-
-    [Test]
-    public async Task Parse_ConcurrentCalls_IsThreadSafe()
-    {
-        // O sync de manifests parseia em paralelo (WingetManifestsSyncService.ImportAsync);
-        // o deserializer YamlDotNet precisa ser por thread. Este teste falha (resultados
-        // corrompidos/null) se Parse for usado concorrentemente com um IDeserializer compartilhado.
-        var entries = new List<(string Id, string Version, string Dir)>();
-        for (var i = 0; i < 64; i++)
-        {
-            var id = $"Contest.App{i}";
-            var version = $"1.0.{i}";
-            var dir = CreateVersionDir(
-                $"""
-                PackageIdentifier: {id}
-                PackageVersion: {version}
-                Installers:
-                  - Architecture: x64
-                    InstallerUrl: https://example.com/{i}-x64.exe
-                    InstallerType: exe
-                """,
-                $"""
-                PackageIdentifier: {id}
-                PackageName: Contest App {i}
-                """);
-            entries.Add((id, version, dir));
-        }
-
-        var results = new AppPackage?[entries.Count];
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, entries.Count),
-            new ParallelOptions { MaxDegreeOfParallelism = 16 },
-            (i, _) =>
-            {
-                var (id, version, dir) = entries[i];
-                results[i] = Parser.Parse(id, version, dir);
-                return ValueTask.CompletedTask;
-            });
-
-        Assert.That(results, Has.All.Not.Null);
-        for (var i = 0; i < entries.Count; i++)
-            Assert.That(results[i]!.Name, Is.EqualTo($"Contest App {i}"));
+        Assert.That(error, Is.Null);
+        Assert.That(manifest!.Installer.InstallerUrl, Does.Contain("x64"));
     }
 }

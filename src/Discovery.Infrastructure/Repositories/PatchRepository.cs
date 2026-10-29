@@ -231,51 +231,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 rows.Add(row);
             }
 
-            row.GroupKey = groupKey;
-            row.KbIds = entry.KbIds;
-            row.UpdateId = entry.UpdateId;
-            row.Revision = entry.Revision;
-            row.Title = string.IsNullOrWhiteSpace(entry.Title) ? entry.UpdateKey : entry.Title;
-            row.Description = entry.Description;
-            row.Classification = entry.Classification;
-            row.UpdateType = entry.UpdateType;
-            row.Categories = entry.Categories;
-            row.Severity = entry.Severity;
-            row.SeveritySource = entry.SeveritySource;
-            row.IsPending = entry.IsPending;
-            row.IsInstalled = entry.IsInstalled;
-            row.IsHidden = entry.IsHidden;
-            row.IsDownloaded = entry.IsDownloaded;
-            row.IsMandatory = entry.IsMandatory;
-            row.RequiresReboot = entry.RequiresReboot;
-            row.MaxDownloadSize = entry.MaxDownloadSize;
-            row.SupportUrl = entry.SupportUrl;
-            row.PublishedAt = entry.PublishedAt;
-            row.LastDeployedAt = entry.LastDeployedAt;
-            // A data de instalação É corrigível: o agente pode ter enviado uma
-            // data errada por parsing de locale (QFE/WMI) e o próximo scan traz
-            // a correta. Sem data no payload, o valor conhecido é mantido.
-            if (entry.InstalledAt.HasValue)
-                row.InstalledAt = entry.InstalledAt;
-            row.ReportedAt = reportedAt;
-            row.LastSeenAt = reportedAt;
-            row.IsPresent = true;
-            row.Source = entry.Source;
-            row.Raw = entry.Raw;
-            row.UpdatedAt = now;
-
-            // Instalada: status final (preserva código de erro para exibição).
-            if (entry.IsInstalled)
-            {
-                row.Status = PatchUpdateStatus.Installed;
-            }
-            else if (entry.IsPending)
-            {
-                // Preserva "Installing" recente (a UI mostra o progresso) e
-                // reclassifica aprovação depois (patch approval resolver).
-                if (row.Status is not PatchUpdateStatus.Installing)
-                    row.Status = PatchUpdateStatus.Pending;
-            }
+            ApplyEntry(row, entry, reportedAt, now);
         }
 
         // Rows que sumiram: mantém histórico (is_present=false) e marca
@@ -406,6 +362,17 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             await transaction.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// Aplica um upload DELTA escrevendo APENAS as linhas tocadas (WU-13).
+    ///
+    /// O caminho completo marca tudo ausente e reescreve o inventário inteiro —
+    /// correto, porém caro quando o agente manda um diff pequeno. Aqui:
+    ///  • somente os itens alterados são gravados (upsert por update_key);
+    ///  • somente as chaves em <c>removedKeys</c> são avaliadas para remoção;
+    ///  • as MESMAS guardas do caminho completo valem para remoção (scan parcial
+    ///    ou leitura incompleta nunca apaga linha);
+    ///  • delta que esvaziaria o inventário é ignorado (semântica de upload vazio).
+    /// </summary>
     public async Task ApplyInventoryDeltaAsync(
         Guid agentId,
         DateTime collectedAt,
@@ -416,73 +383,187 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         PatchServiceStateMeta? serviceState = null,
         CancellationToken ct = default)
     {
-        var removed = new HashSet<string>(removedKeys ?? [], StringComparer.OrdinalIgnoreCase);
+        var now = DateTime.UtcNow;
+        var reportedAt = collectedAt.Kind == DateTimeKind.Utc ? collectedAt : collectedAt.ToUniversalTime();
 
-        // Inventário atual (só linhas presentes): o delta é aplicado POR CIMA.
-        var currentRows = await db.AgentWindowsUpdates
-            .AsNoTracking()
-            .Where(update => update.AgentId == agentId && update.IsPresent)
+        var validEntries = changedEntries
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.UpdateKey))
+            .GroupBy(entry => entry.UpdateKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+        var removed = new HashSet<string>(
+            (removedKeys ?? []).Where(key => !string.IsNullOrWhiteSpace(key)),
+            StringComparer.OrdinalIgnoreCase);
+        // Mudança e remoção do MESMO item: o payload manda (evita apagar o que
+        // acabou de chegar).
+        removed.ExceptWith(validEntries.Select(entry => entry.UpdateKey));
+
+        var allRows = await db.AgentWindowsUpdates
+            .Where(update => update.AgentId == agentId)
             .ToListAsync(ct);
+        var presentRows = allRows.Count(row => row.IsPresent);
 
-        var merged = new Dictionary<string, AgentWindowsUpdateEntry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var row in currentRows)
+        if (validEntries.Count == 0 && (removed.Count == 0 || presentRows <= removed.Count))
         {
-            if (removed.Contains(row.UpdateKey))
-                continue;
-            merged[row.UpdateKey] = ToEntry(row);
-        }
-
-        foreach (var entry in changedEntries)
-        {
-            if (string.IsNullOrWhiteSpace(entry.UpdateKey))
-                continue;
-            if (removed.Contains(entry.UpdateKey))
-                continue;
-            merged[entry.UpdateKey] = entry;
-        }
-
-        if (merged.Count == 0)
-        {
-            // Delta que esvaziaria o inventário: mesma semântica do upload vazio
-            // (não prova remoção). Só metadados/sonda são atualizados.
+            // Delta que esvaziaria o inventário: nada prova que tudo sumiu.
             await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
             return;
         }
 
-        // Delega para o caminho completo: TODAS as guardas de scan parcial e de
-        // leitura incompleta continuam valendo (o delta só reduz o payload).
-        await ReplaceInventoryAsync(
-            agentId, collectedAt, scan, pendingReboot, merged.Values.ToList(), serviceState, ct);
+        var byKey = allRows
+            .GroupBy(row => row.UpdateKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in validEntries)
+        {
+            if (!byKey.TryGetValue(entry.UpdateKey, out var row))
+            {
+                row = new AgentWindowsUpdate
+                {
+                    Id = Guid.NewGuid(),
+                    AgentId = agentId,
+                    UpdateKey = entry.UpdateKey,
+                    FirstSeenAt = reportedAt,
+                    CreatedAt = now
+                };
+                db.AgentWindowsUpdates.Add(row);
+                byKey[entry.UpdateKey] = row;
+                allRows.Add(row);
+            }
+
+            ApplyEntry(row, entry, reportedAt, now);
+        }
+
+        var relational = db.Database.IsRelational();
+        await using var transaction = relational ? await db.Database.BeginTransactionAsync(ct) : null;
+
+        // Guardas idênticas às do caminho completo.
+        var scanIncomplete =
+            (scan.SkippedReasons is not null &&
+             scan.SkippedReasons.Any(reason =>
+                 reason.Value > 0 &&
+                 (!PatchScanSkipReasons.Known.Contains(reason.Key) ||
+                  string.Equals(reason.Key, PatchScanSkipReasons.Unreadable, StringComparison.OrdinalIgnoreCase)))) ||
+            (scan.SkippedCount is > 0 && scan.SkippedReasons is null);
+
+        var isPartial = string.Equals(scan.Status, "partial", StringComparison.OrdinalIgnoreCase);
+        var preserveInstalled = isPartial && !validEntries.Any(entry => entry.IsInstalled);
+        var preservePending = isPartial && !validEntries.Any(entry => entry.IsPending);
+
+        foreach (var key in removed)
+        {
+            if (!byKey.TryGetValue(key, out var row) || !row.IsPresent)
+                continue;
+
+            if (row.IsInstalled)
+            {
+                // Leitura incompleta/scan parcial não é prova de desinstalação.
+                if (preserveInstalled || scanIncomplete)
+                    continue;
+                row.IsPresent = false;
+                row.UpdatedAt = now;
+                continue;
+            }
+
+            if (!row.IsPending)
+            {
+                row.IsPresent = false;
+                row.UpdatedAt = now;
+                continue;
+            }
+
+            if (preservePending || scanIncomplete)
+                continue;
+
+            row.IsPresent = false;
+            row.Status = PatchUpdateStatus.Superseded;
+            row.UpdatedAt = now;
+        }
+
+        await db.SaveChangesAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
+
+        // Metadados/sonda + contadores (consultados do banco: só as linhas
+        // tocadas foram reescritas, então não há lista em memória confiável).
+        await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
+        await RecomputeSnapshotCountersAsync(agentId, ct);
     }
 
-    /// <summary>Mapeia a linha persistida de volta para o formato de entrada.</summary>
-    private static AgentWindowsUpdateEntry ToEntry(AgentWindowsUpdate row) => new()
+    /// <summary>Recalcula contadores do snapshot a partir das linhas persistidas.</summary>
+    private async Task RecomputeSnapshotCountersAsync(Guid agentId, CancellationToken ct)
     {
-        UpdateKey = row.UpdateKey,
-        KbIds = row.KbIds,
-        UpdateId = row.UpdateId,
-        Revision = row.Revision,
-        Title = row.Title,
-        Description = row.Description,
-        Classification = row.Classification,
-        UpdateType = row.UpdateType,
-        Categories = row.Categories,
-        Severity = row.Severity,
-        SeveritySource = row.SeveritySource,
-        IsPending = row.IsPending,
-        IsInstalled = row.IsInstalled,
-        IsHidden = row.IsHidden,
-        IsDownloaded = row.IsDownloaded,
-        IsMandatory = row.IsMandatory,
-        RequiresReboot = row.RequiresReboot,
-        MaxDownloadSize = row.MaxDownloadSize,
-        SupportUrl = row.SupportUrl,
-        PublishedAt = row.PublishedAt,
-        LastDeployedAt = row.LastDeployedAt,
-        InstalledAt = row.InstalledAt,
-        Source = row.Source,
-        Raw = row.Raw
-    };
+        // Duas contagens simples (não GroupBy com constante: tradução em SQL é
+        // frágil entre providers).
+        var presentRows = db.AgentWindowsUpdates
+            .AsNoTracking()
+            .Where(update => update.AgentId == agentId && update.IsPresent);
+        var pendingCount = await presentRows.CountAsync(
+            update => update.IsPending && update.Status != PatchUpdateStatus.Superseded, ct);
+        var installedCount = await presentRows.CountAsync(
+            update => update.IsInstalled && update.Status != PatchUpdateStatus.Superseded, ct);
+
+        var snapshot = await db.AgentWindowsUpdateSnapshots
+            .FirstOrDefaultAsync(item => item.AgentId == agentId, ct);
+        if (snapshot is null)
+            return;
+
+        snapshot.PendingCount = pendingCount;
+        snapshot.InstalledCount = installedCount;
+        snapshot.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Aplica um item do payload na linha persistida. Compartilhado entre o
+    /// caminho completo e o delta para as duas rotas não divergirem.
+    /// </summary>
+    private static void ApplyEntry(
+        AgentWindowsUpdate row,
+        AgentWindowsUpdateEntry entry,
+        DateTime reportedAt,
+        DateTime now)
+    {
+        row.GroupKey = BuildGroupKey(entry);
+        row.KbIds = entry.KbIds;
+        row.UpdateId = entry.UpdateId;
+        row.Revision = entry.Revision;
+        row.Title = string.IsNullOrWhiteSpace(entry.Title) ? entry.UpdateKey : entry.Title;
+        row.Description = entry.Description;
+        row.Classification = entry.Classification;
+        row.UpdateType = entry.UpdateType;
+        row.Categories = entry.Categories;
+        row.Severity = entry.Severity;
+        row.SeveritySource = entry.SeveritySource;
+        row.IsPending = entry.IsPending;
+        row.IsInstalled = entry.IsInstalled;
+        row.IsHidden = entry.IsHidden;
+        row.IsDownloaded = entry.IsDownloaded;
+        row.IsMandatory = entry.IsMandatory;
+        row.RequiresReboot = entry.RequiresReboot;
+        row.MaxDownloadSize = entry.MaxDownloadSize;
+        row.SupportUrl = entry.SupportUrl;
+        row.PublishedAt = entry.PublishedAt;
+        row.LastDeployedAt = entry.LastDeployedAt;
+        // InstalledAt é corrigível (locale do QFE/WMI): omissão mantém o valor.
+        if (entry.InstalledAt.HasValue)
+            row.InstalledAt = entry.InstalledAt;
+        row.ReportedAt = reportedAt;
+        row.LastSeenAt = reportedAt;
+        row.IsPresent = true;
+        row.Source = entry.Source;
+        row.Raw = entry.Raw;
+        row.UpdatedAt = now;
+
+        if (entry.IsInstalled)
+        {
+            row.Status = PatchUpdateStatus.Installed;
+        }
+        else if (entry.IsPending && row.Status is not PatchUpdateStatus.Installing)
+        {
+            row.Status = PatchUpdateStatus.Pending;
+        }
+    }
 
     public Task UpdateScanStatusAsync(
         Guid agentId,
@@ -800,6 +881,25 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             }
         }
         await db.SaveChangesAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<string>> GetThirdPartyAppKeysAsync(int limit, CancellationToken ct = default)
+    {
+        var take = Math.Clamp(limit <= 0 ? 200 : limit, 1, 1000);
+        var rows = await db.AgentWindowsUpdates
+            .AsNoTracking()
+            .Where(update => update.IsPresent &&
+                             (update.Source == "choco" || update.Source == "winget"))
+            .Select(update => new { update.UpdateKey })
+            .Distinct()
+            .Take(take)
+            .ToListAsync(ct);
+
+        return rows
+            .Select(row => row.UpdateKey)
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public async Task RecordInstallFailureAsync(

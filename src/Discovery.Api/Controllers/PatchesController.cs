@@ -285,6 +285,8 @@ public sealed class PatchesController(
 
     public sealed record RevokeCatalogEntryRequest(string? Reason = null);
 
+    public sealed record IngestWingetManifestRequest(string Manifest);
+
     [HttpGet("app-catalog")]
     public async Task<IActionResult> ListCatalog(
         [FromQuery] string? source = null,
@@ -324,6 +326,30 @@ public sealed class PatchesController(
             success: dto => Ok(dto),
             failure: errors => errors[0].Code == "Validation"
                 ? BadRequest(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
+    }
+
+    [HttpPost("app-catalog/ingest")]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    public async Task<IActionResult> IngestManifest(
+        [FromBody] IngestWingetManifestRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new IngestWingetManifestCommand(request.Manifest, CurrentUserId()), ct);
+        return result.Match<IActionResult>(
+            success: dto => Ok(dto),
+            failure: errors => BadRequest(new { error = errors[0].Message }));
+    }
+
+    [HttpPost("app-catalog/{id:guid}/activate")]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    public async Task<IActionResult> ActivateCatalogEntry(Guid id, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new ActivateAppCatalogEntryCommand(id, CurrentUserId()), ct);
+        return result.Match<IActionResult>(
+            success: dto => Ok(dto),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { error = errors[0].Message })
                 : BadRequest(new { error = errors[0].Message }));
     }
 

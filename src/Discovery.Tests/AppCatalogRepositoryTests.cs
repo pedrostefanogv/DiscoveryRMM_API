@@ -122,6 +122,27 @@ public class AppCatalogRepositoryTests
     }
 
     [Test]
+    public async Task ActivatePromotesPendingOrRevokedToActive()
+    {
+        var db = NewContext();
+        var repo = new AppCatalogRepository(db);
+
+        var pending = Entry("9.9.9");
+        pending.Status = "pending";
+        var created = await repo.UpsertAsync(pending);
+        Assert.That(created.Status, Is.EqualTo("pending"));
+
+        var activated = await repo.ActivateAsync(created.Id, "curador");
+        Assert.That(activated!.Status, Is.EqualTo("active"));
+        Assert.That(activated.CuratedBy, Is.EqualTo("curador"));
+
+        await repo.RevokeAsync(created.Id, "analista");
+        var reactivated = await repo.ActivateAsync(created.Id, "curador2");
+        Assert.That(reactivated!.Status, Is.EqualTo("active"));
+        Assert.That(reactivated.RevokedAt, Is.Null);
+    }
+
+    [Test]
     public async Task ListFiltersBySourceStatusAndSearch()
     {
         var db = NewContext();

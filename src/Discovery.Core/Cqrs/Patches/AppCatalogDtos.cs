@@ -66,6 +66,19 @@ public sealed record RevokeAppCatalogEntryCommand(
     string? RevokedBy = null,
     string? Reason = null) : ICommand<Result<AppCatalogEntryDto>>;
 
+/// <summary>
+/// Importa um manifesto .installer.yaml do winget-pkgs para o catálogo
+/// (WU-21/D24). A entrada entra como <c>pending</c>: só vira <c>active</c>
+/// depois de curadoria humana (upsert com status ativo).
+/// </summary>
+public sealed record ActivateAppCatalogEntryCommand(
+    Guid Id,
+    string? CuratedBy = null) : ICommand<Result<AppCatalogEntryDto>>;
+
+public sealed record IngestWingetManifestCommand(
+    string ManifestYaml,
+    string? CuratedBy = null) : ICommand<Result<AppCatalogEntryDto>>;
+
 public sealed record ListAppCatalogEntriesQuery(
     string? Source = null,
     string? Status = null,

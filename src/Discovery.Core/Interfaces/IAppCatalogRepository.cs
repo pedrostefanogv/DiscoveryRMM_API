@@ -20,6 +20,12 @@ public interface IAppCatalogRepository
     /// <summary>Revoga uma versão (CVE/regressão): sai da auto-aprovação na hora.</summary>
     Task<bool> RevokeAsync(Guid id, string? revokedBy, CancellationToken ct = default);
 
+    /// <summary>
+    /// Promove uma entrada a <c>active</c> (curadoria humana). Uma versão
+    /// importada como <c>pending</c> só passa a auto-aprovar depois disto.
+    /// </summary>
+    Task<AppCatalogEntry?> ActivateAsync(Guid id, string? curatedBy, CancellationToken ct = default);
+
     Task<IReadOnlyList<AppCatalogEntry>> ListAsync(
         string? source,
         string? status,

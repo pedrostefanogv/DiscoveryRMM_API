@@ -387,6 +387,34 @@ public class PatchRepositoryInventoryTests
     }
 
     [Test]
+    public async Task DeltaDoesNotRewriteUntouchedRows()
+    {
+        var (db, agentId) = Seed();
+        await SeedGoodInventoryAsync(db, agentId);
+        var repo = new PatchRepository(db);
+
+        var installedBefore = await db.AgentWindowsUpdates
+            .AsNoTracking()
+            .SingleAsync(u => u.UpdateKey == "kb:KB5127690");
+
+        await repo.ApplyInventoryDeltaAsync(
+            agentId,
+            DateTime.UtcNow,
+            Scan(),
+            new PatchPendingRebootMeta { Pending = false, CheckedAt = DateTime.UtcNow },
+            [Entry("guid:11111111-1111-1111-1111-111111111111:200", installed: false, kb: "KB5127000")],
+            removedKeys: []);
+
+        db.ChangeTracker.Clear();
+        var installedAfter = await db.AgentWindowsUpdates
+            .AsNoTracking()
+            .SingleAsync(u => u.UpdateKey == "kb:KB5127690");
+
+        Assert.That(installedAfter.UpdatedAt, Is.EqualTo(installedBefore.UpdatedAt),
+            "linha não citada no delta não é reescrita");
+    }
+
+    [Test]
     public async Task DeltaWithPartialScanDoesNotRemoveRows()
     {
         var (db, agentId) = Seed();
