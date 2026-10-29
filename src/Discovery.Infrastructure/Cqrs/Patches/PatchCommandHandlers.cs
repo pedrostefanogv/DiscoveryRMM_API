@@ -365,6 +365,8 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
                 var update = await patchRepo.GetAgentUpdateAsync(cmd.AgentId, updateKey, ct);
                 if (update is null)
                     continue;
+                if (IsWaaSFeatureUpdate(update))
+                    continue;
 
                 await PatchOperations.SetApprovalAsync(
                     patchRepo, resolver, agent, site, update, scope, approvalAction,
@@ -387,6 +389,7 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
             var keysSet = cmd.UpdateKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var targets = pending
                 .Where(update => keysSet.Contains(update.UpdateKey) || keysSet.Contains(update.GroupKey))
+                .Where(update => !IsWaaSFeatureUpdate(update))
                 .Where(update => update.ApprovalState is PatchApprovalState.Approved or PatchApprovalState.AutoApproved)
                 .Take(100)
                 .ToList();
