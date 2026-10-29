@@ -18,11 +18,19 @@ public static class PatchSourcePolicy
 {
     public const string Os = "os";
     public const string ThirdParty = "third_party";
+    // Upgrade de versao sintetizado pela avaliacao WaaS: visivel no inventario,
+    // sem pacote WUA para instalar pelo RMM.
+    public const string WaaSFeature = "waas";
 
     public static readonly IReadOnlySet<string> Known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         Os, ThirdParty
     };
+
+    /// <summary>Verdadeiro quando o item e o upgrade de versao sintetizado (WaaS).</summary>
+    public static bool IsWaaSFeatureSource(string? source) =>
+        !string.IsNullOrWhiteSpace(source) &&
+        string.Equals(source.Trim(), WaaSFeature, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Verdadeiro quando a origem do update é de aplicativo de terceiros.</summary>
     public static bool IsThirdPartySource(string? source)

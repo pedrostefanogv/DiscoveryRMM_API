@@ -46,6 +46,15 @@ public class PatchSourcePolicyTests
     }
 
     [Test]
+    public void ClassifiesWaaSFeatureUpgradeSource()
+    {
+        Assert.That(PatchSourcePolicy.IsWaaSFeatureSource("waas"), Is.True);
+        Assert.That(PatchSourcePolicy.IsWaaSFeatureSource("WAAS"), Is.True);
+        Assert.That(PatchSourcePolicy.IsWaaSFeatureSource("wua"), Is.False);
+        Assert.That(PatchSourcePolicy.IsWaaSFeatureSource(null), Is.False);
+    }
+
+    [Test]
     public void ClassifiesThirdPartySources()
     {
         Assert.That(PatchSourcePolicy.IsThirdPartySource("choco"), Is.True);

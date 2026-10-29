@@ -52,6 +52,9 @@ public sealed class PatchAutoInstallJob : IJob
             var pending = await patchRepo.GetPendingForAgentsAsync(agentIds, ct);
             var approved = pending
                 .Where(update => update.ApprovalState is PatchApprovalState.Approved or PatchApprovalState.AutoApproved)
+                // Upgrade WaaS sintetico e informativo: nao ha pacote WUA para
+                // o job automatico instalar (mesmo se a politica auto-aprovar).
+                .Where(update => !PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
                 // WU-08: linha que já falhou só volta quando o backoff venceu e a
                 // classe permite retry (transient, até MaxTransientAttempts).
                 // Antes, toda linha Failed era reprocessada a cada execução.

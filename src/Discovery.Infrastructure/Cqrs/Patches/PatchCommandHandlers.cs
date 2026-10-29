@@ -6,7 +6,6 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using MediatR;
 using Microsoft.Extensions.Logging;
-using static Discovery.Infrastructure.Cqrs.Patches.PatchUpdateGuards;
 
 namespace Discovery.Infrastructure.Cqrs.Patches;
 
@@ -62,20 +61,6 @@ public sealed class ScanAgentWindowsUpdatesCommandHandler(
     }
 }
 
-/// <summary>
-/// Guardas compartilhadas dos comandos de patch.
-/// </summary>
-internal static class PatchUpdateGuards
-{
-    /// <summary>
-    /// Upgrade de versao sintetizado a partir da avaliacao WaaS (source "waas"):
-    /// existe no inventario para visibilidade, mas nao tem pacote/UpdateID no WUA
-    /// para instalar via RMM. A aplicacao e feita pelo Windows Update do host.
-    /// </summary>
-    public static bool IsWaaSFeatureUpdate(AgentWindowsUpdate update) =>
-        string.Equals(update.Source, "waas", StringComparison.OrdinalIgnoreCase);
-}
-
 public sealed class InstallAgentWindowsUpdateCommandHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
@@ -104,7 +89,7 @@ public sealed class InstallAgentWindowsUpdateCommandHandler(
         // Upgrade sintetizado pelo WaaS (fonte "waas"): o RMM nao tem um pacote
         // WUA para instalar. A aplicacao e feita pelo Windows Update/Installation
         // Assistant no host; evita dispatch que sempre falharia por chave ausente.
-        if (IsWaaSFeatureUpdate(update))
+        if (PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
             return Result<Guid>.Failure(Error.Validation(
                 "updateKey",
                 "Atualizacao de versao do Windows nao e instalavel pelo RMM; aplique pelo Windows Update do host."));
@@ -193,7 +178,7 @@ public sealed class InstallAgentApprovedWindowsUpdatesCommandHandler(
         var pending = await patchRepo.GetPendingForAgentAsync(cmd.AgentId, ct);
         var approved = pending
             .Where(update => update.ApprovalState is PatchApprovalState.Approved or PatchApprovalState.AutoApproved)
-            .Where(update => !IsWaaSFeatureUpdate(update))
+            .Where(update => !PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
             .Take(100)
             .ToList();
 
@@ -252,7 +237,7 @@ public sealed class SetAgentWindowsUpdateApprovalCommandHandler(
         if (update is null)
             return Result<PatchApprovalDto>.Failure(Error.NotFound("Windows update not found for this agent."));
 
-        if (IsWaaSFeatureUpdate(update))
+        if (PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
             return Result<PatchApprovalDto>.Failure(Error.Validation(
                 "updateKey",
                 "Atualizacao de versao do Windows e apenas informativa no RMM; aplique pelo Windows Update do host."));
@@ -296,7 +281,7 @@ public sealed class ApproveAgentPendingWindowsUpdatesCommandHandler(
 
         var pending = await patchRepo.GetPendingForAgentAsync(cmd.AgentId, ct);
         var targets = pending
-            .Where(update => !IsWaaSFeatureUpdate(update))
+            .Where(update => !PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
             .GroupBy(update => update.GroupKey, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .Take(200)
@@ -365,7 +350,7 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
                 var update = await patchRepo.GetAgentUpdateAsync(cmd.AgentId, updateKey, ct);
                 if (update is null)
                     continue;
-                if (IsWaaSFeatureUpdate(update))
+                if (PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
                     continue;
 
                 await PatchOperations.SetApprovalAsync(
@@ -389,7 +374,7 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
             var keysSet = cmd.UpdateKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var targets = pending
                 .Where(update => keysSet.Contains(update.UpdateKey) || keysSet.Contains(update.GroupKey))
-                .Where(update => !IsWaaSFeatureUpdate(update))
+                .Where(update => !PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
                 .Where(update => update.ApprovalState is PatchApprovalState.Approved or PatchApprovalState.AutoApproved)
                 .Take(100)
                 .ToList();
