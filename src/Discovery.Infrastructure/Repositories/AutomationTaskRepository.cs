@@ -264,6 +264,10 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         existing.ActionType = task.ActionType;
         existing.InstallationType = task.InstallationType;
         existing.PackageId = task.PackageId;
+        // Autorização do pacote avaliada no serviço (policy sobrepõe a loja):
+        // sem esta cópia o campo seria descartado no PUT.
+        existing.PackageAuthorized = task.PackageAuthorized;
+        existing.PackageWarning = task.PackageWarning;
         existing.ScriptId = task.ScriptId;
         existing.CommandPayload = task.CommandPayload;
         existing.ScopeType = task.ScopeType;

@@ -39,6 +39,14 @@ public class AutomationTaskSummaryDto
     public int ExecutionOrder { get; set; } = 50;
     /// <summary>Chave padronizada (normalizada) da tarefa.</summary>
     public string? Key { get; set; }
+    /// <summary>
+    /// Pacote autorizado na App Store efetiva do escopo, avaliado na criação/edição.
+    /// Null para tarefas que não são de pacote (ou registros antigos).
+    /// A policy de automação sobrepõe a loja: false NÃO bloqueia a tarefa.
+    /// </summary>
+    public bool? PackageAuthorized { get; set; }
+    /// <summary>Motivo do aviso quando <see cref="PackageAuthorized"/> é false (fora da loja / fora do catálogo).</summary>
+    public string? PackageWarning { get; set; }
     public DateTime LastUpdatedAt { get; set; }
     public bool IsDeleted { get; set; }
     public DateTime? DeletedAt { get; set; }

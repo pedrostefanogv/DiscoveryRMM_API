@@ -95,6 +95,18 @@ public class AutomationTaskDefinition
     /// </summary>
     public int ExecutionOrder { get; set; } = 50;
 
+    /// <summary>
+    /// Resultado da checagem de autorização do pacote na criação/edição
+    /// (App Store + catálogo Winget). Null quando a tarefa não é de pacote ou
+    /// quando a checagem não foi executada (registros antigos). A policy de
+    /// automação SOBREPÕE a loja: a tarefa é aceita mesmo sem o pacote
+    /// autorizado — o motivo fica em <see cref="PackageWarning"/>.
+    /// </summary>
+    public bool? PackageAuthorized { get; set; }
+
+    /// <summary>Aviso de pacote fora da loja / fora do catálogo (quando <see cref="PackageAuthorized"/> é false).</summary>
+    public string? PackageWarning { get; set; }
+
     public bool IsActive { get; set; } = true;
     public DateTime? DeletedAt { get; set; }
 

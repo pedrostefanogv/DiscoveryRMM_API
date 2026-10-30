@@ -94,6 +94,9 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.Key).HasColumnName("key").HasMaxLength(100);
             entity.HasIndex(t => t.Key).IsUnique().HasDatabaseName("ux_automation_task_definitions_key").HasFilter("key IS NOT NULL");
             entity.Property(t => t.ToastTiming).HasColumnName("toast_timing").HasConversion<int>();
+            // Autorização do pacote avaliada na criação/edição (policy sobrepõe a loja).
+            entity.Property(t => t.PackageAuthorized).HasColumnName("package_authorized");
+            entity.Property(t => t.PackageWarning).HasColumnName("package_warning").HasMaxLength(2000);
             entity.Property(t => t.IsActive).HasColumnName("is_active");
             entity.Property(t => t.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
             entity.Property(t => t.LastUpdatedAt).HasColumnName("last_updated_at").HasColumnType("timestamptz");

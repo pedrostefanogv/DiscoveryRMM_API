@@ -255,7 +255,7 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         if (affected > 0 && report is not null)
         {
             var finalStatus = success ? AutomationExecutionStatus.Completed : AutomationExecutionStatus.Failed;
-            await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, taskId, scriptId, correlationId ?? report.CorrelationId);
+            await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, taskId, scriptId, correlationId ?? report.CorrelationId, exitCode, errorMessage);
         }
     }
 
@@ -288,7 +288,7 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
                 .SetProperty(x => x.UpdatedAt, _ => DateTime.UtcNow));
 
         if (affected > 0)
-            await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, report.TaskId, report.ScriptId, report.CorrelationId);
+            await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, report.TaskId, report.ScriptId, report.CorrelationId, exitCode, errorMessage);
     }
 
     private async Task PublishDashboardEventAsync(
@@ -298,7 +298,9 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         AutomationExecutionStatus status,
         Guid? taskId,
         Guid? scriptId,
-        string? correlationId)
+        string? correlationId,
+        int? exitCode = null,
+        string? errorMessage = null)
     {
         var agent = await _agentRepository.GetByIdAsync(agentId);
         Guid? siteId = agent?.SiteId;
@@ -313,16 +315,33 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
         await _messaging.PublishDashboardEventAsync(
             DashboardEventMessage.Create(
                 eventType,
-                new
-                {
-                    agentId,
-                    commandId,
-                    status = status.ToString(),
-                    taskId,
-                    scriptId,
-                    correlationId
-                },
+                BuildExecutionResultPayload(agentId, commandId, status, taskId, scriptId, correlationId, exitCode, errorMessage),
                 clientId,
                 siteId));
     }
+
+    /// <summary>
+    /// Payload do evento de dashboard. O evento de RESULTADO carrega exitCode/errorMessage
+    /// para o admin ver o motivo da falha (ex.: "pacote X (Winget) não autorizado para este agent")
+    /// sem precisar abrir a tela de execuções. Os outros eventos passam null.
+    /// </summary>
+    internal static object BuildExecutionResultPayload(
+        Guid agentId,
+        Guid? commandId,
+        AutomationExecutionStatus status,
+        Guid? taskId,
+        Guid? scriptId,
+        string? correlationId,
+        int? exitCode,
+        string? errorMessage) => new
+    {
+        agentId,
+        commandId,
+        status = status.ToString(),
+        taskId,
+        scriptId,
+        correlationId,
+        exitCode,
+        errorMessage
+    };
 }

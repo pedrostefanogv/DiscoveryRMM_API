@@ -32,6 +32,8 @@ public class AutomationTaskService : IAutomationTaskService
     private readonly IAgentLabelRepository _agentLabelRepository;
     private readonly ILoggingService _loggingService;
     private readonly ICustomFieldService _customFieldService;
+    private readonly IAppStoreService _appStoreService;
+    private readonly IWingetPackageRepository _wingetPackageRepository;
 
     public AutomationTaskService(
         IAutomationTaskRepository taskRepository,
@@ -42,7 +44,9 @@ public class AutomationTaskService : IAutomationTaskService
         IClientRepository clientRepository,
         IAgentLabelRepository agentLabelRepository,
         ILoggingService loggingService,
-        ICustomFieldService customFieldService)
+        ICustomFieldService customFieldService,
+        IAppStoreService appStoreService,
+        IWingetPackageRepository wingetPackageRepository)
     {
         _taskRepository = taskRepository;
         _auditRepository = auditRepository;
@@ -53,6 +57,8 @@ public class AutomationTaskService : IAutomationTaskService
         _agentLabelRepository = agentLabelRepository;
         _loggingService = loggingService;
         _customFieldService = customFieldService;
+        _appStoreService = appStoreService;
+        _wingetPackageRepository = wingetPackageRepository;
     }
 
     public async Task<CursorPageDto<AutomationTaskSummaryDto>> GetListPageAsync(
@@ -133,6 +139,13 @@ public class AutomationTaskService : IAutomationTaskService
         // (= Prompt) para compatibilidade com o contrato antigo de agents.
         var notificationMode = ResolveNotificationMode(request);
 
+        // Policy de automação SOBREPÕE a App Store: a tarefa é aceita mesmo com
+        // pacote fora da loja — mas o resultado da checagem fica persistido e
+        // exposto na UI (packageAuthorized/packageWarning).
+        var packageAuth = await ResolvePackageAuthorizationAsync(
+            request.ActionType, request.InstallationType, request.PackageId,
+            resolvedScope.clientId, resolvedScope.siteId, resolvedScope.agentId);
+
         var task = new AutomationTaskDefinition
         {
             Name = request.Name.Trim(),
@@ -140,6 +153,8 @@ public class AutomationTaskService : IAutomationTaskService
             ActionType = request.ActionType,
             InstallationType = request.InstallationType,
             PackageId = request.PackageId?.Trim(),
+            PackageAuthorized = packageAuth.Authorized,
+            PackageWarning = packageAuth.Warning,
             ScriptId = request.ScriptId,
             CommandPayload = request.CommandPayload,
             ScopeType = request.ScopeType,
@@ -196,6 +211,8 @@ public class AutomationTaskService : IAutomationTaskService
                 taskName = created.Name,
                 created.ActionType,
                 created.ScopeType,
+                created.PackageAuthorized,
+                packageWarning = created.PackageWarning,
                 created.TriggerImmediate,
                 created.TriggerRecurring,
                 created.TriggerOnUserLogin,
@@ -225,6 +242,11 @@ public class AutomationTaskService : IAutomationTaskService
         var resolvedScope = ResolveScope(request.ScopeType, request.ScopeId);
         await ValidateActionPayloadAsync(request.ActionType, request.InstallationType, request.PackageId, request.ScriptId, request.CommandPayload);
 
+        // Reavalia a autorização do pacote com o escopo NOVO da edição.
+        var updatePackageAuth = await ResolvePackageAuthorizationAsync(
+            request.ActionType, request.InstallationType, request.PackageId,
+            resolvedScope.clientId, resolvedScope.siteId, resolvedScope.agentId);
+
         var oldSnapshot = BuildAuditSnapshot(existing);
         var oldIsActive = existing.IsActive;
 
@@ -233,6 +255,8 @@ public class AutomationTaskService : IAutomationTaskService
         existing.ActionType = request.ActionType;
         existing.InstallationType = request.InstallationType;
         existing.PackageId = request.PackageId?.Trim();
+        existing.PackageAuthorized = updatePackageAuth.Authorized;
+        existing.PackageWarning = updatePackageAuth.Warning;
         existing.ScriptId = request.ScriptId;
         existing.CommandPayload = request.CommandPayload;
         existing.ScopeType = request.ScopeType;
@@ -292,7 +316,7 @@ public class AutomationTaskService : IAutomationTaskService
             LogType.Automation,
             LogSource.Api,
             "Automation task updated.",
-            new { correlationId, taskId = updated.Id, taskName = updated.Name, updated.ActionType, updated.IsActive },
+            new { correlationId, taskId = updated.Id, taskName = updated.Name, updated.ActionType, updated.IsActive, updated.PackageAuthorized, packageWarning = updated.PackageWarning },
             clientId: updated.ClientId?.ToString(),
             siteId: updated.SiteId?.ToString(),
             agentId: updated.AgentId?.ToString());
@@ -832,6 +856,89 @@ public class AutomationTaskService : IAutomationTaskService
         }
     }
 
+    /// <summary>
+    /// Avalia se o pacote da tarefa está autorizado: existência no catálogo
+    /// (Winget) e aprovação na App Store efetiva do escopo. A policy de
+    /// automação SOBREPÕE a loja: a tarefa NÃO é bloqueada — o resultado é
+    /// persistido (packageAuthorized/packageWarning) e exposto na UI.
+    /// Retorna (null, null) para ações que não são de pacote.
+    /// </summary>
+    internal static async Task<(bool? Authorized, string? Warning)> ResolvePackageAuthorizationAsync(
+        IAppStoreService appStoreService,
+        IWingetPackageRepository wingetRepository,
+        AutomationTaskActionType actionType,
+        AppInstallationType? installationType,
+        string? packageId,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId)
+    {
+        var isPackageAction = actionType is AutomationTaskActionType.InstallPackage
+            or AutomationTaskActionType.UpdatePackage
+            or AutomationTaskActionType.RemovePackage
+            or AutomationTaskActionType.UpdateOrInstallPackage;
+        if (!isPackageAction || installationType is null || string.IsNullOrWhiteSpace(packageId))
+            return (null, null);
+
+        var trimmed = packageId.Trim();
+
+        // Existência no catálogo: evita salvar id inexistente (ex.:
+        // "mozilla.thunderbird.br" em vez de "Mozilla.Thunderbird.pt-BR"),
+        // que falharia no agent com exit 13. Catálogo vazio/indisponível é
+        // tratado como "unknown" — sem afirmar que o id não existe.
+        bool inCatalog = true;
+        if (installationType == AppInstallationType.Winget)
+        {
+            var catalogCount = await wingetRepository.CountAsync();
+            if (catalogCount > 0)
+                inCatalog = await wingetRepository.GetByPackageIdAsync(trimmed) is not null;
+        }
+        else
+        {
+            var catalog = await appStoreService.GetCatalogPackageByIdAsync(installationType.Value, trimmed);
+            inCatalog = catalog is not null;
+        }
+
+        var approved = await appStoreService.IsPackageApprovedAsync(clientId, siteId, agentId, installationType.Value, trimmed);
+
+        if (!inCatalog)
+        {
+            return (false,
+                $"O PackageId '{trimmed}' não existe no catálogo Winget — a instalação falhará no agent. " +
+                "Verifique o id (case-insensitive), por exemplo: 'mozilla.thunderbird.br' não é válido; " +
+                "o id correto é 'Mozilla.Thunderbird.pt-BR'.");
+        }
+
+        if (!approved)
+        {
+            return (false,
+                "Pacote não está na App Store; a policy de automação será aplicada e instalará/atualizará " +
+                "por cima da loja. Para evitar o bloqueio do agent (exit 13), adicione o pacote à política da App Store.");
+        }
+
+        return (true, null);
+    }
+
+    private async Task<(bool? Authorized, string? Warning)> ResolvePackageAuthorizationAsync(
+        AutomationTaskActionType actionType,
+        AppInstallationType? installationType,
+        string? packageId,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? agentId)
+    {
+        try
+        {
+            return await ResolvePackageAuthorizationAsync(
+                _appStoreService, _wingetPackageRepository, actionType, installationType, packageId, clientId, siteId, agentId);
+        }
+        catch
+        {
+            // A checagem é best-effort (não pode impedir a criação/edição).
+            return (null, null);
+        }
+    }
+
     private async Task<IReadOnlyList<Agent>> ResolveScopeAgentsAsync(AutomationTaskDefinition task)
     {
         return task.ScopeType switch
@@ -1223,6 +1330,8 @@ public class AutomationTaskService : IAutomationTaskService
             WriteOutputToNote = task.WriteOutputToNote,
             ExecutionOrder = task.ExecutionOrder,
             Key = task.Key,
+            PackageAuthorized = task.PackageAuthorized,
+            PackageWarning = task.PackageWarning,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt
@@ -1250,6 +1359,8 @@ public class AutomationTaskService : IAutomationTaskService
             WriteOutputToNote = task.WriteOutputToNote,
             ExecutionOrder = task.ExecutionOrder,
             Key = task.Key,
+            PackageAuthorized = task.PackageAuthorized,
+            PackageWarning = task.PackageWarning,
             LastUpdatedAt = task.LastUpdatedAt,
             IsDeleted = task.DeletedAt.HasValue,
             DeletedAt = task.DeletedAt,
@@ -1300,6 +1411,8 @@ public class AutomationTaskService : IAutomationTaskService
             task.ExecutionOrder,
             task.Key,
             task.AllowDefer,
+            task.PackageAuthorized,
+            task.PackageWarning,
             CloseProcesses = ParseTags(task.CloseProcessesJson),
             task.UserPromptTimeoutSeconds,
             task.IsActive,
