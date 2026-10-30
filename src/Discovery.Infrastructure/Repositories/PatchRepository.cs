@@ -36,6 +36,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         PatchUpdateStatus? status,
         string? severity,
         bool descending,
+        string? source = null,
         CancellationToken ct = default)
     {
         var safePage = Math.Max(1, page);
@@ -58,6 +59,25 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 PatchUpdateStatus.Installed => query.Where(update => update.IsInstalled),
                 _ => query.Where(update => update.Status == status.Value)
             };
+        }
+
+        // Filtro de origem (aba Atualizações do agente): "windows" esconde os
+        // apps de terceiros (choco/winget/msi) que o agente injeta no MESMO
+        // inventário de patches (WU-19/20) e que já aparecem em Programas —
+        // duplicados na aba. "third-party" mostra só eles; null = tudo.
+        switch (source?.Trim().ToLowerInvariant())
+        {
+            case "windows":
+                // NÃO usamos != exclusões diretas: com Source NULL (linhas antigas),
+                // SQL avalia NULL != 'choco' como NULL e a linha SUMIRIA do filtro.
+                // Negação correta: tudo que não é de terceiros.
+                query = query.Where(update =>
+                    !(update.Source == "choco" || update.Source == "winget" || update.Source == "msi"));
+                break;
+            case "third-party":
+                query = query.Where(update =>
+                    update.Source == "choco" || update.Source == "winget" || update.Source == "msi");
+                break;
         }
 
         if (!string.IsNullOrWhiteSpace(severity))

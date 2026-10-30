@@ -49,6 +49,7 @@ public sealed class AgentPatchesController(
         [FromQuery] string? search = null,
         [FromQuery] string? status = null,
         [FromQuery] string? severity = null,
+        [FromQuery] string? source = null,
         [FromQuery] string order = "desc",
         CancellationToken ct = default)
     {
@@ -57,7 +58,7 @@ public sealed class AgentPatchesController(
 
         var query = new GetAgentWindowsUpdatesPageQuery(
             agentId, page, pageSize, search, status, severity,
-            !string.Equals(order, "asc", StringComparison.OrdinalIgnoreCase));
+            !string.Equals(order, "asc", StringComparison.OrdinalIgnoreCase), source);
         return (await mediator.Send(query, ct)).ToActionResult();
     }
 

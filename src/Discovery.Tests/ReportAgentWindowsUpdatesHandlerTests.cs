@@ -187,7 +187,7 @@ public class ReportAgentWindowsUpdatesHandlerTests
         public Task<AgentWindowsUpdatePageResult> GetAgentUpdatesPageAsync(
             Guid agentId, int page, int pageSize, string? search,
             Discovery.Core.Enums.PatchUpdateStatus? status, string? severity, bool descending,
-            CancellationToken ct = default)
+            string? source = null, CancellationToken ct = default)
             => Task.FromResult(new AgentWindowsUpdatePageResult());
 
         public Task<AgentWindowsUpdateSnapshot?> GetSnapshotAsync(Guid agentId, CancellationToken ct = default)

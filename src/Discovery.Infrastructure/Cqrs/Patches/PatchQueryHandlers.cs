@@ -52,7 +52,7 @@ public sealed class GetAgentWindowsUpdatesPageQueryHandler(IPatchRepository repo
         var status = PatchScopeResolver.ParseStatus(query.Status);
 
         var result = await repo.GetAgentUpdatesPageAsync(
-            query.AgentId, page, pageSize, query.Search, status, query.Severity, query.Descending, ct);
+            query.AgentId, page, pageSize, query.Search, status, query.Severity, query.Descending, query.Source, ct);
 
         var dto = new AgentWindowsUpdatePageDto(
             result.Items.Select(PatchDtoMapper.ToDto).ToList(),
