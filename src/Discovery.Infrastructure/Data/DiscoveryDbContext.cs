@@ -124,11 +124,12 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     // Ciclos agendados por escopo
     public DbSet<ProcessingScopeState> ProcessingScopeStates => Set<ProcessingScopeState>();
 
-    // Hardware inventory (reports)
-    public DbSet<DiskInfo> DiskInfos => Set<DiskInfo>();
-    public DbSet<NetworkAdapterInfo> NetworkAdapterInfos => Set<NetworkAdapterInfo>();
-    public DbSet<ListeningPortInfo> ListeningPortInfos => Set<ListeningPortInfo>();
-    public DbSet<PrinterInfo> PrinterInfos => Set<PrinterInfo>();
+    // Hardware inventory (reports): SEM DbSets — M052 removeu as tabelas dedicadas
+    // (disk_infos/network_adapter_infos/listening_port_infos/printer_infos) e nunca
+    // houve migration para elas. Os datasets derivam do JSON em agent_hardware_info
+    // (ReportHardwareDatasetTests); as classes DiskInfo/... são usadas apenas como
+    // DTO (HardwareInventoryParser). Mapeá-las aqui faz o SchemaDriftHealthCheck
+    // reportar /health 503 (incidente do update de 2026-10-31 16:25).
 
     // AI Provider Credentials
     public DbSet<AiProviderCredential> AiProviderCredentials => Set<AiProviderCredential>();

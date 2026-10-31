@@ -1018,15 +1018,21 @@ restart_api_with_rollback() {
     current_release="$(readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
   fi
 
+  # Hardening (incidente 2026-10-31 16:28): a deteccao anterior dependia de
+  # current_release resolver; se vier vazio, o rollback inteiro era pulado
+  # ("Sem release anterior") mesmo com dezenas de releases no diretorio.
+  # Agora: lista releases por mtime (mesma ordem do cleanup_old_releases) e
+  # exclui o alvo de "current"; se "current" nao resolver, exclui a release
+  # mais recente (acabou de ser publicada por publish_api).
   local previous_release=""
-  local releases_root
-  releases_root="$(dirname "${current_release:-${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}}")"
-  if [[ -n "$current_release" && -d "$releases_root" ]]; then
-    local previous_candidate
-    previous_candidate="$(find "$releases_root" -mindepth 1 -maxdepth 1 -type d ! -path "$current_release" -printf '%f\n' 2>/dev/null | sort | tail -n 1 || true)"
-    if [[ -n "$previous_candidate" ]]; then
-      previous_release="$releases_root/$previous_candidate"
+  local releases_root exclude_path
+  releases_root="$(dirname "${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}")/releases"
+  if [[ -d "$releases_root" ]]; then
+    exclude_path="$current_release"
+    if [[ -z "$exclude_path" ]]; then
+      exclude_path="$(ls -1dt "$releases_root"/*/ 2>/dev/null | head -n 1)"
     fi
+    previous_release="$(ls -1dt "$releases_root"/*/ 2>/dev/null | grep -vxF "$exclude_path" | head -n 1 | xargs -r readlink -f 2>/dev/null || true)"
   fi
 
   if ! sudo systemctl restart discovery-api; then
