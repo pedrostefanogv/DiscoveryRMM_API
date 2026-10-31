@@ -201,7 +201,20 @@ public sealed class StartAgentSupportChatSessionCommandHandler(
         // NOVA conversa, senão o atendente reabria uma sessão morta.
         var currentForAgent = await chatRepository.GetCurrentForAgentAsync(agent.Id, ct);
         if (currentForAgent is not null)
+        {
+            // Conversa AVULSA em andamento é privada de quem a iniciou: outro
+            // atendente não "entra" nela (nem vê o histórico). Responde o mesmo
+            // agent_busy de máquina ocupada, que o console já traduz.
+            //
+            // Fail-closed também para sessões LEGADAS sem StartedByUserId: são
+            // invisíveis em GetCurrentForAgent (IsVisibleToSupportUser exige dono),
+            // então reaproveitá-las devolveria "sucesso" para uma tela que nunca
+            // carrega a conversa. Mesma regra de visibilidade, um só lugar.
+            if (!currentForAgent.IsVisibleToSupportUser(cmd.StartedByUserId))
+                return Result<TicketChatSessionDto>.Failure(Error.Conflict("agent_busy"));
+
             return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(currentForAgent));
+        }
 
         if (agent.Status != AgentStatus.Online)
             return Result<TicketChatSessionDto>.Failure(Error.Conflict("agent_offline"));

@@ -304,6 +304,18 @@ public static class WindowsUpdateInventoryParser
             maxDownloadSize = size;
         }
 
+        // MinDownloadSize (menor download possível, delta/express) — opcional;
+        // a UI usa "a partir de X" quando > 0 e <= max.
+        long? minDownloadSize = null;
+        if (item.TryGetProperty("minDownloadSize", out var minSizeElement) &&
+            minSizeElement.ValueKind == JsonValueKind.Number &&
+            minSizeElement.TryGetInt64(out var minSize) &&
+            minSize >= 0 &&
+            (maxDownloadSize is null || minSize <= maxDownloadSize))
+        {
+            minDownloadSize = minSize;
+        }
+
         return new AgentWindowsUpdateEntry
         {
             UpdateKey = updateKey,
@@ -324,6 +336,7 @@ public static class WindowsUpdateInventoryParser
             IsMandatory = GetBool(item, "isMandatory"),
             RequiresReboot = GetBool(item, "requiresReboot"),
             MaxDownloadSize = maxDownloadSize,
+            MinDownloadSize = minDownloadSize,
             SupportUrl = Truncate(GetString(item, "supportUrl"), MaxSupportUrl),
             PublishedAt = ParseDate(GetString(item, "publishedAt")),
             LastDeployedAt = ParseDate(GetString(item, "lastDeployedAt")),

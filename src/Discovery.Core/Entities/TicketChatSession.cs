@@ -58,6 +58,23 @@ public class TicketChatSession
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// O histórico desta conversa pode ser exposto a ESTE atendente?
+    ///
+    /// Conversa vinculada a chamado segue a regra de acesso do chamado (o
+    /// histórico é do atendimento, não do operador). Conversa AVULSA é privada
+    /// de quem a iniciou: sem isso o painel da máquina devolvia a última sessão
+    /// da máquina e outro atendente (ou outro turno) via a conversa anterior de
+    /// um usuário final que não era o dele.
+    ///
+    /// Sessões antigas sem StartedByUserId ficam invisíveis (fail-closed).
+    /// </summary>
+    public bool IsVisibleToSupportUser(Guid? supportUserId)
+        => TicketId is not null
+            || (supportUserId is not null
+                && StartedByUserId is not null
+                && StartedByUserId == supportUserId);
+
     public Ticket? Ticket { get; set; }
 
     public Agent? Agent { get; set; }

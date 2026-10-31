@@ -49,6 +49,7 @@ public partial class DiscoveryDbContext
             entity.Property(update => update.IsMandatory).HasColumnName("is_mandatory");
             entity.Property(update => update.RequiresReboot).HasColumnName("requires_reboot");
             entity.Property(update => update.MaxDownloadSize).HasColumnName("max_download_size");
+            entity.Property(update => update.MinDownloadSize).HasColumnName("min_download_size");
             entity.Property(update => update.SupportUrl).HasColumnName("support_url").HasMaxLength(1000);
             entity.Property(update => update.PublishedAt).HasColumnName("published_at").HasColumnType("timestamptz");
             entity.Property(update => update.LastDeployedAt).HasColumnName("last_deployed_at").HasColumnType("timestamptz");

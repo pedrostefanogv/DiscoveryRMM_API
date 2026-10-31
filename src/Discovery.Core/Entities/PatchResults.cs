@@ -23,6 +23,7 @@ public class AgentWindowsUpdateEntry
     public bool IsMandatory { get; set; }
     public bool RequiresReboot { get; set; }
     public long? MaxDownloadSize { get; set; }
+    public long? MinDownloadSize { get; set; }
     public string? SupportUrl { get; set; }
     public DateTime? PublishedAt { get; set; }
     public DateTime? LastDeployedAt { get; set; }

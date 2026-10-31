@@ -55,13 +55,22 @@ public class SupportChatController(
 
     /// <summary>
     /// Sessão da máquina (a mais recente, com QUALQUER status) — HasSession=false
-    /// só quando a máquina nunca teve sessão.
+    /// quando a máquina nunca teve sessão OU quando a sessão mais recente não é
+    /// visível para o atendente autenticado.
     ///
-    /// BUG CORRIGIDO: consultava só Pending/Active e devolvia HasSession=false
-    /// assim que a sessão virava Declined. O console ficava com o último snapshot
-    /// "Pending" na tela — o atendente via "Aguardando confirmação" para sempre
-    /// depois do "Agora não" do usuário. O painel precisa receber o DESFECHO
-    /// (Declined/Expired/Ended) para sair da espera.
+    /// BUG CORRIGIDO (privacy): a consulta devolvia a última sessão da máquina
+    /// com QUALQUER status, de QUALQUER atendente. Ao abrir o chat de um agent o
+    /// console exibia a conversa anterior (de outro operador/turno, sobre outro
+    /// usuário final) e ainda carregava as mensagens dela. Agora a conversa
+    /// AVULSA só é devolvida para quem a iniciou; o vínculo por chamado continua
+    /// seguindo a regra de acesso do chamado.
+    ///
+    /// BUG CORRIGIDO (estado): consultava só Pending/Active e devolvia
+    /// HasSession=false assim que a sessão virava Declined. O console ficava com
+    /// o último snapshot "Pending" na tela — o atendente via "Aguardando
+    /// confirmação" para sempre depois do "Agora não" do usuário. O painel
+    /// precisa receber o DESFECHO (Declined/Expired/Ended) para sair da espera;
+    /// para o mesmo atendente o desfecho continua sendo devolvido.
     /// </summary>
     [HttpGet("agents/{agentId:guid}/sessions/current")]
     [RequirePermission(ResourceType.Tickets, ActionType.View)]
@@ -71,6 +80,7 @@ public class SupportChatController(
         if (session is null)
             return Ok(new TicketChatStateDto(false, null));
 
+        // Fail-closed: nada de sessão avulsa alheia (nem o DTO, nem as mensagens).
         if (!await CanAccessSessionAsync(session, ActionType.View, ct))
             return Ok(new TicketChatStateDto(false, null));
 
@@ -362,12 +372,20 @@ public class SupportChatController(
 
     /// <summary>
     /// Acesso à sessão: vinculada a chamado usa a regra do chamado; avulsa usa o
-    /// escopo do cliente dono da máquina (mesma regra das listagens de agentes).
+    /// escopo do cliente dono da máquina (mesma regra das listagens de agentes)
+    /// E o atendente precisa ser quem iniciou a conversa.
+    ///
+    /// A checagem de dono é o que fecha o IDOR das rotas por sessionId
+    /// (messages/end/retry/presence/anexos): sem ela qualquer atendente com ACL
+    /// do cliente lia a conversa avulsa de outro atendente só sabendo o id.
     /// </summary>
     private async Task<bool> CanAccessSessionAsync(TicketChatSession session, ActionType action, CancellationToken ct)
     {
         if (session.TicketId is { } ticketId)
             return await accessGuard.CanAccessTicketAsync(ticketId, action, ct);
+
+        if (!session.IsVisibleToSupportUser(CurrentUserId))
+            return false;
 
         return await CanAccessAgentScopeAsync(session.ClientId, session.SiteId ?? Guid.Empty, ct);
     }

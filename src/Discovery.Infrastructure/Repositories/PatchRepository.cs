@@ -574,6 +574,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         row.IsMandatory = entry.IsMandatory;
         row.RequiresReboot = entry.RequiresReboot;
         row.MaxDownloadSize = entry.MaxDownloadSize;
+        row.MinDownloadSize = entry.MinDownloadSize;
         row.SupportUrl = entry.SupportUrl;
         row.PublishedAt = entry.PublishedAt;
         row.LastDeployedAt = entry.LastDeployedAt;

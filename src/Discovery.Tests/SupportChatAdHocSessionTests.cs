@@ -158,7 +158,29 @@ public class SupportChatAdHocSessionTests
     }
 
     [Test]
-    public async Task StartAgentSupportChatSession_ShouldReuseCurrentSessionForTheMachine()
+    public async Task StartAgentSupportChatSession_ShouldReuseCurrentSessionForTheSameSupportUser()
+    {
+        using var db = CreateDbContext();
+        var agent = await SeedAgentAsync(db, AgentStatus.Online);
+        var dispatcher = new CapturingDispatcher();
+        var publisher = new RecordingPublisher();
+        var handler = CreateHandler(db, dispatcher, publisher);
+        var sameUser = Guid.NewGuid();
+
+        var first = await handler.Handle(new StartAgentSupportChatSessionCommand(agent.Id, sameUser, "Ana"), CancellationToken.None);
+        var second = await handler.Handle(new StartAgentSupportChatSessionCommand(agent.Id, sameUser, "Ana"), CancellationToken.None);
+
+        Assert.That(first.IsSuccess && second.IsSuccess, Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Value!.Id, Is.EqualTo(first.Value!.Id), "uma sessão por máquina para o mesmo atendente");
+            Assert.That(db.TicketChatSessions.Count(), Is.EqualTo(1));
+            Assert.That(dispatcher.Dispatched.Count, Is.EqualTo(1), "não dispara convite duplicado");
+        });
+    }
+
+    [Test]
+    public async Task StartAgentSupportChatSession_ShouldNotReuseSessionFromAnotherSupportUser()
     {
         using var db = CreateDbContext();
         var agent = await SeedAgentAsync(db, AgentStatus.Online);
@@ -166,15 +188,59 @@ public class SupportChatAdHocSessionTests
         var publisher = new RecordingPublisher();
         var handler = CreateHandler(db, dispatcher, publisher);
 
-        var first = await handler.Handle(new StartAgentSupportChatSessionCommand(agent.Id, null, "Ana"), CancellationToken.None);
-        var second = await handler.Handle(new StartAgentSupportChatSessionCommand(agent.Id, null, "Bia"), CancellationToken.None);
+        var first = await handler.Handle(
+            new StartAgentSupportChatSessionCommand(agent.Id, Guid.NewGuid(), "Ana"), CancellationToken.None);
+        // Outro atendente abre o chat da MESMA máquina: não pode entrar na
+        // conversa avulsa de Ana (nem reabri-la como se fosse dele).
+        var second = await handler.Handle(
+            new StartAgentSupportChatSessionCommand(agent.Id, Guid.NewGuid(), "Bia"), CancellationToken.None);
 
-        Assert.That(first.IsSuccess && second.IsSuccess, Is.True);
         Assert.Multiple(() =>
         {
-            Assert.That(second.Value!.Id, Is.EqualTo(first.Value!.Id), "uma sessão por máquina");
+            Assert.That(first.IsSuccess, Is.True);
+            Assert.That(second.IsFailure, Is.True);
+            Assert.That(second.Errors[0].Code, Is.EqualTo("Conflict"));
+            Assert.That(second.Errors[0].Message, Is.EqualTo("agent_busy"));
+            Assert.That(db.TicketChatSessions.Count(), Is.EqualTo(1), "não cria sessão paralela na máquina");
+            Assert.That(dispatcher.Dispatched.Count, Is.EqualTo(1), "não dispara segundo convite");
+        });
+    }
+
+    [Test]
+    public async Task StartAgentSupportChatSession_ShouldNotReuseLegacySessionWithoutOwner()
+    {
+        using var db = CreateDbContext();
+        var agent = await SeedAgentAsync(db, AgentStatus.Online);
+        var dispatcher = new CapturingDispatcher();
+        var publisher = new RecordingPublisher();
+
+        // Sessão legada (anterior à coluna StartedByUserId): dona desconhecida.
+        // GetCurrentForAgent a esconde de todos (fail-closed), então o start
+        // também não pode devolvê-la como "sucesso".
+        db.TicketChatSessions.Add(new TicketChatSession
+        {
+            Id = Guid.NewGuid(),
+            TicketId = null,
+            AgentId = agent.Id,
+            ClientId = ClientId,
+            SiteId = SiteId,
+            Status = TicketChatSessionStatus.Pending,
+            StartedByUserId = null,
+            StartedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateHandler(db, dispatcher, publisher).Handle(
+            new StartAgentSupportChatSessionCommand(agent.Id, Guid.NewGuid(), "Ana"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsFailure, Is.True);
+            Assert.That(result.Errors[0].Message, Is.EqualTo("agent_busy"));
             Assert.That(db.TicketChatSessions.Count(), Is.EqualTo(1));
-            Assert.That(dispatcher.Dispatched.Count, Is.EqualTo(1), "não dispara convite duplicado");
+            Assert.That(dispatcher.Dispatched, Is.Empty);
         });
     }
 

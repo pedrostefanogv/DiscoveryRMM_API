@@ -48,6 +48,8 @@ public class AgentWindowsUpdate
     public bool RequiresReboot { get; set; }
 
     public long? MaxDownloadSize { get; set; }
+    /// <summary>Menor download possível (delta/express, bytes); null quando o WUA não reporta.</summary>
+    public long? MinDownloadSize { get; set; }
     public string? SupportUrl { get; set; }
     public DateTime? PublishedAt { get; set; }
     public DateTime? LastDeployedAt { get; set; }
