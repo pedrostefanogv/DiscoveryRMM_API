@@ -75,9 +75,16 @@ public class CommandRepository : ICommandRepository
     {
         var safeLimit = Math.Clamp(limit, 1, 1000);
 
+        // DecommissionAgent fica FORA da expiração: ele tem que sobreviver a
+        // janelas longas de agente offline/NATS indisponível — é o comando que
+        // desinstala o PC, e expirá-lo silently deixaria a máquina instalada
+        // para sempre com a lixeira já commitada no painel. O ciclo fecha via
+        // reentrega (PendingCommandRedeliveryService) ou o purge do painel
+        // (que apaga o registro por retenção — o agente tem TTL próprio de 30d).
         return await _db.AgentCommands
             .AsNoTracking()
             .Where(command => command.CreatedAt < createdBeforeUtc
+                && command.CommandType != CommandType.DecommissionAgent
                 && (command.Status == CommandStatus.Pending
                     || command.Status == CommandStatus.Sent
                     || command.Status == CommandStatus.Running))

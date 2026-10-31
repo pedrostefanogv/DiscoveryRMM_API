@@ -74,15 +74,26 @@ public class PendingCommandRedeliveryService(
     }
 
     /// <summary>
-    /// Agentes elegíveis a receber reentrega: online e fora da lixeira.
-    /// `GetOnlineAsync` não filtra soft-deleted, e um agente na lixeira não deve
-    /// voltar a executar comandos.
+    /// Agentes elegíveis a receber reentrega: online (inclui agentes na lixeira,
+    /// que continuam rodando na máquina até o uninstall confirmar).
+    /// `GetOnlineAsync` não filtra soft-deleted; o filtro por comando acontece
+    /// em <see cref="IsRedeliveryAllowedForAgent"/>: um agente na lixeira só deve
+    /// receber DecommissionAgent — qualquer outro comando seria contraditório
+    /// com a exclusão já commitada no painel.
     /// </summary>
     internal static Guid[] SelectRedeliveryAgentIds(IReadOnlyList<Discovery.Core.Entities.Agent> onlineAgents)
         => onlineAgents
-            .Where(agent => agent.DeletedAt is null)
             .Select(agent => agent.Id)
             .ToArray();
+
+    /// <summary>
+    /// Guarda de escopo: agente na lixeira só aceita DecommissionAgent. O
+    /// restabelecimento da conexão NATS do agente excluído é exatamente o
+    /// gatilho que fecha o ciclo de desinstalação remota.
+    /// </summary>
+    internal static bool IsRedeliveryAllowedForAgent(
+        Discovery.Core.Entities.Agent agent, Discovery.Core.Entities.AgentCommand command)
+        => agent.DeletedAt is null || command.CommandType == Discovery.Core.Enums.CommandType.DecommissionAgent;
 
     /// <summary>O que fazer com um candidato depois do veredito da guarda.</summary>
     internal enum RedeliveryAction
@@ -135,10 +146,22 @@ public class PendingCommandRedeliveryService(
         if (candidates.Count == 0)
             return;
 
+        var agentById = onlineAgents.ToDictionary(agent => agent.Id);
         var sent = 0;
         foreach (var command in candidates)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Agente na lixeira: só DecommissionAgent pode ser reentregue (a
+            // exclusão já foi commitada; os demais comandos perderam o sentido).
+            if (!agentById.TryGetValue(command.AgentId, out var agent)
+                || !IsRedeliveryAllowedForAgent(agent, command))
+            {
+                logger.LogDebug(
+                    "Reentrega pulada para o comando {CommandId} ({CommandType}): agente {AgentId} está na lixeira.",
+                    command.Id, CommandTypeWireMapper.ToWireValue(command.CommandType), command.AgentId);
+                continue;
+            }
 
             if (redeliveryGuard is not null)
             {

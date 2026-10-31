@@ -134,15 +134,13 @@ internal static class AgentDecommissionDispatch
         string reason,
         CancellationToken ct)
     {
-        if (agent.Status != AgentStatus.Online)
-        {
-            logger.LogInformation(
-                "Agente {AgentId} não está online ({Status}) — comando de descomissionamento não enviado ({Reason}).",
-                agent.Id,
-                agent.Status,
-                reason);
-            return;
-        }
+        // Sem gate de status: o comando é SEMPRE persistido (Status=Pending pelo
+        // dispatcher quando o NATS está indisponível ou o agente está offline).
+        // O PendingCommandRedeliveryService reenvia quando o agente voltar a ser
+        // visto online — inclusive agentes na lixeira (fila filtrada só para
+        // DecommissionAgent). Um gate antecipado ("não está online, não envia")
+        // perdia o comando para sempre: a lixeira é commitada de qualquer forma
+        // e o PC ficava instalado sem chance de reentrega.
 
         // Auditoria: quem pediu e por qual caminho (trash/purge).
         var payload = JsonSerializer.Serialize(new { requestedBy = "console", reason });

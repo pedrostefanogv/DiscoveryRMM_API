@@ -14,6 +14,12 @@ public class WingetPackageRepository : IWingetPackageRepository
 
     public async Task<WingetPackage?> GetByPackageIdAsync(string packageId)
     {
+        // Tabela legada pode não existir (dropada pela M055). Um 42P01 aqui,
+        // dentro da transação do comando, aborta a transação inteira (25P02)
+        // mesmo com o catch do chamador — ver LegacyTableGuard.
+        if (!await LegacyTableGuard.ExistsAsync(_db, "winget_packages"))
+            return null;
+
         var normalized = NormalizeId(packageId);
         return await _db.WingetPackages
             .AsNoTracking()
@@ -27,6 +33,9 @@ public class WingetPackageRepository : IWingetPackageRepository
         int limit,
         CancellationToken cancellationToken = default)
     {
+        if (!await LegacyTableGuard.ExistsAsync(_db, "winget_packages", cancellationToken))
+            return ([], 0);
+
         var query = ApplyFilters(_db.WingetPackages.AsNoTracking(), search, architecture);
 
         if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
@@ -74,6 +83,11 @@ public class WingetPackageRepository : IWingetPackageRepository
         CancellationToken cancellationToken = default)
     {
         if (packages.Count == 0)
+            return;
+
+        // Tabela legada dropada (M055): não tentar escrever (42P01 abortaria a
+        // transação do job/comando). No-op mantém o sync reportando sucesso.
+        if (!await LegacyTableGuard.ExistsAsync(_db, "winget_packages"))
             return;
 
         var now = DateTime.UtcNow;
@@ -144,6 +158,13 @@ public class WingetPackageRepository : IWingetPackageRepository
 
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
+        // Catálogo ausente = "unknown"/vazio (0): a checagem de autorização da
+        // policy trata catálogo vazio como não-bloqueante. NUNCA lançar aqui:
+        // roda dentro da transação do Create/UpdateAutomationTaskCommand e um
+        // 42P01/25P02 vira HTTP 500 (incidente 2026-10-31).
+        if (!await LegacyTableGuard.ExistsAsync(_db, "winget_packages", cancellationToken))
+            return 0;
+
         return await _db.WingetPackages.CountAsync(cancellationToken);
     }
 

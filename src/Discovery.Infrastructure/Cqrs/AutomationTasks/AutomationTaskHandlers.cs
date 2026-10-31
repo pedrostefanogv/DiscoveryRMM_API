@@ -215,24 +215,30 @@ public sealed class UpdateAutomationTaskCommandHandler(
 
         var request = new UpdateAutomationTaskRequest
         {
-            Name = cmd.Name ?? string.Empty,
-            Description = cmd.Description,
-            ActionType = cmd.ActionType ?? AutomationTaskActionType.RunScript,
-            InstallationType = cmd.InstallationType,
-            PackageId = cmd.PackageId,
-            ScriptId = cmd.ScriptId,
-            CommandPayload = cmd.CommandPayload,
-            ScopeType = cmd.ScopeType ?? AppApprovalScopeType.Global,
-            ScopeId = cmd.ScopeId,
-            IncludeTags = cmd.IncludeTags ?? (IReadOnlyList<string>)[],
-            ExcludeTags = cmd.ExcludeTags ?? (IReadOnlyList<string>)[],
-            TriggerImmediate = cmd.TriggerImmediate ?? false,
-            TriggerRecurring = cmd.TriggerRecurring ?? false,
-            TriggerOnUserLogin = cmd.TriggerOnUserLogin ?? false,
-            TriggerOnAgentCheckIn = cmd.TriggerOnAgentCheckIn ?? false,
-            ScheduleCron = cmd.ScheduleCron,
-            RequiresApproval = cmd.RequiresApproval ?? false,
-            IsActive = cmd.IsActive ?? true,
+            // PUT parcial: TODO campo ausente preserva o valor atual. Antes, os
+            // defaults do contrato (RunScript/Global/false) corrompiam a tarefa —
+            // um PUT só com "description" virava RunScript ou policy GLOBAL,
+            // apagando ClientId/SiteId/AgentId (revisão 2026-10-31, A03).
+            Name = cmd.Name ?? current.Name,
+            Description = cmd.Description ?? current.Description,
+            ActionType = cmd.ActionType ?? current.ActionType,
+            InstallationType = cmd.InstallationType ?? current.InstallationType,
+            PackageId = cmd.PackageId ?? current.PackageId,
+            ScriptId = cmd.ScriptId ?? current.ScriptId,
+            CommandPayload = cmd.CommandPayload ?? current.CommandPayload,
+            ScopeType = cmd.ScopeType ?? current.ScopeType,
+            // Sem troca de escopo declarada, mantém o scopeId do registro; um
+            // ScopeId explícito acompanha a troca de tipo de escopo.
+            ScopeId = cmd.ScopeType.HasValue ? cmd.ScopeId : current.ScopeId,
+            IncludeTags = cmd.IncludeTags ?? current.IncludeTags,
+            ExcludeTags = cmd.ExcludeTags ?? current.ExcludeTags,
+            TriggerImmediate = cmd.TriggerImmediate ?? current.TriggerImmediate,
+            TriggerRecurring = cmd.TriggerRecurring ?? current.TriggerRecurring,
+            TriggerOnUserLogin = cmd.TriggerOnUserLogin ?? current.TriggerOnUserLogin,
+            TriggerOnAgentCheckIn = cmd.TriggerOnAgentCheckIn ?? current.TriggerOnAgentCheckIn,
+            ScheduleCron = cmd.ScheduleCron ?? current.ScheduleCron,
+            RequiresApproval = cmd.RequiresApproval ?? current.RequiresApproval,
+            IsActive = cmd.IsActive ?? current.IsActive,
             AllowDefer = cmd.AllowDefer ?? current.AllowDefer,
             CloseProcesses = cmd.CloseProcesses ?? current.CloseProcesses,
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds ?? current.PromptTimeoutSeconds,
@@ -251,10 +257,12 @@ public sealed class UpdateAutomationTaskCommandHandler(
 
         if (result.IsSuccess && cmd.TriggerImmediate == true)
         {
+            // A11: usar o escopo EFETIVO da tarefa atualizada. Antes, um PUT parcial
+            // (sem scopeType/scopeId) publicava invalidação com escopo Global/nulo.
             await syncPublisher.PublishByScopeAsync(
                 SyncResourceType.AutomationPolicy,
-                cmd.ScopeType ?? AppApprovalScopeType.Global,
-                cmd.ScopeId,
+                updated!.ScopeType,
+                updated.ScopeId,
                 "automation-task-updated-immediate",
                 null,
                 cmd.CorrelationId,

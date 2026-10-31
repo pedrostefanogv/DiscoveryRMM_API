@@ -95,4 +95,44 @@ public class MigrationIntegrityTests
         Assert.That(unexpected, Is.Empty,
             "lacunas não documentadas em KnownVersionGaps: " + string.Join(", ", unexpected));
     }
+
+    /// <summary>
+    /// A Version (YYYYMMDD_SSS) precisa CRESCER junto com o número do nome (M###).
+    /// Caso real (2026-10-31): M252 recebeu 20261029_252 e M253 recebeu
+    /// 20261030_253 — versões MENORES que M241..M251 (20261222..20261230).
+    /// Dependendo do ambiente isso aplica fora de ordem ou não aplica a migração,
+    /// deixando o EF mapeando colunas inexistentes (42703 → HTTP 500).
+    /// </summary>
+    [Test]
+    public void Migration_versions_must_grow_with_the_migration_number()
+    {
+        // A numeração anterior à M238 tem violações históricas conhecidas (ex.:
+        // M060..M062, M090..M135, M147/M152, M209/M210) — legado aceito, não é o
+        // alvo desta guarda. A partir da M238 a Version precisa ser monotônica,
+        // que é exatamente a faixa onde o erro de 2026-10-31 aconteceu.
+        const int FirstEnforcedNumber = 238;
+
+        var named = MigrationsAssembly.GetTypes()
+            .Select(type => new { Name = type.Name, Attr = type.GetCustomAttribute<MigrationAttribute>() })
+            .Where(item => item.Attr is not null && item.Name.Length >= 4 && item.Name[0] == 'M' && char.IsDigit(item.Name[1]))
+            .Select(item => new
+            {
+                item.Name,
+                Number = int.Parse(System.Text.RegularExpressions.Regex.Match(item.Name, "^M(\\d{3})_").Groups[1].Value),
+                Version = item.Attr!.Version
+            })
+            .Where(item => item.Number >= FirstEnforcedNumber)
+            .OrderBy(item => item.Number)
+            .ToList();
+
+        var regressions = named
+            .Zip(named.Skip(1))
+            .Where(pair => pair.Second.Version <= pair.First.Version)
+            .Select(pair => $"{pair.First.Name}({pair.First.Version}) >= {pair.Second.Name}({pair.Second.Version})")
+            .ToList();
+
+        Assert.That(regressions, Is.Empty,
+            "Version fora de ordem: uma migração nova precisa ter Version maior que a anterior. Ajuste: " +
+            string.Join(", ", regressions));
+    }
 }

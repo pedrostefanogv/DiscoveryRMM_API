@@ -255,8 +255,14 @@ public class AutomationTaskService : IAutomationTaskService
         existing.ActionType = request.ActionType;
         existing.InstallationType = request.InstallationType;
         existing.PackageId = request.PackageId?.Trim();
-        existing.PackageAuthorized = updatePackageAuth.Authorized;
-        existing.PackageWarning = updatePackageAuth.Warning;
+        // Só sobrescreve quando a checagem realmente executou. Uma falha
+        // transitória da checagem retornava (null,null) e APAGAVA a evidência de
+        // autorização já persistida (revisão 2026-10-31, A06).
+        if (updatePackageAuth.Authorized.HasValue)
+        {
+            existing.PackageAuthorized = updatePackageAuth.Authorized;
+            existing.PackageWarning = updatePackageAuth.Warning;
+        }
         existing.ScriptId = request.ScriptId;
         existing.CommandPayload = request.CommandPayload;
         existing.ScopeType = request.ScopeType;
@@ -377,6 +383,18 @@ public class AutomationTaskService : IAutomationTaskService
         var existing = await _taskRepository.GetByIdIncludingDeletedAsync(id, includeInactive: true);
         if (existing is null || existing.DeletedAt is null)
             return null;
+
+        // A chave da tarefa excluída pode ter sido reutilizada (unicidade por escopo
+        // considera só tarefas ativas). Reativar sem checar estouraria 23505 no
+        // índice parcial da M254 → 500.
+        if (!string.IsNullOrWhiteSpace(existing.Key))
+        {
+            var conflict = await _taskRepository.ExistsKeyAsync(
+                existing.Key, existing.ClientId, existing.SiteId, existing.AgentId, existing.Id);
+            if (conflict)
+                throw new InvalidOperationException(
+                    "Já existe uma tarefa ativa com esta chave neste escopo; altere a chave da tarefa ativa ou a da tarefa excluída antes de reativar.");
+        }
 
         var oldSnapshot = BuildAuditSnapshot(existing);
         var restored = await _taskRepository.RestoreAsync(id);
@@ -903,10 +921,16 @@ public class AutomationTaskService : IAutomationTaskService
 
         if (!inCatalog)
         {
+            // A07: a mensagem citava "Winget" para qualquer tipo de instalação.
+            var catalogName = installationType == AppInstallationType.Winget
+                ? "Winget"
+                : installationType.ToString();
+            var example = installationType == AppInstallationType.Winget
+                ? " Por exemplo: 'mozilla.thunderbird.br' não é válido; o id correto é 'Mozilla.Thunderbird.pt-BR'."
+                : string.Empty;
             return (false,
-                $"O PackageId '{trimmed}' não existe no catálogo Winget — a instalação falhará no agent. " +
-                "Verifique o id (case-insensitive), por exemplo: 'mozilla.thunderbird.br' não é válido; " +
-                "o id correto é 'Mozilla.Thunderbird.pt-BR'.");
+                $"O PackageId '{trimmed}' não existe no catálogo {catalogName} — a instalação falhará no agent. " +
+                $"Verifique o id (a comparação ignora maiúsculas/minúsculas).{example}");
         }
 
         if (!approved)
@@ -1013,13 +1037,18 @@ public class AutomationTaskService : IAutomationTaskService
         return normalized.Length > 100 ? normalized[..100] : normalized;
     }
 
-    /// <summary>Chave padronizada precisa ser única entre as tarefas.</summary>
+    /// <summary>Chave padronizada precisa ser única entre as tarefas ATIVAS do MESMO escopo.</summary>
     private async Task ValidateTaskKeyAsync(AutomationTaskDefinition task)
     {
         if (string.IsNullOrWhiteSpace(task.Key))
             return;
 
-        var duplicated = await _taskRepository.ExistsKeyAsync(task.Key, task.Id == Guid.Empty ? null : task.Id);
+        var duplicated = await _taskRepository.ExistsKeyAsync(
+            task.Key,
+            task.ClientId,
+            task.SiteId,
+            task.AgentId,
+            task.Id == Guid.Empty ? null : task.Id);
         if (duplicated)
             throw new InvalidOperationException("Já existe uma tarefa com esta chave.");
     }
@@ -1295,7 +1324,11 @@ public class AutomationTaskService : IAutomationTaskService
                     {
                         dto.ScopeName = agent.DisplayName ?? agent.Hostname;
                         dto.AgentName = agent.DisplayName ?? agent.Hostname;
-                        if (sites.TryGetValue(agent.SiteId, out var agentSite))
+                        // A09: o dicionário "sites" só é populado por tarefas de escopo Site,
+                        // então escopo Agent ficava sem SiteName/ScopeSiteId/ScopeClientId.
+                        if (!sites.TryGetValue(agent.SiteId, out var agentSite))
+                            agentSite = await _siteRepository.GetByIdAsync(agent.SiteId);
+                        if (agentSite is not null)
                         {
                             dto.ScopeSiteId = agentSite.Id;
                             dto.ScopeClientId = agentSite.ClientId;

@@ -19,8 +19,9 @@ namespace Discovery.Tests;
 
 /// <summary>
 /// Descomissionamento remoto pós-commit: o comando que desinstala o agente do
-/// PC só é enviado quando ele está online, e a falha do envio nunca derruba o
-/// fluxo (best-effort — a lixeira já está commitada quando isto roda).
+/// PC é SEMPRE despachado (persistido como Pending para reentrega quando o
+/// agente voltar a ser visto online), e a falha do envio nunca derruba o fluxo
+/// (best-effort — a lixeira já está commitada quando isto roda).
 /// </summary>
 [TestFixture]
 public class AgentDeleteDecommissionTests
@@ -68,7 +69,7 @@ public class AgentDeleteDecommissionTests
     }
 
     [Test]
-    public async Task RequestDecommission_OfflineAgent_DoesNotDispatch()
+    public async Task RequestDecommission_OfflineAgent_StillDispatchesForRedelivery()
     {
         await using var db = NewDb();
         var agentId = await SeedAgentAsync(db, AgentStatus.Offline, DateTime.UtcNow);
@@ -77,8 +78,14 @@ public class AgentDeleteDecommissionTests
         var result = await NewHandler(db, dispatcher)
             .Handle(new RequestAgentDecommissionCommand(agentId), CancellationToken.None);
 
+        // Sem gate de status: o comando é SEMPRE despachado (persistido como
+        // Pending) e o PendingCommandRedeliveryService reentrega quando o agente
+        // voltar a ser visto online. Um gate antecipado perdia o comando para
+        // sempre e a máquina ficava instalada com a lixeira já commitada.
         Assert.That(result.IsSuccess, Is.True);
-        Assert.That(dispatcher.Dispatched, Is.Empty);
+        Assert.That(dispatcher.Dispatched, Has.Count.EqualTo(1));
+        Assert.That(dispatcher.Dispatched[0].CommandType, Is.EqualTo(CommandType.DecommissionAgent));
+        Assert.That(dispatcher.Dispatched[0].AgentId, Is.EqualTo(agentId));
     }
 
     [Test]

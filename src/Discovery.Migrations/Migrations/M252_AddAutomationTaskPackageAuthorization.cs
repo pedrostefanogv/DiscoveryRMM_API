@@ -10,7 +10,10 @@ namespace Discovery.Migrations.Migrations;
 /// Winget). A policy de automação SOBREPÕE a loja: a tarefa é aceita mesmo sem
 /// autorização; as colunas registram o aviso para a UI.
 /// </summary>
-[Migration(20261029_252)]
+// Renumerada em 2026-10-31: a versão original (20261029_252) era MENOR que a
+// última aplicada (20261230_251) — ordem não reproduzível entre ambientes e
+// risco de a migração nunca rodar (ver review-code.md, A05). Up() é idempotente.
+[Migration(20261231_252)]
 public class M252_AddAutomationTaskPackageAuthorization : Migration
 {
     public override void Up()

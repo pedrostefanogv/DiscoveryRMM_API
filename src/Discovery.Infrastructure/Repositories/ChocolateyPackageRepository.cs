@@ -14,6 +14,11 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
 
     public async Task<ChocolateyPackage?> GetByPackageIdAsync(string packageId)
     {
+        // Tabela legada dropada (M055): um 42P01 dentro da transação do comando
+        // aborta a transação inteira (25P02) — ver LegacyTableGuard.
+        if (!await LegacyTableGuard.ExistsAsync(_db, "chocolatey_packages"))
+            return null;
+
         var normalized = NormalizeId(packageId);
         return await _db.ChocolateyPackages
             .AsNoTracking()
@@ -26,6 +31,9 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
         int limit,
         CancellationToken cancellationToken = default)
     {
+        if (!await LegacyTableGuard.ExistsAsync(_db, "chocolatey_packages", cancellationToken))
+            return ([], 0);
+
         var query = ApplyFilters(_db.ChocolateyPackages.AsNoTracking(), search);
 
         if (CursorPaginationHelper.TryDecodeLongCountCursor(cursor, out var cursorCount, out var cursorId))
@@ -67,6 +75,11 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
         CancellationToken cancellationToken = default)
     {
         if (packages.Count == 0)
+            return;
+
+        // Tabela legada dropada (M055): no-op para não abortar a transação do
+        // chamador com 42P01.
+        if (!await LegacyTableGuard.ExistsAsync(_db, "chocolatey_packages"))
             return;
 
         var now = DateTime.UtcNow;
@@ -126,6 +139,9 @@ public class ChocolateyPackageRepository : IChocolateyPackageRepository
 
     public async Task<int> CountAsync(CancellationToken cancellationToken = default)
     {
+        if (!await LegacyTableGuard.ExistsAsync(_db, "chocolatey_packages", cancellationToken))
+            return 0;
+
         return await _db.ChocolateyPackages.CountAsync(cancellationToken);
     }
 

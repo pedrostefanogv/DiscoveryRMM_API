@@ -92,7 +92,12 @@ public partial class DiscoveryDbContext
             // definido cai no fallback 50; a migração M222 faz o backfill por tipo.
             entity.Property(t => t.ExecutionOrder).HasColumnName("execution_order").HasDefaultValue(50);
             entity.Property(t => t.Key).HasColumnName("key").HasMaxLength(100);
-            entity.HasIndex(t => t.Key).IsUnique().HasDatabaseName("ux_automation_task_definitions_key").HasFilter("key IS NOT NULL");
+            // Unicidade é por ESCOPO e só entre tarefas ativas — índice parcial
+            // expressional criado pela M254 (não representável no modelo EF):
+            //   UNIQUE (coalesce(client_id, site_id, agent_id), key)
+            //   WHERE key IS NOT NULL AND deleted_at IS NULL
+            // O EF não cria mais o antigo ux_automation_task_definitions_key.
+            entity.HasIndex(t => t.Key).HasDatabaseName("ix_automation_task_definitions_key");
             entity.Property(t => t.ToastTiming).HasColumnName("toast_timing").HasConversion<int>();
             // Autorização do pacote avaliada na criação/edição (policy sobrepõe a loja).
             entity.Property(t => t.PackageAuthorized).HasColumnName("package_authorized");

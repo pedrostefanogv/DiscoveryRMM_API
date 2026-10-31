@@ -45,8 +45,12 @@ public interface IAutomationTaskRepository
         IReadOnlyList<AutomationTaskActionType>? actionTypes,
         IReadOnlyList<string>? triggers,
         bool? isActive);
-    /// <summary>Existe outra tarefa com esta chave (unicidade da chave padronizada)?</summary>
-    Task<bool> ExistsKeyAsync(string key, Guid? excludeId);
+    /// <summary>
+    /// Existe outra tarefa ATIVA (não soft-deleted) com esta chave **no mesmo escopo**?
+    /// A unicidade é por escopo (cliente/site/agent; global usa o escopo nulo), não
+    /// global — a mesma policy pode existir em clientes/sites diferentes.
+    /// </summary>
+    Task<bool> ExistsKeyAsync(string key, Guid? clientId, Guid? siteId, Guid? agentId, Guid? excludeId = null);
 
     Task UpdateAsync(AutomationTaskDefinition task);
     Task DeleteAsync(Guid id);

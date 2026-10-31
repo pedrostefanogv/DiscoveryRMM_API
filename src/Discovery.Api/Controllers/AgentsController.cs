@@ -183,6 +183,24 @@ public class AgentsController : ControllerBase
             });
     }
 
+    /// <summary>
+    /// Reenvia o comando de descomissionamento remoto (o agente se desinstala
+    /// da máquina). Útil quando o primeiro envio não chegou (agente offline no
+    /// momento do delete, NATS indisponível) — o comando é persistido como
+    /// Pending e reentregue quando o agente voltar a ser visto online.
+    /// </summary>
+    [HttpPost("{id:guid}/decommission")]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
+    public async Task<IActionResult> RequestDecommission(Guid id, CancellationToken ct)
+    {
+        var result = await _mediator.Send(new RequestAgentDecommissionCommand(id, "resend"), ct);
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
+    }
+
     /// <summary>Tira o agente da lixeira (volta a aparecer na listagem).</summary>
     [HttpPost("{id:guid}/restore")]
     [RequirePermission(ResourceType.Agents, ActionType.Edit)]

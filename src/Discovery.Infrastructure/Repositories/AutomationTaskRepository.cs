@@ -245,12 +245,23 @@ public class AutomationTaskRepository : IAutomationTaskRepository
     }
 
     /// <inheritdoc />
-    public Task<bool> ExistsKeyAsync(string key, Guid? excludeId)
+    public Task<bool> ExistsKeyAsync(string key, Guid? clientId, Guid? siteId, Guid? agentId, Guid? excludeId = null)
     {
         var normalized = key.Trim().ToLowerInvariant();
+
+        // Unicidade por escopo + só tarefas ativas: tarefa excluída não bloqueia o
+        // reuso da chave, e a mesma policy pode ser criada em outro cliente/site.
+        // O índice ux_automation_task_definitions_scope_key (M254) garante o mesmo
+        // critério no banco (parcial: key IS NOT NULL AND deleted_at IS NULL).
         return _db.AutomationTaskDefinitions
             .AsNoTracking()
-            .AnyAsync(task => task.Key == normalized && (excludeId == null || task.Id != excludeId.Value));
+            .AnyAsync(task =>
+                task.Key == normalized
+                && task.DeletedAt == null
+                && task.ClientId == clientId
+                && task.SiteId == siteId
+                && task.AgentId == agentId
+                && (excludeId == null || task.Id != excludeId.Value));
     }
 
     public async Task UpdateAsync(AutomationTaskDefinition task)

@@ -14,7 +14,9 @@ namespace Discovery.Migrations.Migrations;
 /// Compatibilidade: coluna NULL-able; agente antigo não envia e fica null.
 /// Idempotente no padrão M238/M239/M244.
 /// </summary>
-[Migration(20261030_253)]
+// Renumerada em 2026-10-31 (mesmo motivo da M252): 20261030_253 < 20261230_251.
+// Up() é idempotente (ADD COLUMN ... NULL só se ausente).
+[Migration(20261231_253)]
 public class M253_AddMinDownloadSizeToAgentWindowsUpdates : Migration
 {
     private const string Table = "agent_windows_updates";

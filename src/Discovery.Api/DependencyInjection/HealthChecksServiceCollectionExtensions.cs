@@ -14,6 +14,8 @@ public static class HealthChecksServiceCollectionExtensions
     {
         var healthChecksBuilder = services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgresql", tags: ["db", "critical"])
+            // Diverge entre modelo EF e schema real vira Unhealthy (não derruba a API).
+            .AddCheck<SchemaDriftHealthCheck>("database-schema", tags: ["db", "schema"])
             .AddCheck<RedisHealthCheck>("redis", tags: ["cache"]);
 
         // NATS health check

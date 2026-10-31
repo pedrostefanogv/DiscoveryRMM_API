@@ -432,6 +432,34 @@ else
     app.Logger.LogInformation("Migrations:RunOnStartup is false; skipping automatic migrations.");
 }
 
+// Guard de schema: divergência entre modelo EF e banco (caso winget_packages,
+// 2026-10-31) vira CRITICAL no boot + Unhealthy no /health, sem derrubar a API.
+// Roda independentemente de Migrations:RunOnStartup (schema pode vir por DDL/deploy).
+try
+{
+    await using var schemaScope = app.Services.CreateAsyncScope();
+    var schemaDb = schemaScope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
+    var missingTables = await SchemaDriftInspector.FindMissingTablesAsync(schemaDb);
+    if (missingTables.Count > 0)
+    {
+        app.Logger.LogCritical(
+            "Schema divergente: {Count} tabela(s) mapeada(s) no EF ausente(s) no banco: {Tables}. " +
+            "Endpoints que tocam essas tabelas retornarão HTTP 500 até a migração/DDL ser aplicada.",
+            missingTables.Count,
+            string.Join(", ", missingTables));
+    }
+    else
+    {
+        app.Logger.LogInformation(
+            "Schema check: {Count} tabela(s) mapeadas no EF presentes no banco.",
+            SchemaDriftInspector.ExpectedTables(schemaDb).Count);
+    }
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "Falha ao verificar divergência de schema no startup.");
+}
+
 // Seed default workflow states
 await DatabaseSeeder.SeedAsync(app.Services);
 

@@ -85,15 +85,44 @@ public class CommandRedeliveryOptionsTests
 public class CommandRedeliveryAgentSelectionTests
 {
     [Test]
-    public void ExcludesTrashedAgents()
+    public void IncludesTrashedAgentsForDecommissionRedelivery()
     {
         var online = new Agent { Id = Guid.NewGuid(), Hostname = "PC-1", Status = AgentStatus.Online };
         var trashed = new Agent { Id = Guid.NewGuid(), Hostname = "PC-2", Status = AgentStatus.Online, DeletedAt = DateTime.UtcNow };
 
+        // O agente na lixeira continua elegível: é exatamente ele que precisa
+        // receber o DecommissionAgent pendente quando a conexão voltar. O
+        // filtro por tipo de comando acontece em IsRedeliveryAllowedForAgent.
         var ids = Discovery.Api.Services.PendingCommandRedeliveryService.SelectRedeliveryAgentIds([online, trashed]);
 
-        Assert.That(ids, Is.EqualTo(new[] { online.Id }),
-            "agente na lixeira não pode voltar a executar comandos");
+        Assert.That(ids, Is.EqualTo(new[] { online.Id, trashed.Id }));
+    }
+
+    [Test]
+    public void TrashedAgentOnlyAcceptsDecommissionCommand()
+    {
+        var trashed = new Agent { Id = Guid.NewGuid(), Hostname = "PC-2", Status = AgentStatus.Online, DeletedAt = DateTime.UtcNow };
+
+        var decommission = new AgentCommand { Id = Guid.NewGuid(), AgentId = trashed.Id, CommandType = CommandType.DecommissionAgent };
+        var restart = new AgentCommand { Id = Guid.NewGuid(), AgentId = trashed.Id, CommandType = CommandType.Restart };
+
+        Assert.That(
+            Discovery.Api.Services.PendingCommandRedeliveryService.IsRedeliveryAllowedForAgent(trashed, decommission),
+            Is.True, "agente na lixeira DEVE receber o comando que o desinstala");
+        Assert.That(
+            Discovery.Api.Services.PendingCommandRedeliveryService.IsRedeliveryAllowedForAgent(trashed, restart),
+            Is.False, "agente na lixeira não pode voltar a executar comandos comuns");
+    }
+
+    [Test]
+    public void NonTrashedAgentAcceptsAnyCommand()
+    {
+        var online = new Agent { Id = Guid.NewGuid(), Hostname = "PC-1", Status = AgentStatus.Online };
+        var restart = new AgentCommand { Id = Guid.NewGuid(), AgentId = online.Id, CommandType = CommandType.Restart };
+
+        Assert.That(
+            Discovery.Api.Services.PendingCommandRedeliveryService.IsRedeliveryAllowedForAgent(online, restart),
+            Is.True);
     }
 
     [Test]
