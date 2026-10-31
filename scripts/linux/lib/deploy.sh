@@ -1021,18 +1021,31 @@ restart_api_with_rollback() {
   # Hardening (incidente 2026-10-31 16:28): a deteccao anterior dependia de
   # current_release resolver; se vier vazio, o rollback inteiro era pulado
   # ("Sem release anterior") mesmo com dezenas de releases no diretorio.
-  # Agora: lista releases por mtime (mesma ordem do cleanup_old_releases) e
-  # exclui o alvo de "current"; se "current" nao resolver, exclui a release
-  # mais recente (acabou de ser publicada por publish_api).
+  #
+  # Correcao (update de 2026-10-31 19:57): a versao anterior comparava com
+  # `grep -vxF` o caminho do symlink `current` (sem barra final, como sai de
+  # `readlink -f`) contra a saida de `ls -1dt dir/*/` (COM barra final). A
+  # comparacao nunca casava, entao "release anterior" virava a propria release
+  # recem-publicada — o rollback re-apontava `current` para o que acabou de
+  # falhar. Agora cada candidato e normalizado com `readlink -f` antes de
+  # comparar; se `current` nao resolver, a mais recente (publicada agora) e
+  # ignorada.
   local previous_release=""
-  local releases_root exclude_path
+  local releases_root
   releases_root="$(dirname "${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}")/releases"
   if [[ -d "$releases_root" ]]; then
-    exclude_path="$current_release"
-    if [[ -z "$exclude_path" ]]; then
-      exclude_path="$(ls -1dt "$releases_root"/*/ 2>/dev/null | head -n 1)"
-    fi
-    previous_release="$(ls -1dt "$releases_root"/*/ 2>/dev/null | grep -vxF "$exclude_path" | head -n 1 | xargs -r readlink -f 2>/dev/null || true)"
+    local candidate resolved skipped_newest=0
+    while IFS= read -r candidate; do
+      resolved="$(readlink -f "$candidate" 2>/dev/null || true)"
+      [[ -z "$resolved" ]] && continue
+      if [[ -z "$current_release" && "$skipped_newest" -eq 0 ]]; then
+        skipped_newest=1
+        continue
+      fi
+      [[ -n "$current_release" && "$resolved" == "$current_release" ]] && continue
+      previous_release="$resolved"
+      break
+    done < <(ls -1dt "$releases_root"/*/ 2>/dev/null || true)
   fi
 
   if ! sudo systemctl restart discovery-api; then
