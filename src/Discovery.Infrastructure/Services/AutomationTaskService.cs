@@ -940,9 +940,15 @@ public class AutomationTaskService : IAutomationTaskService
             var example = installationType == AppInstallationType.Winget
                 ? " Por exemplo: 'mozilla.thunderbird.br' não é válido; o id correto é 'Mozilla.Thunderbird.pt-BR'."
                 : string.Empty;
+            // Winget/Chocolatey são normalizados em lowercase; pacote Custom é
+            // cadastrado com o PackageId exato digitado pelo operador (o lookup é
+            // case-sensitive) — a mensagem precisa refletir isso.
+            var caseHint = installationType == AppInstallationType.Custom
+                ? "A comparação diferencia maiúsculas/minúsculas para pacotes Custom."
+                : "A comparação ignora maiúsculas/minúsculas.";
             return (false,
                 $"O PackageId '{trimmed}' não existe no catálogo {catalogName} — a instalação falhará no agent. " +
-                $"Verifique o id (a comparação ignora maiúsculas/minúsculas).{example}");
+                $"Verifique o id. {caseHint}{example}");
         }
 
         if (!approved)
@@ -1404,27 +1410,40 @@ public class AutomationTaskService : IAutomationTaskService
             }
         }
 
-        var agents = agentIds.Count == 0
-            ? new Dictionary<Guid, Agent>()
-            : (await Task.WhenAll(agentIds.Select(async id => (id, agent: await _agentRepository.GetByIdAsync(id)))))
-                .Where(x => x.agent is not null).ToDictionary(x => x.id, x => x.agent!);
+        // IMPORTANTE: nada de Task.WhenAll aqui. O DbContext é scoped e NÃO é
+        // thread-safe — consultas em paralelo no mesmo contexto estouram
+        // "A second operation was started on this context" de forma intermitente
+        // (500 na listagem). Usa os lookups em lote disponíveis e, o que não tem
+        // lote (clientes), consulta em SEQUÊNCIA.
+        var agents = new Dictionary<Guid, Agent>();
+        if (agentIds.Count > 0)
+        {
+            foreach (var agent in await _agentRepository.GetByIdsAsync(agentIds.ToList()))
+                agents[agent.Id] = agent;
+        }
 
         // Escopo Agent também precisa do site do agent (e do cliente do site).
         foreach (var agent in agents.Values)
             siteIds.Add(agent.SiteId);
 
-        var sites = siteIds.Count == 0
-            ? new Dictionary<Guid, Site>()
-            : (await Task.WhenAll(siteIds.Select(async id => (id, site: await _siteRepository.GetByIdAsync(id)))))
-                .Where(x => x.site is not null).ToDictionary(x => x.id, x => x.site!);
+        var sites = new Dictionary<Guid, Site>();
+        if (siteIds.Count > 0)
+        {
+            foreach (var site in await _siteRepository.GetByIdsAsync(siteIds))
+                sites[site.Id] = site;
+        }
 
         foreach (var site in sites.Values)
             clientIds.Add(site.ClientId);
 
-        var clients = clientIds.Count == 0
-            ? new Dictionary<Guid, string>()
-            : (await Task.WhenAll(clientIds.Select(async id => (id, client: await _clientRepository.GetByIdAsync(id)))))
-                .Where(x => x.client is not null).ToDictionary(x => x.id, x => x.client!.Name);
+        // IClientRepository não tem lookup em lote (só GetByIdAsync).
+        var clients = new Dictionary<Guid, string>();
+        foreach (var clientId in clientIds)
+        {
+            var client = await _clientRepository.GetByIdAsync(clientId);
+            if (client is not null)
+                clients[clientId] = client.Name;
+        }
 
         foreach (var dto in dtos)
         {
