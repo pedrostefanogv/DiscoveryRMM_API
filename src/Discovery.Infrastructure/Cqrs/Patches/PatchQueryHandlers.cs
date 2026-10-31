@@ -11,6 +11,33 @@ namespace Discovery.Infrastructure.Cqrs.Patches;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/// <summary>
+/// Filtro de ORIGEM dos updates do agente: "windows" = so patches do SO
+/// (esconde choco/winget/msi), "third-party" = so apps de terceiros, null/"" =
+/// tudo. Fonte unica para a lista paginada e os contadores do snapshot.
+/// </summary>
+internal static class PatchSourceFilter
+{
+    private static readonly string[] ThirdPartySources = ["choco", "winget", "msi"];
+
+    public static bool IsThirdParty(string? source) =>
+        source is not null &&
+        ThirdPartySources.Contains(source.Trim(), StringComparer.OrdinalIgnoreCase);
+
+    public static IReadOnlyList<AgentWindowsUpdate> Apply(
+        IReadOnlyList<AgentWindowsUpdate> updates,
+        string? source)
+    {
+        var normalized = source?.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "windows" => updates.Where(update => !IsThirdParty(update.Source)).ToList(),
+            "third-party" => updates.Where(update => IsThirdParty(update.Source)).ToList(),
+            _ => updates
+        };
+    }
+}
+
 internal static class PatchScopeResolver
 {
     public static (Guid? ClientId, Guid? SiteId) Resolve(PatchScope scope, Guid? scopeId) => scope switch
@@ -75,6 +102,11 @@ public sealed class GetAgentWindowsUpdatesSnapshotQueryHandler(IPatchRepository 
     {
         var snapshot = await repo.GetSnapshotAsync(query.AgentId, ct);
         var pending = await repo.GetPendingForAgentAsync(query.AgentId, ct);
+
+        // Contadores acompanham o filtro de origem da lista: com "Só Windows
+        // Update" a aba nao pode anunciar 12 pendentes enquanto a tabela mostra
+        // 1 (os apps de terceiros sao contados apenas quando visiveis).
+        pending = PatchSourceFilter.Apply(pending, query.Source);
 
         var denied = pending.Count(update => update.ApprovalState == PatchApprovalState.Denied);
         var approved = pending.Count(update =>

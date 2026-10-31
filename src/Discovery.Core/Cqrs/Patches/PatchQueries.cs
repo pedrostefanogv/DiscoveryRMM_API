@@ -16,7 +16,7 @@ public sealed record GetAgentWindowsUpdatesPageQuery(
     string? Source = null
 ) : IQuery<Result<AgentWindowsUpdatePageDto>>;
 
-public sealed record GetAgentWindowsUpdatesSnapshotQuery(Guid AgentId)
+public sealed record GetAgentWindowsUpdatesSnapshotQuery(Guid AgentId, string? Source = null)
     : IQuery<Result<AgentWindowsUpdateSnapshotDto>>;
 
 // ── Frota ─────────────────────────────────────────────────────────────────

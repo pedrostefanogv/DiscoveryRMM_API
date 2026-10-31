@@ -84,7 +84,8 @@ public class TicketChatInviteResponseTests
 
     private static async Task<(DiscoveryDbContext Db, Agent Agent)> SeedAsync(
         TicketChatSessionStatus status,
-        DateTime? inviteExpiresAt = null)
+        DateTime? inviteExpiresAt = null,
+        Guid? startedByUserId = null)
     {
         var db = CreateDbContext();
 
@@ -113,6 +114,7 @@ public class TicketChatInviteResponseTests
             ClientId = ClientId,
             SiteId = SiteId,
             Status = status,
+            StartedByUserId = startedByUserId,
             StartedAt = now,
             InviteExpiresAt = inviteExpiresAt ?? now.AddSeconds(120),
             AcceptedAt = status == TicketChatSessionStatus.Active ? now : null,
@@ -292,9 +294,12 @@ public class TicketChatInviteResponseTests
     }
 
     [Test]
-    public async Task StartAgentSession_StillReusesPendingSession()
+    public async Task StartAgentSession_StillReusesPendingSessionForTheSameSupportUser()
     {
-        var (db, agent) = await SeedAsync(TicketChatSessionStatus.Pending);
+        // A sessão pertence ao atendente (a conversa avulsa é privada de quem a
+        // iniciou); o MESMO usuário reabre e reusa a sessão viva.
+        var userId = Guid.NewGuid();
+        var (db, agent) = await SeedAsync(TicketChatSessionStatus.Pending, startedByUserId: userId);
         using (db)
         {
             var pending = await db.TicketChatSessions.SingleAsync();
@@ -308,9 +313,9 @@ public class TicketChatInviteResponseTests
                     new FallbackNameResolver(),
                     Microsoft.Extensions.Options.Options.Create(new Discovery.Core.Configuration.TicketChatOptions()),
                     NullLogger<StartAgentSupportChatSessionCommandHandler>.Instance)
-                .Handle(new StartAgentSupportChatSessionCommand(agent.Id, null, "Ana"), CancellationToken.None);
+                .Handle(new StartAgentSupportChatSessionCommand(agent.Id, userId, "Ana"), CancellationToken.None);
 
-            Assert.That(result.Value!.Id, Is.EqualTo(pending.Id), "sessão viva continua sendo reaproveitada");
+            Assert.That(result.Value!.Id, Is.EqualTo(pending.Id), "sessão viva do MESMO atendente continua sendo reaproveitada");
             Assert.That(db.TicketChatSessions.Count(), Is.EqualTo(1));
         }
     }

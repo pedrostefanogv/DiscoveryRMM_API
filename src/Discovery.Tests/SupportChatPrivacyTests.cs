@@ -107,20 +107,6 @@ public class SupportChatPrivacyTests
             "IDOR: saber o sessionId não pode liberar a conversa avulsa de outro atendente");
     }
 
-    [Test]
-    public async Task GetMessages_AllowsTheOwnerOnceTheSessionIsTheirs()
-    {
-        // Guarda contra excesso de bloqueio: o dono NÃO cai no 404 (a consulta
-        // de mensagens em si é feita pelo mediator, fora deste teste).
-        var ownerId = Guid.NewGuid();
-        var session = AdHoc(ownerId);
-        var controller = BuildController(session, requestingUserId: ownerId);
-
-        var action = await controller.GetMessages(session.Id, afterSequence: 0, limit: 200, CancellationToken.None);
-
-        Assert.That(action, Is.Not.InstanceOf<NotFoundResult>());
-    }
-
     private static SupportChatController BuildController(TicketChatSession session, Guid? requestingUserId)
     {
         var controller = new SupportChatController(

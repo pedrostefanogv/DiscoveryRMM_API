@@ -63,12 +63,15 @@ public sealed class AgentPatchesController(
     }
 
     [HttpGet("snapshot")]
-    public async Task<IActionResult> GetSnapshot(Guid agentId, CancellationToken ct = default)
+    public async Task<IActionResult> GetSnapshot(
+        Guid agentId,
+        [FromQuery] string? source = null,
+        CancellationToken ct = default)
     {
         var forbidden = await EnsureAgentAccessAsync(agentId, ActionType.View);
         if (forbidden is not null) return forbidden;
 
-        return (await mediator.Send(new GetAgentWindowsUpdatesSnapshotQuery(agentId), ct)).ToActionResult();
+        return (await mediator.Send(new GetAgentWindowsUpdatesSnapshotQuery(agentId, source), ct)).ToActionResult();
     }
 
     [HttpPost("scan")]
