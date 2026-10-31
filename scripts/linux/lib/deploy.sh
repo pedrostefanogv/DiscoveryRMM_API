@@ -1053,8 +1053,13 @@ restart_api_with_rollback() {
     return 1
   fi
 
+  # 6 min (180 x 2s), o mesmo teto do wait_for_discovery_api_ready: um update
+  # que traz migrations novas roda-as no startup antes de abrir o /health e os
+  # 2 min antigos abortavam (com rollback) um deploy que ia ficar saudavel.
+  # Ajustavel por DISCOVERY_API_HEALTH_ATTEMPTS.
+  local health_attempts="${DISCOVERY_API_HEALTH_ATTEMPTS:-180}"
   local attempt
-  for attempt in $(seq 1 60); do
+  for attempt in $(seq 1 "$health_attempts"); do
     if sudo systemctl is-active --quiet discovery-api 2>/dev/null \
        && curl -fsS --max-time 5 http://127.0.0.1:8080/health >/dev/null 2>&1; then
       log "discovery-api saudavel apos o update."
