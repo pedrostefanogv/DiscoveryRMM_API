@@ -194,6 +194,69 @@ public class AppApprovalRuleResolvedDto
     public DateTime UpdatedAt { get; set; }
 }
 
+/// <summary>
+/// Um nível da cadeia de herança de uma regra de aprovação
+/// (Global → Cliente → Site → Agente).
+/// </summary>
+public class AppApprovalRuleSourceDto
+{
+    public Guid RuleId { get; set; }
+    public AppApprovalScopeType ScopeType { get; set; }
+    public Guid? ScopeId { get; set; }
+    public AppApprovalActionType Action { get; set; }
+    public bool? AutoUpdateEnabled { get; set; }
+    public string? Reason { get; set; }
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>true quando esta é a regra que vence a herança (a mais específica da cadeia).</summary>
+    public bool IsEffective { get; set; }
+
+    /// <summary>true quando existe um nível mais específico e esta regra foi substituída.</summary>
+    public bool IsOverridden { get; set; }
+}
+
+/// <summary>
+/// Regra de aprovação resolvida para um escopo, com a cadeia de herança
+/// completa. Uma linha por pacote: a ação vem do nível mais específico e
+/// <see cref="Sources"/> mostra quem definiu o quê em cada nível.
+/// </summary>
+public class AppApprovalResolvedRuleDto
+{
+    public string PackageId { get; set; } = string.Empty;
+    public string? PackageName { get; set; }
+    public AppInstallationType InstallationType { get; set; }
+
+    /// <summary>Ação efetiva (a do nível mais específico que tem regra).</summary>
+    public AppApprovalActionType Action { get; set; }
+
+    /// <summary>
+    /// Auto-atualização efetiva. Herda do nível anterior quando a regra mais
+    /// específica não define o campo (mesma semântica aplicada pelo agent).
+    /// </summary>
+    public bool AutoUpdateEnabled { get; set; }
+
+    public AppApprovalScopeType EffectiveScopeType { get; set; }
+    public Guid? EffectiveScopeId { get; set; }
+
+    /// <summary>true quando a regra efetiva vem de um escopo diferente do consultado.</summary>
+    public bool Inherited { get; set; }
+
+    /// <summary>true quando a cadeia tem mais de um nível (houve sobrescrita de herança).</summary>
+    public bool Overridden { get; set; }
+
+    public List<AppApprovalRuleSourceDto> Sources { get; set; } = [];
+}
+
+public class AppApprovalResolvedPageDto
+{
+    public AppApprovalScopeType ScopeType { get; set; }
+    public Guid? ScopeId { get; set; }
+    public AppInstallationType InstallationType { get; set; }
+
+    public int Count { get; set; }
+    public List<AppApprovalResolvedRuleDto> Items { get; set; } = [];
+}
+
 public class EffectiveApprovedAppDto
 {
     public AppInstallationType InstallationType { get; set; }

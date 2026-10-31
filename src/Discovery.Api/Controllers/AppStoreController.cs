@@ -979,6 +979,25 @@ public class AppStoreController(
         return result.ToActionResult();
     }
 
+    /// <summary>
+    /// List approval rules already resolved for the scope, with the inheritance
+    /// chain (Global → Client → Site → Agent). A tela usa isto para mostrar o que
+    /// o escopo herda e o que ele sobrescreve.
+    /// </summary>
+    [HttpGet("approvals/resolved")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    public async Task<IActionResult> GetResolvedApprovals(
+        [FromQuery] int scopeType = 0,
+        [FromQuery] Guid? scopeId = null,
+        [FromQuery] int installationType = 0)
+    {
+        var result = await mediator.Send(new GetAppStoreResolvedApprovalsQuery(
+            (AppApprovalScopeType)scopeType,
+            scopeId,
+            installationType));
+        return result.ToActionResult();
+    }
+
     /// <summary>Create/update an approval rule.</summary>
     [HttpPost("approvals")]
     [RequirePermission(ResourceType.AppStore, ActionType.Edit)]

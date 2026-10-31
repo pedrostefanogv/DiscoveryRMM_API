@@ -438,7 +438,63 @@ public class AppStoreService : IAppStoreService
         return dtos;
     }
 
-    /// <summary>Preenche PackageName nos DTOs a partir do catálogo.</summary>
+    public async Task<AppApprovalResolvedPageDto> GetResolvedRulesAsync(
+        AppApprovalScopeType scopeType,
+        Guid? scopeId,
+        AppInstallationType installationType,
+        CancellationToken cancellationToken = default)
+    {
+        // O contexto é resolvido uma vez só: para Site/Agente ele traz o
+        // cliente/site donos, que é o que forma a cadeia de herança.
+        var scopeContext = await ResolveScopeContextAsync(scopeType, scopeId);
+        var rules = await LoadRulesForContextAsync(
+            scopeContext.ClientId,
+            scopeContext.SiteId,
+            scopeContext.AgentId,
+            installationType);
+
+        var items = BuildResolvedRules(rules, scopeContext, installationType);
+        await EnrichResolvedRuleNamesAsync(items, installationType, cancellationToken);
+
+        return new AppApprovalResolvedPageDto
+        {
+            ScopeType = scopeType,
+            ScopeId = scopeId,
+            InstallationType = installationType,
+            Count = items.Count,
+            Items = items
+        };
+    }
+
+    /// <summary>Preenche PackageName nas regras resolvidas (uma consulta ao catálogo).</summary>
+    private async Task EnrichResolvedRuleNamesAsync(
+        IReadOnlyList<AppApprovalResolvedRuleDto> items,
+        AppInstallationType installationType,
+        CancellationToken cancellationToken)
+    {
+        if (items.Count == 0)
+            return;
+
+        var packages = await _appPackageRepo.GetByInstallationTypeAndPackageIdsAsync(
+            installationType,
+            items.Select(item => item.PackageId).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            cancellationToken);
+
+        var namesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var package in packages)
+        {
+            if (!string.IsNullOrWhiteSpace(package.Name))
+                namesById[package.PackageId] = package.Name;
+        }
+
+        foreach (var item in items)
+        {
+            if (namesById.TryGetValue(item.PackageId, out var name))
+                item.PackageName = name;
+        }
+    }
+
+    /// <summary>Preenche PackageName nos DTOs (regras de um único escopo).</summary>
     private async Task EnrichRuleDtosAsync(
         IReadOnlyList<AppApprovalRuleResolvedDto> dtos,
         CancellationToken cancellationToken)
@@ -467,6 +523,89 @@ public class AppStoreService : IAppStoreService
                     dto.PackageName = name;
             }
         }
+    }
+
+    /// <summary>
+    /// Monta uma linha por pacote com a cadeia de níveis aplicável ao escopo.
+    /// A ação efetiva é a do nível mais específico; AutoUpdate herda do nível
+    /// anterior quando a regra mais específica não define o campo — a MESMA
+    /// regra aplicada por BuildEffectiveRuleState no payload do agent, para a
+    /// tela não prometer algo diferente do que será instalado.
+    /// </summary>
+    private static List<AppApprovalResolvedRuleDto> BuildResolvedRules(
+        IReadOnlyList<Discovery.Core.Entities.AppApprovalRule> rules,
+        ScopeContext scopeContext,
+        AppInstallationType installationType)
+    {
+        var applicableScopes = GetApplicableScopes(scopeContext.ScopeType);
+        var resolved = new List<AppApprovalResolvedRuleDto>();
+
+        foreach (var group in rules.GroupBy(rule => rule.PackageId, StringComparer.OrdinalIgnoreCase))
+        {
+            var selectedRules = new List<Discovery.Core.Entities.AppApprovalRule>();
+            foreach (var scope in applicableScopes)
+            {
+                // Mesmo desempate do diff/effective: regra mais recente por nível.
+                var selected = group
+                    .Where(rule => rule.ScopeType == scope)
+                    .OrderByDescending(rule => rule.UpdatedAt)
+                    .FirstOrDefault();
+
+                if (selected is not null)
+                    selectedRules.Add(selected);
+            }
+
+            if (selectedRules.Count == 0)
+                continue;
+
+            var effectiveRule = selectedRules[^1];
+
+            var autoUpdateEnabled = false;
+            foreach (var rule in selectedRules)
+            {
+                if (rule.AutoUpdateEnabled.HasValue)
+                    autoUpdateEnabled = rule.AutoUpdateEnabled.Value;
+            }
+
+            resolved.Add(new AppApprovalResolvedRuleDto
+            {
+                PackageId = effectiveRule.PackageId,
+                InstallationType = installationType,
+                Action = effectiveRule.Action,
+                AutoUpdateEnabled = autoUpdateEnabled,
+                EffectiveScopeType = effectiveRule.ScopeType,
+                EffectiveScopeId = GetScopeId(
+                    effectiveRule.ScopeType,
+                    scopeContext.ClientId,
+                    scopeContext.SiteId,
+                    scopeContext.AgentId),
+                // Herdada = a regra que vence não foi criada no escopo consultado.
+                Inherited = effectiveRule.ScopeType != scopeContext.ScopeType,
+                Overridden = selectedRules.Count > 1,
+                Sources = selectedRules
+                    .Select(rule => new AppApprovalRuleSourceDto
+                    {
+                        RuleId = rule.Id,
+                        ScopeType = rule.ScopeType,
+                        ScopeId = GetScopeId(
+                            rule.ScopeType,
+                            scopeContext.ClientId,
+                            scopeContext.SiteId,
+                            scopeContext.AgentId),
+                        Action = rule.Action,
+                        AutoUpdateEnabled = rule.AutoUpdateEnabled,
+                        Reason = rule.Reason,
+                        UpdatedAt = rule.UpdatedAt,
+                        IsEffective = ReferenceEquals(rule, effectiveRule),
+                        IsOverridden = !ReferenceEquals(rule, effectiveRule)
+                    })
+                    .ToList()
+            });
+        }
+
+        return resolved
+            .OrderBy(item => item.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public async Task<bool> DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default)

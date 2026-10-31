@@ -269,6 +269,31 @@ public sealed class DeleteAppApprovalRuleCommandHandler(IAppStoreService svc)
     }
 }
 
+public sealed class GetAppStoreResolvedApprovalsQueryHandler(IAppStoreService svc)
+    : IRequestHandler<GetAppStoreResolvedApprovalsQuery, Result<AppApprovalResolvedPageDto>>
+{
+    public async Task<Result<AppApprovalResolvedPageDto>> Handle(GetAppStoreResolvedApprovalsQuery q, CancellationToken ct)
+    {
+        // Escopo sem id não tem cadeia para resolver: antes isso virava
+        // InvalidOperationException (500) dentro do service. A aba também não
+        // consulta nesse estado, mas o endpoint precisa recusar com 400.
+        if (!Enum.IsDefined(q.ScopeType))
+        {
+            return Result<AppApprovalResolvedPageDto>.Failure(
+                Error.Validation("scopeType", "Escopo de aprovação inválido."));
+        }
+
+        if (q.ScopeType != AppApprovalScopeType.Global && q.ScopeId is null)
+        {
+            return Result<AppApprovalResolvedPageDto>.Failure(
+                Error.Validation("scopeId", "Informe o cliente, site ou agente do escopo consultado."));
+        }
+
+        var page = await svc.GetResolvedRulesAsync(q.ScopeType, q.ScopeId, (AppInstallationType)q.InstallationType, ct);
+        return Result<AppApprovalResolvedPageDto>.Success(page);
+    }
+}
+
 // ── Audit ────────────────────────────────────────────────────────────
 
 public sealed class GetAppStoreApprovalAuditQueryHandler(IAppStoreService svc)

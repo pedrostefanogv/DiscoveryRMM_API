@@ -57,6 +57,17 @@ public interface IAppStoreService
         AppInstallationType installationType,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Regras já resolvidas para o escopo, com a cadeia de herança
+    /// Global → Cliente → Site → Agente. Usada pela aba Aprovações para mostrar
+    /// o que o escopo herda e o que ele sobrescreve.
+    /// </summary>
+    Task<AppApprovalResolvedPageDto> GetResolvedRulesAsync(
+        AppApprovalScopeType scopeType,
+        Guid? scopeId,
+        AppInstallationType installationType,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Remove a regra. Devolve false quando ela não existe (a API responde 404).</summary>
     Task<bool> DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default);
 

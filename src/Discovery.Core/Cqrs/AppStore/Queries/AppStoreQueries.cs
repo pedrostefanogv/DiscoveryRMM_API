@@ -41,6 +41,16 @@ public sealed record GetAppStoreApprovalsQuery(
     int? InstallationType = null
 ) : IQuery<Result<IReadOnlyList<AppApprovalRuleResolvedDto>>>;
 
+/// <summary>
+/// Regras já resolvidas para o escopo, com a cadeia de herança
+/// (Global → Cliente → Site → Agente) e o que cada nível sobrescreveu.
+/// </summary>
+public sealed record GetAppStoreResolvedApprovalsQuery(
+    AppApprovalScopeType ScopeType,
+    Guid? ScopeId,
+    int InstallationType
+) : IQuery<Result<AppApprovalResolvedPageDto>>;
+
 // ── Audit ────────────────────────────────────────────────────────────
 public sealed record GetAppStoreApprovalAuditQuery(
     int? InstallationType = null,
