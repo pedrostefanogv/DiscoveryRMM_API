@@ -596,8 +596,11 @@ public class AppStoreService : IAppStoreService
                         AutoUpdateEnabled = rule.AutoUpdateEnabled,
                         Reason = rule.Reason,
                         UpdatedAt = rule.UpdatedAt,
-                        IsEffective = ReferenceEquals(rule, effectiveRule),
-                        IsOverridden = !ReferenceEquals(rule, effectiveRule)
+                        // Comparação por Id (não por referência): a lista vem de
+                        // consultas separadas e um ToList()/projeção futura
+                        // quebraria a identidade sem aviso.
+                        IsEffective = rule.Id == effectiveRule.Id,
+                        IsOverridden = rule.Id != effectiveRule.Id
                     })
                     .ToList()
             });
