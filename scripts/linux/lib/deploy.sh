@@ -774,6 +774,76 @@ EOF
   else
     log "Servico discovery-api sem alteracoes; pulando restart."
   fi
+
+  write_health_monitor_units
+}
+
+# Monitor periodico do /health (somente log, sem notificacao externa).
+#
+# Motivo: em 2026-10-31 o /health ficou 503 por horas (schema divergente) e
+# ninguem percebeu — o update so falhou quando alguem o executou. Um timer de
+# 2 min deixa o estado no journal sem depender de dashboards.
+write_health_monitor_units() {
+  local check_path="/usr/local/bin/discovery-health-check"
+  local service_file="/etc/systemd/system/discovery-health-check.service"
+  local timer_file="/etc/systemd/system/discovery-health-check.timer"
+
+  log "Criando/verificando monitor de /health (systemd timer)"
+
+  local tmp_check; tmp_check="$(mktemp)"
+  cat > "$tmp_check" <<'EOF'
+#!/usr/bin/env bash
+# Verifica o /health da API e registra o resultado no journal.
+# Sem notificacao externa de proposito: o objetivo e ter historico do estado.
+set -uo pipefail
+
+url="${DISCOVERY_HEALTH_URL:-http://127.0.0.1:8080/health}"
+body="$(curl -fsS --max-time 5 "$url" 2>/dev/null)"
+status=$?
+
+if [[ "$status" -eq 0 ]]; then
+  printf 'health OK: %s\n' "${body:0:600}"
+  exit 0
+fi
+
+printf 'health FALHOU (curl rc=%s, url=%s): %s\n' "$status" "$url" "${body:-sem corpo}" >&2
+exit 1
+EOF
+
+  local tmp_service; tmp_service="$(mktemp)"
+  cat > "$tmp_service" <<'EOF'
+[Unit]
+Description=Discovery API health check (log no journal)
+After=discovery-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/discovery-health-check
+User=root
+EOF
+
+  local tmp_timer; tmp_timer="$(mktemp)"
+  cat > "$tmp_timer" <<'EOF'
+[Unit]
+Description=Discovery API health check a cada 2 minutos
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=discovery-health-check.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  sudo install -m 755 -o root -g root "$tmp_check" "$check_path"
+  sudo install -m 644 -o root -g root "$tmp_service" "$service_file"
+  sudo install -m 644 -o root -g root "$tmp_timer" "$timer_file"
+  rm -f "$tmp_check" "$tmp_service" "$tmp_timer"
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now discovery-health-check.timer >/dev/null 2>&1 || warn "Falha ao habilitar discovery-health-check.timer"
 }
 
 # ── Nginx site proxy ──────────────────────────────────────────────────────
