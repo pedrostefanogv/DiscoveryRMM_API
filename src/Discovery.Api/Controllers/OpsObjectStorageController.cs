@@ -36,7 +36,10 @@ public class OpsObjectStorageController(
     {
         var server = await configurationResolver.GetServerAsync();
         var options = objectStorageOptions.Value;
-        var internalMode = options.IsInternal || server.ObjectStorageInternal;
+        // Espelha ObjectStorageProviderFactory: o flag do banco manda; o env
+        // (ObjectStorage__Mode=internal) so prevalece sem configuracao externa completa.
+        var internalMode = server.ObjectStorageInternal
+            || (options.IsInternal && !HasAnyExternalConfig(server));
 
         var settings = BuildSettings(server, options, internalMode);
         var configured = settings.IsConfigured();
@@ -132,6 +135,13 @@ public class OpsObjectStorageController(
             SslVerify = server.ObjectStorageSslVerify
         };
     }
+
+    /// <summary>Qualquer configuracao externa no banco (endpoint, bucket ou credenciais).</summary>
+    private static bool HasAnyExternalConfig(ServerConfiguration server)
+        => !string.IsNullOrWhiteSpace(server.ObjectStorageEndpoint)
+           || !string.IsNullOrWhiteSpace(server.ObjectStorageBucketName)
+           || !string.IsNullOrWhiteSpace(server.ObjectStorageAccessKey)
+           || !string.IsNullOrWhiteSpace(server.ObjectStorageSecretKey);
 
     /// <summary>Extrai somente o host do endpoint (sem credenciais, path ou query).</summary>
     private static string? HostOf(string? endpoint)

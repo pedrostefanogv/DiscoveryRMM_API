@@ -46,16 +46,28 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     }
 
     /// <summary>
-    /// Configuracao efetiva: no modo interno (RustFS do servidor) os dados vem do
-    /// env do projeto (ObjectStorage__*), nao do banco; nos demais o banco manda.
+    /// Configuracao efetiva: o banco manda. O modo interno (RustFS do servidor)
+    /// usa as chaves/endpoint do env do projeto (ObjectStorage__*). O env
+    /// (ObjectStorage__Mode=internal) atua APENAS como fallback para instalacoes
+    /// 100% automatizadas cujo banco ainda nao tem uma configuracao externa
+    /// completa — assim o console consegue migrar para um provedor externo
+    /// desligando o flag sem tocar no discovery.env.
     /// </summary>
     private ObjectStorageSettings ResolveSettings(ServerConfiguration serverConfig)
     {
         var options = _objectStorageOptions.Value;
-        // Modo interno: ligado pelo console (ObjectStorageInternal) ou pelo env
-        // (ObjectStorage__Mode=internal), para instalacoes 100% automatizadas.
-        if (!options.IsInternal && !serverConfig.ObjectStorageInternal)
+        // Modo interno: ligado pelo console (ObjectStorageInternal). O env
+        // (ObjectStorage__Mode=internal) so prevalece enquanto o banco ainda nao
+        // tem uma configuracao externa completa (endpoint/bucket/credenciais).
+        if (!IsEffectiveInternal(serverConfig, options))
+        {
+            if (options.IsInternal && !serverConfig.ObjectStorageInternal)
+            {
+                _logger.LogInformation(
+                    "Modo interno do env (ObjectStorage__Mode=internal) ignorado: o console configurou um provedor externo no banco.");
+            }
             return ObjectStorageSettingsFromServerConfiguration(serverConfig);
+        }
 
         if (string.IsNullOrWhiteSpace(options.AccessKey) || string.IsNullOrWhiteSpace(options.SecretKey))
         {
@@ -100,7 +112,7 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
     private List<string> InternalModeMissingCredentialsErrors(ServerConfiguration serverConfig)
     {
         var options = _objectStorageOptions.Value;
-        if (!options.IsInternal && !serverConfig.ObjectStorageInternal)
+        if (!IsEffectiveInternal(serverConfig, options))
             return [];
 
         var errors = new List<string>();
@@ -110,6 +122,25 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
             errors.Add("Modo interno (RustFS): ObjectStorage__SecretKey nao definido no discovery.env do servidor (rode a opcao RustFS do instalador ou defina a chave).");
         return errors;
     }
+
+    /// <summary>
+    /// Modo interno EFETIVO: o flag do banco (console) manda; o env
+    /// (ObjectStorage__Mode=internal) so prevalece enquanto o banco NAO TEM
+    /// NENHUMA configuracao externa (instalacao 100% automatizada com banco
+    /// virgem). Basta qualquer campo externo preenchido para o banco mandar —
+    /// assim uma migracao pela metade falha ALTO ("AccessKey e obrigatorio")
+    /// em vez de cair silenciosamente de volta no RustFS interno.
+    /// </summary>
+    private static bool IsEffectiveInternal(ServerConfiguration serverConfig, ObjectStorageOptions options)
+        => serverConfig.ObjectStorageInternal
+           || (options.IsInternal && !HasAnyExternalConfig(serverConfig));
+
+    /// <summary>Qualquer configuracao externa no banco (endpoint, bucket ou credenciais).</summary>
+    private static bool HasAnyExternalConfig(ServerConfiguration serverConfig)
+        => !string.IsNullOrWhiteSpace(serverConfig.ObjectStorageEndpoint)
+           || !string.IsNullOrWhiteSpace(serverConfig.ObjectStorageBucketName)
+           || !string.IsNullOrWhiteSpace(serverConfig.ObjectStorageAccessKey)
+           || !string.IsNullOrWhiteSpace(serverConfig.ObjectStorageSecretKey);
 
     private static string FirstNonEmpty(params string?[] values)
     {
