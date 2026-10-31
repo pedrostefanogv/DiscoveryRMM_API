@@ -66,6 +66,7 @@ public interface IAppStoreService
         AppApprovalScopeType scopeType,
         Guid? scopeId,
         AppInstallationType installationType,
+        string? search = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Remove a regra. Devolve false quando ela não existe (a API responde 404).</summary>

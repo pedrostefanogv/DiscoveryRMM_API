@@ -294,6 +294,8 @@ public class ExceptionHandlingMiddleware
     {
         return exception switch
         {
+            KeyNotFoundException
+                => StatusCodes.Status404NotFound,
             ArgumentException or ArgumentNullException or InvalidOperationException 
                 => StatusCodes.Status400BadRequest,
             UnauthorizedAccessException

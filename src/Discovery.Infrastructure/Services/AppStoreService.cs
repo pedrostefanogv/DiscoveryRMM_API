@@ -348,18 +348,16 @@ public class AppStoreService : IAppStoreService
         if (normalizedReason is not null && normalizedReason.Length > MaxReasonLength)
             throw new InvalidOperationException($"Motivo muito longo: o limite e de {MaxReasonLength} caracteres.");
 
-        if (installationType == AppInstallationType.Winget)
+        // Todos os tipos validam o catalogo — inclusive Custom. Sem isso, digitar
+        // um fragmento no campo de busca do modal criava regra para um pacote que
+        // nao existe (a lista mostrava a regra orfa, sem nome, e o agent nunca
+        // instalava nada).
+        var catalogPackage = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
+        if (catalogPackage is null)
         {
-            var package = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
-            if (package is null)
-                throw new InvalidOperationException($"Package '{normalizedPackageId}' nao encontrado no catalogo Winget. Execute uma sincronizacao primeiro.");
-        }
-
-        if (installationType == AppInstallationType.Chocolatey)
-        {
-            var package = await GetCatalogPackageByIdAsync(installationType, normalizedPackageId, cancellationToken);
-            if (package is null)
-                throw new InvalidOperationException($"Package '{normalizedPackageId}' nao encontrado no catalogo Chocolatey. Execute uma sincronizacao primeiro.");
+            throw new InvalidOperationException(installationType == AppInstallationType.Custom
+                ? $"Pacote custom '{normalizedPackageId}' nao encontrado. Cadastre-o em Instalar > Loja > Pacote custom antes de aprovar."
+                : $"Package '{normalizedPackageId}' nao encontrado no catalogo {installationType}. Execute uma sincronizacao primeiro.");
         }
 
         var existing = await _approvalRepo.GetByUniqueKeyAsync(
@@ -442,6 +440,7 @@ public class AppStoreService : IAppStoreService
         AppApprovalScopeType scopeType,
         Guid? scopeId,
         AppInstallationType installationType,
+        string? search = null,
         CancellationToken cancellationToken = default)
     {
         // O contexto é resolvido uma vez só: para Site/Agente ele traz o
@@ -456,11 +455,31 @@ public class AppStoreService : IAppStoreService
         var items = BuildResolvedRules(rules, scopeContext, installationType);
         await EnrichResolvedRuleNamesAsync(items, installationType, cancellationToken);
 
+        // Busca no servidor: com muitas regras Globais a aba nao deve carregar
+        // tudo para filtrar no cliente.
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        if (normalizedSearch is not null)
+        {
+            items = items
+                .Where(item => ContainsIgnoreCase(item.PackageId, normalizedSearch)
+                    || ContainsIgnoreCase(item.PackageName, normalizedSearch))
+                .ToList();
+        }
+
+        // Informativa: quando a politica efetiva e All/Disabled as regras nao
+        // sao aplicadas e a tela precisa poder avisar isso. Nula quando o
+        // resolver nao foi injetado (testes de unidade do servico).
+        AppStorePolicyType? policy = _configurationResolver is null
+            ? null
+            : await ResolvePolicyForScopeAsync(scopeContext, cancellationToken);
+
         return new AppApprovalResolvedPageDto
         {
             ScopeType = scopeType,
             ScopeId = scopeId,
             InstallationType = installationType,
+            Search = normalizedSearch,
+            Policy = policy,
             Count = items.Count,
             Items = items
         };
@@ -1058,8 +1077,10 @@ public class AppStoreService : IAppStoreService
     private async Task<ScopeContext> ResolveSiteScopeContextAsync(Guid siteId)
     {
         var site = await _siteRepository.GetByIdAsync(siteId);
+        // 404 (KeyNotFoundException) e nao 400: o site do escopo existe como
+        // recurso, ele so nao foi encontrado — o middleware mapeia para 404.
         if (site is null)
-            throw new InvalidOperationException("Site not found.");
+            throw new KeyNotFoundException("Site nao encontrado.");
 
         return new ScopeContext(AppApprovalScopeType.Site, site.ClientId, site.Id, null);
     }
@@ -1068,11 +1089,11 @@ public class AppStoreService : IAppStoreService
     {
         var agent = await _agentRepository.GetByIdAsync(agentId);
         if (agent is null)
-            throw new InvalidOperationException("Agent not found.");
+            throw new KeyNotFoundException("Agente nao encontrado.");
 
         var site = await _siteRepository.GetByIdAsync(agent.SiteId);
         if (site is null)
-            throw new InvalidOperationException("Site not found for this agent.");
+            throw new KeyNotFoundException("Site do agente nao encontrado.");
 
         return new ScopeContext(AppApprovalScopeType.Agent, site.ClientId, site.Id, agent.Id);
     }

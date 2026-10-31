@@ -989,12 +989,14 @@ public class AppStoreController(
     public async Task<IActionResult> GetResolvedApprovals(
         [FromQuery] int scopeType = 0,
         [FromQuery] Guid? scopeId = null,
-        [FromQuery] int installationType = 0)
+        [FromQuery] int installationType = 0,
+        [FromQuery] string? search = null)
     {
         var result = await mediator.Send(new GetAppStoreResolvedApprovalsQuery(
             (AppApprovalScopeType)scopeType,
             scopeId,
-            installationType));
+            installationType,
+            search));
         return result.ToActionResult();
     }
 

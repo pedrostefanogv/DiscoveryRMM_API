@@ -48,7 +48,8 @@ public sealed record GetAppStoreApprovalsQuery(
 public sealed record GetAppStoreResolvedApprovalsQuery(
     AppApprovalScopeType ScopeType,
     Guid? ScopeId,
-    int InstallationType
+    int InstallationType,
+    string? Search = null
 ) : IQuery<Result<AppApprovalResolvedPageDto>>;
 
 // ── Audit ────────────────────────────────────────────────────────────

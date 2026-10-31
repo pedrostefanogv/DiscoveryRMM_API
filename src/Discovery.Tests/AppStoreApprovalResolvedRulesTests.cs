@@ -142,6 +142,42 @@ public class AppStoreApprovalResolvedRulesTests
     }
 
     [Test]
+    public async Task Busca_filtra_por_package_id_no_servidor()
+    {
+        await using var db = ApprovalRuleTestDbContext.New();
+        var approvalRepo = new AppApprovalRuleRepository(db);
+        var clientId = Guid.NewGuid();
+
+        await approvalRepo.CreateAsync(Regra(
+            AppApprovalScopeType.Client, clientId, "mozilla.firefox", AppApprovalActionType.Allow, true));
+        await approvalRepo.CreateAsync(Regra(
+            AppApprovalScopeType.Client, clientId, "google.chrome", AppApprovalActionType.Allow, false));
+
+        var service = new AppStoreService(approvalRepo, null!, null!, null!, null!, new AppPackageRepository(db), null!);
+        var page = await service.GetResolvedRulesAsync(AppApprovalScopeType.Client, clientId, Tipo, search: "firefox");
+
+        Assert.That(page.Search, Is.EqualTo("firefox"));
+        Assert.That(page.Count, Is.EqualTo(1));
+        Assert.That(page.Items[0].PackageId, Is.EqualTo("mozilla.firefox"));
+    }
+
+    [Test]
+    public async Task Upsert_rejeita_pacote_custom_inexistente()
+    {
+        // Antes só Winget/Chocolatey validavam o catálogo: digitar um fragmento
+        // no campo de busca criava regra para um pacote que não existe.
+        var db = ApprovalRuleTestDbContext.New();
+        var service = new AppStoreService(
+            new AppApprovalRuleRepository(db), null!, null!, null!, null!, new AppPackageRepository(db), null!);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpsertRuleAsync(
+            AppApprovalScopeType.Global, null, AppInstallationType.Custom, "pacote_inexistente",
+            AppApprovalActionType.Allow, false, null, "ti.user", null));
+
+        Assert.That(ex!.Message, Does.Contain("nao encontrado"));
+    }
+
+    [Test]
     public async Task Handler_recusa_escopo_sem_id_antes_de_consultar()
     {
         // O service lançava InvalidOperationException (500) quando o escopo

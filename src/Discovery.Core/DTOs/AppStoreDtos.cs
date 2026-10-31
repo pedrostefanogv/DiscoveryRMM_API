@@ -253,6 +253,15 @@ public class AppApprovalResolvedPageDto
     public Guid? ScopeId { get; set; }
     public AppInstallationType InstallationType { get; set; }
 
+    /// <summary>Busca aplicada no servidor (packageId ou nome).</summary>
+    public string? Search { get; set; }
+
+    /// <summary>
+    /// Política efetiva da loja no escopo (Disabled/PreApproved/All). Quando é
+    /// All ou Disabled as regras abaixo NÃO estão sendo aplicadas.
+    /// </summary>
+    public AppStorePolicyType? Policy { get; set; }
+
     public int Count { get; set; }
     public List<AppApprovalResolvedRuleDto> Items { get; set; } = [];
 }

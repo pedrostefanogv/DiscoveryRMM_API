@@ -289,7 +289,7 @@ public sealed class GetAppStoreResolvedApprovalsQueryHandler(IAppStoreService sv
                 Error.Validation("scopeId", "Informe o cliente, site ou agente do escopo consultado."));
         }
 
-        var page = await svc.GetResolvedRulesAsync(q.ScopeType, q.ScopeId, (AppInstallationType)q.InstallationType, ct);
+        var page = await svc.GetResolvedRulesAsync(q.ScopeType, q.ScopeId, (AppInstallationType)q.InstallationType, q.Search, ct);
         return Result<AppApprovalResolvedPageDto>.Success(page);
     }
 }
