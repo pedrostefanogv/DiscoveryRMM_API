@@ -1,5 +1,12 @@
 namespace Discovery.Core.Entities;
 
+/// <summary>
+/// Modelo de TRANSPORTE do feed OData do Chocolatey, consumido por
+/// <c>ChocolateyApiClient</c> e convertido em <see cref="AppPackage"/> pelo
+/// <c>AppCatalogSyncService</c>. NÃO é mapeado no EF: a tabela legada
+/// chocolatey_packages foi removida pela M055 (mapeamento excluído na limpeza
+/// pós-incidente de 2026-10-31).
+/// </summary>
 public class ChocolateyPackage
 {
     public Guid Id { get; set; }

@@ -79,19 +79,6 @@ public static class QuartzServiceCollectionExtensions
                     .WithDescription($"Generate ticket answer embeddings {answerEmbeddingStartupDelaySeconds}s after startup, then every {answerEmbeddingIntervalSeconds}s"));
             }
 
-            // ── Winget Catalog Sync (feed legado): every N days at midnight ───────────
-            var wingetEnabled = configuration.GetValue<bool?>("BackgroundJobs:WingetCatalogSync:Enabled") ?? false;
-            var wingetIntervalDays = Math.Max(1, configuration.GetValue<int?>("BackgroundJobs:WingetCatalogSync:IntervalDays") ?? 5);
-
-            if (wingetEnabled)
-            {
-                var wingetCron = $"0 0 0 */{wingetIntervalDays} * ?";
-                q.ScheduleJob<WingetCatalogSyncJob>(trigger => trigger
-                    .WithIdentity(WingetCatalogSyncJob.Key.Name, WingetCatalogSyncJob.Key.Group)
-                    .WithCronSchedule(wingetCron)
-                    .WithDescription($"Sync Winget package catalog every {wingetIntervalDays} day(s) at midnight"));
-            }
-
             // ── Winget Manifests Sync (shallow clone winget-pkgs, fonte primária): startup + a cada N minutos ──
             var manifestsEnabled = configuration.GetValue<bool?>("AppCatalog:Winget:Enabled") ?? true;
             var manifestsSource = configuration.GetValue<string?>("AppCatalog:Winget:Source") ?? "manifests";

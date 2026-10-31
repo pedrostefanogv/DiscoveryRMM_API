@@ -8,6 +8,13 @@ public class AutomationTaskSummaryDto
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public AutomationTaskActionType ActionType { get; set; }
+    /// <summary>
+    /// Tipo de instalação e PackageId ficam no SUMMARY (não só no Detail) para que a
+    /// listagem possa mostrar de qual pacote é o packageWarning (revisão 2026-10-31, A12).
+    /// </summary>
+    public AppInstallationType? InstallationType { get; set; }
+    /// <summary>PackageId alvo (ações de pacote) — exposto também na listagem.</summary>
+    public string? PackageId { get; set; }
     public AppApprovalScopeType ScopeType { get; set; }
     public Guid? ScopeId { get; set; }
     public string? ScopeName { get; set; }
@@ -54,8 +61,6 @@ public class AutomationTaskSummaryDto
 
 public class AutomationTaskDetailDto : AutomationTaskSummaryDto
 {
-    public AppInstallationType? InstallationType { get; set; }
-    public string? PackageId { get; set; }
     public Guid? ScriptId { get; set; }
     public string? CommandPayload { get; set; }
     public IReadOnlyList<string> IncludeTags { get; set; } = [];

@@ -1,5 +1,12 @@
 namespace Discovery.Core.Entities;
 
+/// <summary>
+/// Modelo de TRANSPORTE do feed de catálogo Winget (packages.json), consumido por
+/// <c>WingetFeedClient</c> e convertido em <see cref="AppPackage"/> pelo
+/// <c>AppCatalogSyncService</c>. NÃO é mapeado no EF: a tabela legada
+/// `winget_packages` foi removida pela M055 (mapeamento excluído na limpeza
+/// pós-incidente de 2026-10-31).
+/// </summary>
 public class WingetPackage
 {
     public Guid Id { get; set; }

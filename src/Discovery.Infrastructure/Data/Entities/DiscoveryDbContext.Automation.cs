@@ -5,7 +5,7 @@ namespace Discovery.Infrastructure.Data;
 
 // ── Automation & App Store: ScriptDefinitions, ScriptAudits, TaskDefinitions, TaskAudits,
 //    ExecutionReports, SyncPingDeliveries, AppApprovalRules, AppApprovalAudits,
-//    AppPackages, ChocolateyPackages, WingetPackages, CustomFields ──
+//    AppPackages, CustomFields ──
 
 public partial class DiscoveryDbContext
 {
@@ -285,55 +285,7 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.LastUpdated).HasColumnName("last_updated").HasColumnType("timestamptz");
             entity.Property(p => p.SyncedAt).HasColumnName("synced_at").HasColumnType("timestamptz");
             entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
-            entity.Property(p => p.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
-        });
 
-        modelBuilder.Entity<ChocolateyPackage>(entity =>
-        {
-            entity.ToTable("chocolatey_packages");
-            entity.HasKey(p => p.Id);
-            entity.HasIndex(p => p.PackageId).IsUnique().HasDatabaseName("ux_chocolatey_packages_package_id");
-
-            entity.Property(p => p.Id).HasColumnName("id").ValueGeneratedNever();
-            entity.Property(p => p.PackageId).HasColumnName("package_id").HasMaxLength(300);
-            entity.Property(p => p.Name).HasColumnName("name").HasMaxLength(500);
-            entity.Property(p => p.Publisher).HasColumnName("publisher").HasMaxLength(500);
-            entity.Property(p => p.Version).HasColumnName("version").HasMaxLength(100);
-            entity.Property(p => p.Description).HasColumnName("description").HasColumnType("text");
-            entity.Property(p => p.Homepage).HasColumnName("homepage").HasMaxLength(2000);
-            entity.Property(p => p.LicenseUrl).HasColumnName("license_url").HasMaxLength(2000);
-            entity.Property(p => p.Tags).HasColumnName("tags").HasMaxLength(2000);
-            entity.Property(p => p.DownloadCount).HasColumnName("download_count");
-            entity.Property(p => p.LastUpdated).HasColumnName("last_updated").HasColumnType("timestamptz");
-            entity.Property(p => p.SyncedAt).HasColumnName("synced_at").HasColumnType("timestamptz");
-            entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
-        });
-
-        modelBuilder.Entity<WingetPackage>(entity =>
-        {
-            entity.ToTable("winget_packages");
-            entity.HasKey(p => p.Id);
-            entity.HasIndex(p => p.PackageId).IsUnique().HasDatabaseName("ux_winget_packages_package_id");
-
-            entity.Property(p => p.Id).HasColumnName("id").ValueGeneratedNever();
-            entity.Property(p => p.PackageId).HasColumnName("package_id").HasMaxLength(300);
-            entity.Property(p => p.Name).HasColumnName("name").HasMaxLength(500);
-            entity.Property(p => p.Publisher).HasColumnName("publisher").HasMaxLength(500);
-            entity.Property(p => p.Version).HasColumnName("version").HasMaxLength(100);
-            entity.Property(p => p.Description).HasColumnName("description").HasColumnType("text");
-            entity.Property(p => p.Homepage).HasColumnName("homepage").HasMaxLength(2000);
-            entity.Property(p => p.License).HasColumnName("license").HasMaxLength(500);
-            entity.Property(p => p.Category).HasColumnName("category").HasMaxLength(250);
-            entity.Property(p => p.Icon).HasColumnName("icon").HasMaxLength(2000);
-            entity.Property(p => p.InstallCommand).HasColumnName("install_command").HasMaxLength(1000);
-            entity.Property(p => p.SilentCommand).HasColumnName("silent_command").HasMaxLength(1000);
-            entity.Property(p => p.SilentWithProgressCommand).HasColumnName("silent_with_progress_command").HasMaxLength(1000);
-            entity.Property(p => p.Tags).HasColumnName("tags").HasColumnType("text");
-            entity.Property(p => p.InstallerUrlsJson).HasColumnName("installer_urls_json").HasColumnType("text");
-            entity.Property(p => p.LastUpdated).HasColumnName("last_updated").HasColumnType("timestamptz");
-            entity.Property(p => p.SourceGeneratedAt).HasColumnName("source_generated_at").HasColumnType("timestamptz");
-            entity.Property(p => p.SyncedAt).HasColumnName("synced_at").HasColumnType("timestamptz");
-            entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
         });
     }
 }

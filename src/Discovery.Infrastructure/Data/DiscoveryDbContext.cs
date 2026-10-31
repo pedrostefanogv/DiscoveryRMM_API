@@ -61,8 +61,6 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AgentUpdateEvent> AgentUpdateEvents => Set<AgentUpdateEvent>();
     public DbSet<AgentUpdateBuild> AgentUpdateBuilds => Set<AgentUpdateBuild>();
     public DbSet<AppPackage> AppPackages => Set<AppPackage>();
-    public DbSet<ChocolateyPackage> ChocolateyPackages => Set<ChocolateyPackage>();
-    public DbSet<WingetPackage> WingetPackages => Set<WingetPackage>();
     public DbSet<AgentLabelRule> AgentLabelRules => Set<AgentLabelRule>();
     public DbSet<AgentLabel> AgentLabels => Set<AgentLabel>();
     public DbSet<AgentLabelRuleMatch> AgentLabelRuleMatches => Set<AgentLabelRuleMatch>();

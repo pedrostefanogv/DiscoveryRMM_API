@@ -6,9 +6,12 @@ namespace Discovery.Api.DependencyInjection;
 
 /// <summary>
 /// Health check de schema: reporta Unhealthy quando alguma tabela mapeada no EF
-/// não existe no banco. Não derruba a API (decisão de 2026-10-31) — apenas deixa
-/// a divergência visível no /health e no log, em vez de aparecer como HTTP 500
-/// em um endpoint específico (incidente winget_packages).
+/// não existe no banco ou existe mas o role da API NÃO tem privilégio de leitura —
+/// as duas causas do incidente de 2026-10-31 (42P01 e 42501 dentro da transação do
+/// comando → 25P02 → 500).
+///
+/// Não derruba a API (decisão de 2026-10-31) — apenas deixa a divergência visível
+/// no /health e no log, em vez de aparecer como HTTP 500 em um endpoint específico.
 /// </summary>
 internal sealed class SchemaDriftHealthCheck : IHealthCheck
 {
@@ -28,18 +31,37 @@ internal sealed class SchemaDriftHealthCheck : IHealthCheck
         try
         {
             var missing = await SchemaDriftInspector.FindMissingTablesAsync(_db, cancellationToken);
-            if (missing.Count == 0)
+            var unreadable = await SchemaDriftInspector.FindUnreadableTablesAsync(_db, cancellationToken);
+
+            if (missing.Count == 0 && unreadable.Count == 0)
                 return HealthCheckResult.Healthy("Schema em sincronia com o modelo EF");
 
-            var detail = string.Join(", ", missing);
-            _logger.LogCritical(
-                "Schema divergente: {Count} tabela(s) mapeada(s) no EF ausente(s) no banco: {Tables}",
-                missing.Count,
-                detail);
+            var data = new Dictionary<string, object>();
+            var problems = new List<string>();
 
-            var data = new Dictionary<string, object> { ["missingTables"] = missing };
+            if (missing.Count > 0)
+            {
+                problems.Add($"{missing.Count} tabela(s) ausente(s): {string.Join(", ", missing)}");
+                data["missingTables"] = missing;
+                _logger.LogCritical(
+                    "Schema divergente: {Count} tabela(s) mapeada(s) no EF ausente(s) no banco: {Tables}",
+                    missing.Count,
+                    string.Join(", ", missing));
+            }
+
+            if (unreadable.Count > 0)
+            {
+                problems.Add($"{unreadable.Count} tabela(s) sem privilégio de leitura para o role da API: {string.Join(", ", unreadable)}");
+                data["unreadableTables"] = unreadable;
+                _logger.LogCritical(
+                    "Schema divergente: {Count} tabela(s) mapeada(s) no EF sem privilégio SELECT para o role atual: {Tables}. " +
+                    "Qualquer consulta a elas aborta a transação do comando (42501 → 25P02 → HTTP 500).",
+                    unreadable.Count,
+                    string.Join(", ", unreadable));
+            }
+
             return HealthCheckResult.Unhealthy(
-                $"Schema divergente: {missing.Count} tabela(s) ausente(s): {detail}", data: data);
+                $"Schema divergente — {string.Join("; ", problems)}", data: data);
         }
         catch (Exception ex)
         {

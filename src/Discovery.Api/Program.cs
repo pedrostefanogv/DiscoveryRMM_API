@@ -440,6 +440,7 @@ try
     await using var schemaScope = app.Services.CreateAsyncScope();
     var schemaDb = schemaScope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
     var missingTables = await SchemaDriftInspector.FindMissingTablesAsync(schemaDb);
+    var unreadableTables = await SchemaDriftInspector.FindUnreadableTablesAsync(schemaDb);
     if (missingTables.Count > 0)
     {
         app.Logger.LogCritical(
@@ -448,10 +449,22 @@ try
             missingTables.Count,
             string.Join(", ", missingTables));
     }
-    else
+
+    // Segunda causa do incidente de 2026-10-31: tabela existe (recriada por
+    // rollback) mas sem GRANT para o role da API → 42501 → 25P02 → 500.
+    if (unreadableTables.Count > 0)
+    {
+        app.Logger.LogCritical(
+            "Schema divergente: {Count} tabela(s) mapeada(s) no EF sem privilégio SELECT para o role da API: {Tables}. " +
+            "Consultas a essas tabelas abortam a transação do comando (42501 → 25P02 → HTTP 500).",
+            unreadableTables.Count,
+            string.Join(", ", unreadableTables));
+    }
+
+    if (missingTables.Count == 0 && unreadableTables.Count == 0)
     {
         app.Logger.LogInformation(
-            "Schema check: {Count} tabela(s) mapeadas no EF presentes no banco.",
+            "Schema check: {Count} tabela(s) mapeadas no EF presentes e legíveis no banco.",
             SchemaDriftInspector.ExpectedTables(schemaDb).Count);
     }
 }
@@ -546,5 +559,29 @@ app.UseApiTokenAuth();
 app.UseUserAuth();
 
 app.MapControllers();
-app.MapHealthChecks("/health").AllowAnonymous();
+
+// /health em JSON: sem ResponseWriter o endpoint devolvia só o texto "Unhealthy",
+// escondendo QUAL check falhou (no incidente de 2026-10-31 foi preciso ler o journal
+// para descobrir que era o schema). Mantém 503 quando houver falha.
+app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json; charset=utf-8";
+        var payload = new
+        {
+            status = report.Status.ToString(),
+            totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
+            checks = report.Entries.Select(entry => new
+            {
+                name = entry.Key,
+                status = entry.Value.Status.ToString(),
+                description = entry.Value.Description,
+                durationMs = Math.Round(entry.Value.Duration.TotalMilliseconds, 1),
+                data = entry.Value.Data
+            })
+        };
+        await context.Response.WriteAsJsonAsync(payload);
+    }
+}).AllowAnonymous();
 app.Run();

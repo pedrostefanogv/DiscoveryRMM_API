@@ -1,6 +1,5 @@
 using System.Reflection;
 using Discovery.Core.DTOs;
-using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Repositories;
@@ -12,26 +11,29 @@ namespace Discovery.Tests;
 /// <summary>
 /// Regra de produto: a policy de automação SOBREPÕE a App Store. A tarefa é
 /// ACEITA mesmo com pacote fora da loja — mas packageAuthorized=false e
-/// packageWarning explícito são persistidos/expostos, inclusive para
-/// PackageId inexistente no catálogo Winget (ex. mozilla.thunderbird.br).
+/// packageWarning explícito são persistidos/expostos, inclusive para PackageId
+/// inexistente no catálogo (ex. mozilla.thunderbird.br).
+///
+/// O catálogo consultado é o novo (app_packages): as tabelas legadas
+/// winget_packages/chocolatey_packages foram removidas pela M055 e o mapeamento
+/// EF delas foi excluído na limpeza pós-incidente de 2026-10-31.
 /// </summary>
 [TestFixture]
 public class AutomationTaskPackageAuthorizationTests
 {
     private static (bool? Authorized, string? Warning) Resolve(
         FakeAppStore store,
-        FakeWingetCatalog winget,
         AutomationTaskActionType actionType,
         AppInstallationType? installationType,
         string? packageId)
         => AutomationTaskService.ResolvePackageAuthorizationAsync(
-            store, winget, actionType, installationType, packageId,
+            store, actionType, installationType, packageId,
             clientId: null, siteId: null, agentId: Guid.NewGuid()).GetAwaiter().GetResult();
 
     [Test]
     public void NonPackageAction_ReturnsNullAuthorization()
     {
-        var (authorized, warning) = Resolve(new FakeAppStore(), new FakeWingetCatalog(["Google.Chrome"]),
+        var (authorized, warning) = Resolve(new FakeAppStore(),
             AutomationTaskActionType.RunScript, null, null);
         Assert.That(authorized, Is.Null);
         Assert.That(warning, Is.Null);
@@ -40,8 +42,9 @@ public class AutomationTaskPackageAuthorizationTests
     [Test]
     public void PackageNotInStore_IsAcceptedWithWarning_PolicyOverridesStore()
     {
-        // bleachbit.bleachbit existe no catálogo Winget, mas não está na App Store efetiva.
-        var (authorized, warning) = Resolve(new FakeAppStore(approved: ["google.chrome"]), new FakeWingetCatalog(["BleachBit.BleachBit", "Google.Chrome"]),
+        // bleachbit.bleachbit existe no catálogo, mas não está na App Store efetiva.
+        var store = new FakeAppStore(approved: ["google.chrome"], catalog: ["bleachbit.bleachbit", "google.chrome"]);
+        var (authorized, warning) = Resolve(store,
             AutomationTaskActionType.UpdateOrInstallPackage, AppInstallationType.Winget, "bleachbit.bleachbit");
         Assert.That(authorized, Is.False);
         Assert.That(warning, Does.Contain("App Store"));
@@ -49,10 +52,11 @@ public class AutomationTaskPackageAuthorizationTests
     }
 
     [Test]
-    public void PackageIdNotInWingetCatalog_WarnsExplicitlyWithSuggestion()
+    public void PackageIdNotInCatalog_WarnsExplicitlyWithSuggestion()
     {
-        // mozilla.thunderbird.br não existe no winget; o correto é Mozilla.Thunderbird.pt-BR.
-        var (authorized, warning) = Resolve(new FakeAppStore(approved: ["google.chrome"]), new FakeWingetCatalog(["Google.Chrome", "Mozilla.Thunderbird.pt-BR"]),
+        // mozilla.thunderbird.br não existe no catálogo; o correto é Mozilla.Thunderbird.pt-BR.
+        var store = new FakeAppStore(approved: ["google.chrome"], catalog: ["google.chrome", "mozilla.thunderbird.pt-br"]);
+        var (authorized, warning) = Resolve(store,
             AutomationTaskActionType.InstallPackage, AppInstallationType.Winget, "mozilla.thunderbird.br");
         Assert.That(authorized, Is.False);
         Assert.That(warning, Does.Contain("não existe no catálogo Winget"));
@@ -62,17 +66,19 @@ public class AutomationTaskPackageAuthorizationTests
     [Test]
     public void PackageInStore_IsAuthorizedWithoutWarning()
     {
-        var (authorized, warning) = Resolve(new FakeAppStore(approved: ["GOOGLE.CHROME"]), new FakeWingetCatalog(["Google.Chrome"]),
+        var store = new FakeAppStore(approved: ["GOOGLE.CHROME"], catalog: ["google.chrome"]);
+        var (authorized, warning) = Resolve(store,
             AutomationTaskActionType.InstallPackage, AppInstallationType.Winget, "google.chrome");
         Assert.That(authorized, Is.True);
         Assert.That(warning, Is.Null);
     }
 
     [Test]
-    public void EmptyWingetCatalog_TreatedAsUnknown_DoesNotClaimMissingId()
+    public void EmptyCatalog_TreatedAsUnknown_DoesNotClaimMissingId()
     {
-        // Catálogo não sincronizado (Count == 0): não se afirma que o id não existe.
-        var (authorized, warning) = Resolve(new FakeAppStore(approved: ["google.chrome"]), new FakeWingetCatalog(),
+        // Catálogo não sincronizado (Total == 0): não se afirma que o id não existe.
+        var store = new FakeAppStore(approved: ["google.chrome"]);
+        var (authorized, warning) = Resolve(store,
             AutomationTaskActionType.InstallPackage, AppInstallationType.Winget, "google.chrome");
         Assert.That(authorized, Is.True);
         Assert.That(warning, Is.Null);
@@ -81,10 +87,21 @@ public class AutomationTaskPackageAuthorizationTests
     [Test]
     public void CustomPackageMissingFromCatalog_Warns()
     {
-        var (authorized, warning) = Resolve(new FakeAppStore(), new FakeWingetCatalog(),
+        var store = new FakeAppStore();
+        var (authorized, warning) = Resolve(store,
             AutomationTaskActionType.InstallPackage, AppInstallationType.Custom, "meupacote.custom");
         Assert.That(authorized, Is.False);
         Assert.That(warning, Does.Contain("catálogo"));
+    }
+
+    [Test]
+    public void CustomPackageInCatalogAndStore_IsAuthorized()
+    {
+        var store = new FakeAppStore(approved: ["meupacote.custom"], catalog: ["meupacote.custom"]);
+        var (authorized, warning) = Resolve(store,
+            AutomationTaskActionType.InstallPackage, AppInstallationType.Custom, "MeuPacote.Custom");
+        Assert.That(authorized, Is.True);
+        Assert.That(warning, Is.Null);
     }
 
     [Test]
@@ -104,18 +121,22 @@ public class AutomationTaskPackageAuthorizationTests
         Assert.That(props.ContainsKey("status"), Is.True);
     }
 
-    private sealed class FakeAppStore(IReadOnlyList<string>? approved = null) : IAppStoreService
+    private sealed class FakeAppStore(IReadOnlyList<string>? approved = null, IReadOnlyList<string>? catalog = null) : IAppStoreService
     {
         private readonly IReadOnlyList<string> _approved = approved ?? [];
+        private readonly HashSet<string> _catalog = new(catalog ?? [], StringComparer.OrdinalIgnoreCase);
 
         public Task<AppCatalogPackageDto?> GetCatalogPackageByIdAsync(AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default)
-            => Task.FromResult<AppCatalogPackageDto?>(installationType == AppInstallationType.Custom ? null : null);
+            => Task.FromResult(_catalog.Contains(packageId.Trim())
+                ? new AppCatalogPackageDto { Id = packageId.Trim(), Name = packageId.Trim(), InstallationType = installationType }
+                : null);
 
         public Task<bool> IsPackageApprovedAsync(Guid? clientId, Guid? siteId, Guid? agentId, AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default)
             => Task.FromResult(_approved.Any(a => string.Equals(a, packageId.Trim(), StringComparison.OrdinalIgnoreCase)));
 
         public Task<AppCatalogSearchResultDto> SearchCatalogAsync(AppInstallationType installationType, string? search, string? architecture, int limit, string? cursor, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+            => Task.FromResult(new AppCatalogSearchResultDto { TotalPackagesInSource = _catalog.Count });
+
         public Task<AppCatalogPackageDto> UpsertCustomCatalogPackageAsync(UpsertCustomAppCatalogPackageRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<bool> DeleteCustomPackageFileAsync(string packageId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<bool> DeleteCustomPackageIconAsync(string packageId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -128,21 +149,5 @@ public class AutomationTaskPackageAuthorizationTests
         public Task<EffectiveApprovedAppPageDto> GetEffectiveAppsPageAsync(AppApprovalScopeType scopeType, Guid? scopeId, AppInstallationType installationType, string? search, int limit, string? cursor, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AppApprovalPackageDiffDto> GetPackageDiffAsync(AppApprovalScopeType scopeType, Guid? scopeId, AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AppEffectivePackageDiffPageDto> GetEffectiveAppDiffsAsync(AppApprovalScopeType scopeType, Guid? scopeId, AppInstallationType installationType, string? search, int limit, string? cursor, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-    }
-
-    private sealed class FakeWingetCatalog(IReadOnlyList<string>? packages = null) : IWingetPackageRepository
-    {
-        private readonly HashSet<string> _ids = new(packages ?? [], StringComparer.OrdinalIgnoreCase);
-
-        public Task<int> CountAsync(CancellationToken cancellationToken = default) => Task.FromResult(_ids.Count);
-
-        public Task<WingetPackage?> GetByPackageIdAsync(string packageId)
-            => Task.FromResult(_ids.Contains(packageId.Trim())
-                ? new WingetPackage { PackageId = packageId.Trim() }
-                : null);
-
-        public Task<(IReadOnlyList<WingetPackage> Items, int TotalCount)> SearchPageAsync(string? search, string? architecture, string? cursor, int limit, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-        public Task BulkUpsertAsync(IReadOnlyList<WingetPackage> packages, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

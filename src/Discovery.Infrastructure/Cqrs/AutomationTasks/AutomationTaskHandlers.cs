@@ -6,6 +6,8 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Discovery.Infrastructure.Cqrs.AutomationTasks;
 
@@ -182,11 +184,22 @@ public sealed class CreateAutomationTaskCommandHandler(
 }
 
 /// <summary>
-/// Converte exceções de validação de domínio (InvalidOperationException do AutomationTaskService)
+/// Converte exceções de validação de domínio e violações de constraint do banco
 /// em Error.Validation (HTTP 400) em vez de deixar estourar como 500.
+///
+/// Motivo (2026-10-31): a validação em C# da chave é uma janela de corrida — dois
+/// POSTs simultâneos com a mesma key passam por ExistsKeyAsync e o segundo INSERT
+/// estoura 23505 no índice único parcial (M254) → DbUpdateException → 500. O mesmo
+/// vale para escopo excluído entre a validação e o INSERT (23503). Agora vira 400
+/// com mensagem acionável.
 /// </summary>
 internal static class AutomationTaskValidationGuard
 {
+    private const string UniqueViolation = "23505";
+    private const string ForeignKeyViolation = "23503";
+    private const string NotNullViolation = "23502";
+    private const string CheckViolation = "23514";
+
     internal static async Task<(T? Value, Error? Error)> TryAsync<T>(Func<Task<T>> action)
     {
         try
@@ -197,7 +210,26 @@ internal static class AutomationTaskValidationGuard
         {
             return (default, Error.Validation("task", ex.Message));
         }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException pg)
+        {
+            return (default, Error.Validation("task", MapDatabaseError(pg)));
+        }
     }
+
+    private static string MapDatabaseError(PostgresException pg) => pg.SqlState switch
+    {
+        UniqueViolation when pg.ConstraintName?.Contains("scope_key", StringComparison.OrdinalIgnoreCase) == true
+            => "Já existe uma tarefa ativa com esta chave neste escopo. Ajuste a chave (ou o nome) e tente novamente.",
+        UniqueViolation
+            => "Já existe uma tarefa com estes dados (violação de unicidade). Ajuste os valores e tente novamente.",
+        ForeignKeyViolation
+            => "Referência inválida: o cliente/site/agente (ou script) informado não existe mais.",
+        NotNullViolation
+            => $"Campo obrigatório não informado ({pg.ColumnName ?? "desconhecido"}).",
+        CheckViolation
+            => "Um dos valores informados viola uma regra do banco (check constraint).",
+        _ => "Não foi possível salvar a tarefa por uma restrição do banco. Verifique os dados e tente novamente."
+    };
 }
 
 public sealed class UpdateAutomationTaskCommandHandler(

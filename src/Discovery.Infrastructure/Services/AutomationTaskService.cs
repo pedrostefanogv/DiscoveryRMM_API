@@ -6,6 +6,8 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -32,8 +34,8 @@ public class AutomationTaskService : IAutomationTaskService
     private readonly IAgentLabelRepository _agentLabelRepository;
     private readonly ILoggingService _loggingService;
     private readonly ICustomFieldService _customFieldService;
-    private readonly IAppStoreService _appStoreService;
-    private readonly IWingetPackageRepository _wingetPackageRepository;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<AutomationTaskService> _logger;
 
     public AutomationTaskService(
         IAutomationTaskRepository taskRepository,
@@ -45,8 +47,8 @@ public class AutomationTaskService : IAutomationTaskService
         IAgentLabelRepository agentLabelRepository,
         ILoggingService loggingService,
         ICustomFieldService customFieldService,
-        IAppStoreService appStoreService,
-        IWingetPackageRepository wingetPackageRepository)
+        IServiceScopeFactory scopeFactory,
+        ILogger<AutomationTaskService> logger)
     {
         _taskRepository = taskRepository;
         _auditRepository = auditRepository;
@@ -57,8 +59,8 @@ public class AutomationTaskService : IAutomationTaskService
         _agentLabelRepository = agentLabelRepository;
         _loggingService = loggingService;
         _customFieldService = customFieldService;
-        _appStoreService = appStoreService;
-        _wingetPackageRepository = wingetPackageRepository;
+        _scopeFactory = scopeFactory;
+        _logger = logger;
     }
 
     public async Task<CursorPageDto<AutomationTaskSummaryDto>> GetListPageAsync(
@@ -185,6 +187,7 @@ public class AutomationTaskService : IAutomationTaskService
         await ValidateCollectorFieldAsync(task);
         await ValidateTaskKeyAsync(task);
         ValidateTask(task);
+        await ValidateScopeTargetExistsAsync(task);
 
         var created = await _taskRepository.CreateAsync(task);
         var newSnapshot = BuildAuditSnapshot(created);
@@ -200,7 +203,7 @@ public class AutomationTaskService : IAutomationTaskService
             Reason = "created"
         });
 
-        await _loggingService.LogInfoAsync(
+        await LogInfoBestEffortAsync(
             LogType.Automation,
             LogSource.Api,
             "Automation task created.",
@@ -249,6 +252,9 @@ public class AutomationTaskService : IAutomationTaskService
 
         var oldSnapshot = BuildAuditSnapshot(existing);
         var oldIsActive = existing.IsActive;
+        // Escopo anterior: usado para NÃO revalidar o alvo quando o PUT não mexe no
+        // escopo (tarefa antiga apontando para agente na lixeira continua editável).
+        var previousScope = (existing.ScopeType, existing.ClientId, existing.SiteId, existing.AgentId);
 
         existing.Name = request.Name.Trim();
         existing.Description = request.Description;
@@ -298,6 +304,7 @@ public class AutomationTaskService : IAutomationTaskService
         await ValidateCollectorFieldAsync(existing);
         await ValidateTaskKeyAsync(existing);
         ValidateTask(existing);
+        await ValidateScopeTargetExistsAsync(existing, previousScope);
 
         await _taskRepository.UpdateAsync(existing);
 
@@ -318,7 +325,7 @@ public class AutomationTaskService : IAutomationTaskService
             Reason = request.Reason
         });
 
-        await _loggingService.LogInfoAsync(
+        await LogInfoBestEffortAsync(
             LogType.Automation,
             LogSource.Api,
             "Automation task updated.",
@@ -415,7 +422,7 @@ public class AutomationTaskService : IAutomationTaskService
             Reason = reason ?? "restored"
         });
 
-        await _loggingService.LogInfoAsync(
+        await LogInfoBestEffortAsync(
             LogType.Automation,
             LogSource.Api,
             "Automation task restored.",
@@ -573,7 +580,7 @@ public class AutomationTaskService : IAutomationTaskService
 
         var taskDtos = await BuildTaskPolicyDtosAsync(applicable, request.IncludeScriptContent, scriptsById);
 
-        await _loggingService.LogInfoAsync(
+        await LogInfoBestEffortAsync(
             LogType.Automation,
             LogSource.Api,
             "Automation policy sync delivered to agent.",
@@ -876,14 +883,14 @@ public class AutomationTaskService : IAutomationTaskService
 
     /// <summary>
     /// Avalia se o pacote da tarefa está autorizado: existência no catálogo
-    /// (Winget) e aprovação na App Store efetiva do escopo. A policy de
-    /// automação SOBREPÕE a loja: a tarefa NÃO é bloqueada — o resultado é
+    /// (app_packages — a M055 removeu as tabelas legadas winget_packages/
+    /// chocolatey_packages) e aprovação na App Store efetiva do escopo. A policy
+    /// de automação SOBREPÕE a loja: a tarefa NÃO é bloqueada — o resultado é
     /// persistido (packageAuthorized/packageWarning) e exposto na UI.
     /// Retorna (null, null) para ações que não são de pacote.
     /// </summary>
     internal static async Task<(bool? Authorized, string? Warning)> ResolvePackageAuthorizationAsync(
         IAppStoreService appStoreService,
-        IWingetPackageRepository wingetRepository,
         AutomationTaskActionType actionType,
         AppInstallationType? installationType,
         string? packageId,
@@ -899,25 +906,30 @@ public class AutomationTaskService : IAutomationTaskService
             return (null, null);
 
         var trimmed = packageId.Trim();
+        // Winget/Chocolatey são gravados em lowercase no catálogo (app_packages).
+        var normalizedId = installationType == AppInstallationType.Custom
+            ? trimmed
+            : trimmed.ToLowerInvariant();
 
         // Existência no catálogo: evita salvar id inexistente (ex.:
         // "mozilla.thunderbird.br" em vez de "Mozilla.Thunderbird.pt-BR"),
-        // que falharia no agent com exit 13. Catálogo vazio/indisponível é
-        // tratado como "unknown" — sem afirmar que o id não existe.
-        bool inCatalog = true;
-        if (installationType == AppInstallationType.Winget)
+        // que falharia no agent com exit 13.
+        // Winget/Chocolatey vêm de sync: catálogo vazio/indisponível é tratado como
+        // "unknown" (não se afirma que o id não existe). Custom é cadastrado um a um,
+        // então a existência é sempre verificada.
+        bool inCatalog;
+        if (installationType == AppInstallationType.Custom)
         {
-            var catalogCount = await wingetRepository.CountAsync();
-            if (catalogCount > 0)
-                inCatalog = await wingetRepository.GetByPackageIdAsync(trimmed) is not null;
+            inCatalog = await appStoreService.GetCatalogPackageByIdAsync(installationType.Value, normalizedId) is not null;
         }
         else
         {
-            var catalog = await appStoreService.GetCatalogPackageByIdAsync(installationType.Value, trimmed);
-            inCatalog = catalog is not null;
+            var catalogSearch = await appStoreService.SearchCatalogAsync(installationType.Value, null, null, 1, null);
+            inCatalog = catalogSearch.TotalPackagesInSource == 0
+                || await appStoreService.GetCatalogPackageByIdAsync(installationType.Value, normalizedId) is not null;
         }
 
-        var approved = await appStoreService.IsPackageApprovedAsync(clientId, siteId, agentId, installationType.Value, trimmed);
+        var approved = await appStoreService.IsPackageApprovedAsync(clientId, siteId, agentId, installationType.Value, normalizedId);
 
         if (!inCatalog)
         {
@@ -943,6 +955,21 @@ public class AutomationTaskService : IAutomationTaskService
         return (true, null);
     }
 
+    /// <summary>
+    /// Avalia a autorização do pacote em um ESCOPO/DB CONTEXT PRÓPRIO, fora da
+    /// transação do comando.
+    ///
+    /// Motivo (incidente 2026-10-31, POST /api/v1/automation/tasks → HTTP 500):
+    /// esta checagem consultava tabelas legadas dentro da transação aberta pelo
+    /// TransactionBehavior. Qualquer erro SQL aqui (42P01 tabela ausente, 42501
+    /// permissão negada) abortava a transação e o comando seguinte falhava com
+    /// 25P02 — o catch antigo engolia a exceção mas NÃO salvava a transação, então
+    /// a tarefa nunca era criada e o usuário via 500.
+    ///
+    /// Em um escopo separado (nova conexão, sem transação ambiente) a falha fica
+    /// isolada: a tarefa é criada com packageAuthorized = null e o motivo real
+    /// aparece no log como Warning, em vez de derrubar o comando.
+    /// </summary>
     private async Task<(bool? Authorized, string? Warning)> ResolvePackageAuthorizationAsync(
         AutomationTaskActionType actionType,
         AppInstallationType? installationType,
@@ -953,12 +980,22 @@ public class AutomationTaskService : IAutomationTaskService
     {
         try
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var appStoreService = scope.ServiceProvider.GetRequiredService<IAppStoreService>();
+
             return await ResolvePackageAuthorizationAsync(
-                _appStoreService, _wingetPackageRepository, actionType, installationType, packageId, clientId, siteId, agentId);
+                appStoreService, actionType, installationType, packageId, clientId, siteId, agentId);
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // A checagem é best-effort (não pode impedir a criação/edição).
+            // Best-effort: a checagem não pode impedir a criação/edição da tarefa.
+            // Diferente do catch{} anterior, agora o motivo real fica no log.
+            _logger.LogWarning(
+                ex,
+                "Falha ao avaliar autorização do pacote {PackageId} (actionType={ActionType}). " +
+                "A tarefa seguirá sem evidência de autorização (packageAuthorized = null).",
+                packageId,
+                actionType);
             return (null, null);
         }
     }
@@ -992,6 +1029,48 @@ public class AutomationTaskService : IAutomationTaskService
             return false;
 
         return true;
+    }
+
+    /// <summary>
+    /// O alvo do escopo precisa existir de fato. Sem isso, um `scopeId` inválido
+    /// (id digitado errado, cliente/site excluído, id de outra entidade) passava
+    /// pela criação e explodia no INSERT como violação de FK (23503) →
+    /// `DbUpdateException` → HTTP 500. Aqui a falha vira erro de validação (400)
+    /// com mensagem clara.
+    /// </summary>
+    private async Task ValidateScopeTargetExistsAsync(
+        AutomationTaskDefinition task,
+        (AppApprovalScopeType ScopeType, Guid? ClientId, Guid? SiteId, Guid? AgentId)? previousScope = null)
+    {
+        // PUT que não altera o escopo não revalida o alvo: tarefas antigas podem
+        // apontar para agente já na lixeira e ainda precisam ser editáveis
+        // (desativar, trocar nome, mudar escopo para outro alvo válido).
+        if (previousScope is { } previous
+            && previous.ScopeType == task.ScopeType
+            && previous.ClientId == task.ClientId
+            && previous.SiteId == task.SiteId
+            && previous.AgentId == task.AgentId)
+        {
+            return;
+        }
+
+        switch (task.ScopeType)
+        {
+            case AppApprovalScopeType.Client when task.ClientId is Guid clientId:
+                if (await _clientRepository.GetByIdAsync(clientId) is null)
+                    throw new InvalidOperationException($"Cliente {clientId} não existe (ou foi excluído).");
+                break;
+
+            case AppApprovalScopeType.Site when task.SiteId is Guid siteId:
+                if (await _siteRepository.GetByIdAsync(siteId) is null)
+                    throw new InvalidOperationException($"Site {siteId} não existe (ou foi excluído).");
+                break;
+
+            case AppApprovalScopeType.Agent when task.AgentId is Guid agentId:
+                if (await _agentRepository.GetByIdAsync(agentId) is null)
+                    throw new InvalidOperationException($"Agente {agentId} não existe (ou está na lixeira).");
+                break;
+        }
     }
 
     /// <summary>
@@ -1034,7 +1113,16 @@ public class AutomationTaskService : IAutomationTaskService
         if (normalized.Length == 0)
             return null;
 
-        return normalized.Length > 100 ? normalized[..100] : normalized;
+        // Truncar sem hash fazia nomes longos distintos colidirem na MESMA chave
+        // (o operador via "Já existe uma tarefa com esta chave" sem entender o
+        // motivo). Acima de 100 chars a chave fica "<92 chars>-<hash8>" — as chaves
+        // já gravadas não mudam, só as tarefas novas com nome muito longo.
+        if (normalized.Length <= 100)
+            return normalized;
+
+        var hash = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+        return $"{normalized[..91]}-{hash[..8].ToLowerInvariant()}";
     }
 
     /// <summary>Chave padronizada precisa ser única entre as tarefas ATIVAS do MESMO escopo.</summary>
@@ -1125,6 +1213,32 @@ public class AutomationTaskService : IAutomationTaskService
             AppApprovalScopeType.Agent => (null, null, scopeId ?? throw new InvalidOperationException("ScopeId is required for Agent scope.")),
             _ => (null, null, null)
         };
+    }
+
+    /// <summary>
+    /// Log de auditoria em banco é BEST-EFFORT. Essas chamadas acontecem DENTRO da
+    /// transação do comando: uma falha na gravação do log (ex.: constraint nova na
+    /// tabela logs) abortaria a transação e derrubaria a criação/edição da tarefa
+    /// com 25P02 → HTTP 500. Aqui a falha só vira Warning no log do processo.
+    /// </summary>
+    private async Task LogInfoBestEffortAsync(
+        LogType type,
+        LogSource source,
+        string message,
+        object? data = null,
+        string? clientId = null,
+        string? siteId = null,
+        string? agentId = null)
+    {
+        try
+        {
+            // Ordem posicional do contrato: (type, source, message, data, agentId, siteId, clientId).
+            await _loggingService.LogInfoAsync(type, source, message, data, agentId, siteId, clientId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Falha ao gravar log de auditoria (best-effort): {Message}", message);
+        }
     }
 
     private static string? SerializeTags(IReadOnlyList<string> tags)
@@ -1264,7 +1378,13 @@ public class AutomationTaskService : IAutomationTaskService
         };
     }
 
-    /// <summary>Resolve os nomes de client/site/agent para exibição nos DTOs de tarefa.</summary>
+    /// <summary>
+    /// Resolve os nomes de client/site/agent para exibição nos DTOs de tarefa.
+    ///
+    /// Faz o carregamento em 3 passos (agentes → sites → clientes) para que tarefas
+    /// de escopo Agent tragam SiteName/ScopeSiteId/ScopeClientId SEM await dentro do
+    /// loop (o N+1 anterior consultava site/cliente por item).
+    /// </summary>
     private async Task EnrichScopeNamesAsync(IReadOnlyList<AutomationTaskSummaryDto> dtos)
     {
         if (dtos.Count == 0) return;
@@ -1284,20 +1404,27 @@ public class AutomationTaskService : IAutomationTaskService
             }
         }
 
-        var clients = clientIds.Count == 0
-            ? []
-            : (await Task.WhenAll(clientIds.Select(async id => (id, client: await _clientRepository.GetByIdAsync(id)))))
-                .Where(x => x.client is not null).ToDictionary(x => x.id, x => x.client!.Name);
+        var agents = agentIds.Count == 0
+            ? new Dictionary<Guid, Agent>()
+            : (await Task.WhenAll(agentIds.Select(async id => (id, agent: await _agentRepository.GetByIdAsync(id)))))
+                .Where(x => x.agent is not null).ToDictionary(x => x.id, x => x.agent!);
+
+        // Escopo Agent também precisa do site do agent (e do cliente do site).
+        foreach (var agent in agents.Values)
+            siteIds.Add(agent.SiteId);
 
         var sites = siteIds.Count == 0
-            ? []
+            ? new Dictionary<Guid, Site>()
             : (await Task.WhenAll(siteIds.Select(async id => (id, site: await _siteRepository.GetByIdAsync(id)))))
                 .Where(x => x.site is not null).ToDictionary(x => x.id, x => x.site!);
 
-        var agents = agentIds.Count == 0
-            ? []
-            : (await Task.WhenAll(agentIds.Select(async id => (id, agent: await _agentRepository.GetByIdAsync(id)))))
-                .Where(x => x.agent is not null).ToDictionary(x => x.id, x => x.agent!);
+        foreach (var site in sites.Values)
+            clientIds.Add(site.ClientId);
+
+        var clients = clientIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : (await Task.WhenAll(clientIds.Select(async id => (id, client: await _clientRepository.GetByIdAsync(id)))))
+                .Where(x => x.client is not null).ToDictionary(x => x.id, x => x.client!.Name);
 
         foreach (var dto in dtos)
         {
@@ -1307,7 +1434,9 @@ public class AutomationTaskService : IAutomationTaskService
                 case AppApprovalScopeType.Client:
                     dto.ScopeName = clients.GetValueOrDefault(scopeId);
                     dto.ScopeClientId = scopeId;
+                    dto.ClientName = dto.ScopeName;
                     break;
+
                 case AppApprovalScopeType.Site:
                     if (sites.TryGetValue(scopeId, out var site))
                     {
@@ -1315,26 +1444,21 @@ public class AutomationTaskService : IAutomationTaskService
                         dto.SiteName = site.Name;
                         dto.ScopeSiteId = site.Id;
                         dto.ScopeClientId = site.ClientId;
-                        dto.ClientName = clients.GetValueOrDefault(site.ClientId)
-                            ?? (await _clientRepository.GetByIdAsync(site.ClientId))?.Name;
+                        dto.ClientName = clients.GetValueOrDefault(site.ClientId);
                     }
                     break;
+
                 case AppApprovalScopeType.Agent:
                     if (agents.TryGetValue(scopeId, out var agent))
                     {
                         dto.ScopeName = agent.DisplayName ?? agent.Hostname;
                         dto.AgentName = agent.DisplayName ?? agent.Hostname;
-                        // A09: o dicionário "sites" só é populado por tarefas de escopo Site,
-                        // então escopo Agent ficava sem SiteName/ScopeSiteId/ScopeClientId.
-                        if (!sites.TryGetValue(agent.SiteId, out var agentSite))
-                            agentSite = await _siteRepository.GetByIdAsync(agent.SiteId);
-                        if (agentSite is not null)
+                        if (sites.TryGetValue(agent.SiteId, out var agentSite))
                         {
                             dto.ScopeSiteId = agentSite.Id;
                             dto.ScopeClientId = agentSite.ClientId;
                             dto.SiteName = agentSite.Name;
-                            dto.ClientName = clients.GetValueOrDefault(agentSite.ClientId)
-                                ?? (await _clientRepository.GetByIdAsync(agentSite.ClientId))?.Name;
+                            dto.ClientName = clients.GetValueOrDefault(agentSite.ClientId);
                         }
                     }
                     break;
@@ -1350,6 +1474,8 @@ public class AutomationTaskService : IAutomationTaskService
             Name = task.Name,
             Description = task.Description,
             ActionType = task.ActionType,
+            InstallationType = task.InstallationType,
+            PackageId = task.PackageId,
             ScopeType = task.ScopeType,
             ScopeId = ResolveScopeId(task),
             IsActive = task.IsActive,

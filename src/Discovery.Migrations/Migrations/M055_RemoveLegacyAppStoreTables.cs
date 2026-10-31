@@ -14,72 +14,20 @@ public class M055_RemoveLegacyAppStoreTables : Migration
             Delete.Table("chocolatey_packages");
     }
 
+    /// <summary>
+    /// Histórico: o Down() original RECRIAVA as duas tabelas com o schema de M049/M048
+    /// (sem as colunas adicionadas depois, ex. silent_command da M145), sem GRANT para
+    /// o role da API e sem nenhum dado. Um rollback deixava o ambiente com drift
+    /// permanente — foi a origem provável das tabelas órfãs que causaram o incidente
+    /// de 2026-10-31 (42501 permission denied → 25P02 → HTTP 500 no POST de
+    /// automation task).
+    ///
+    /// Como o catálogo oficial agora é `app_packages` (M251+) e o mapeamento EF das
+    /// tabelas legadas foi removido, um rollback não deve ressuscitá-las: Down é no-op.
+    /// Para reverter de verdade, restaure um backup anterior à M055.
+    /// </summary>
     public override void Down()
     {
-        if (!Schema.Table("chocolatey_packages").Exists())
-        {
-            Create.Table("chocolatey_packages")
-                .WithColumn("id").AsGuid().PrimaryKey()
-                .WithColumn("package_id").AsString(300).NotNullable()
-                .WithColumn("name").AsString(500).NotNullable()
-                .WithColumn("publisher").AsString(500).NotNullable()
-                .WithColumn("version").AsString(100).NotNullable()
-                .WithColumn("description").AsCustom("text").NotNullable()
-                .WithColumn("homepage").AsString(2000).NotNullable()
-                .WithColumn("license_url").AsString(2000).NotNullable()
-                .WithColumn("tags").AsString(2000).NotNullable()
-                .WithColumn("download_count").AsInt64().NotNullable().WithDefaultValue(0)
-                .WithColumn("last_updated").AsCustom("timestamptz").Nullable()
-                .WithColumn("synced_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-                .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
-
-            Create.Index("ux_chocolatey_packages_package_id")
-                .OnTable("chocolatey_packages")
-                .OnColumn("package_id").Ascending()
-                .WithOptions().Unique();
-
-            Create.Index("ix_chocolatey_packages_name")
-                .OnTable("chocolatey_packages")
-                .OnColumn("name").Ascending();
-
-            Create.Index("ix_chocolatey_packages_synced_at")
-                .OnTable("chocolatey_packages")
-                .OnColumn("synced_at").Descending();
-        }
-
-        if (!Schema.Table("winget_packages").Exists())
-        {
-            Create.Table("winget_packages")
-                .WithColumn("id").AsGuid().PrimaryKey()
-                .WithColumn("package_id").AsString(300).NotNullable()
-                .WithColumn("name").AsString(500).NotNullable()
-                .WithColumn("publisher").AsString(500).NotNullable()
-                .WithColumn("version").AsString(100).NotNullable()
-                .WithColumn("description").AsCustom("text").NotNullable()
-                .WithColumn("homepage").AsString(2000).NotNullable()
-                .WithColumn("license").AsString(500).NotNullable()
-                .WithColumn("category").AsString(250).NotNullable()
-                .WithColumn("icon").AsString(2000).NotNullable()
-                .WithColumn("install_command").AsString(1000).NotNullable()
-                .WithColumn("tags").AsCustom("text").NotNullable()
-                .WithColumn("installer_urls_json").AsCustom("text").NotNullable()
-                .WithColumn("last_updated").AsCustom("timestamptz").Nullable()
-                .WithColumn("source_generated_at").AsCustom("timestamptz").Nullable()
-                .WithColumn("synced_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime)
-                .WithColumn("created_at").AsCustom("timestamptz").NotNullable().WithDefault(SystemMethods.CurrentUTCDateTime);
-
-            Create.Index("ux_winget_packages_package_id")
-                .OnTable("winget_packages")
-                .OnColumn("package_id").Ascending()
-                .WithOptions().Unique();
-
-            Create.Index("ix_winget_packages_name")
-                .OnTable("winget_packages")
-                .OnColumn("name").Ascending();
-
-            Create.Index("ix_winget_packages_synced_at")
-                .OnTable("winget_packages")
-                .OnColumn("synced_at").Descending();
-        }
+        // Intencionalmente vazio — ver comentário acima.
     }
 }

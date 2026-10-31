@@ -287,8 +287,20 @@ public class AutomationExecutionReportRepository : IAutomationExecutionReportRep
                 .SetProperty(x => x.Status, _ => finalStatus)
                 .SetProperty(x => x.UpdatedAt, _ => DateTime.UtcNow));
 
-        if (affected > 0)
-            await PublishDashboardEventAsync("AutomationExecutionResult", report.AgentId, commandId, finalStatus, report.TaskId, report.ScriptId, report.CorrelationId, exitCode, errorMessage);
+        if (affected == 0)
+            return;
+
+        // A09: o snapshot lido acima é ANTERIOR ao ExecuteUpdate e pode ter
+        // TaskId/ScriptId/CorrelationId defasados (ex.: link tardio entre comando e
+        // tarefa). Relê o estado efetivamente gravado para publicar o evento com os
+        // valores reais.
+        var updated = await _db.AutomationExecutionReports
+            .AsNoTracking()
+            .OrderByDescending(x => x.CreatedAt)
+            .FirstOrDefaultAsync(x => x.CommandId == commandId);
+
+        if (updated is not null)
+            await PublishDashboardEventAsync("AutomationExecutionResult", updated.AgentId, commandId, finalStatus, updated.TaskId, updated.ScriptId, updated.CorrelationId, exitCode, errorMessage);
     }
 
     private async Task PublishDashboardEventAsync(
