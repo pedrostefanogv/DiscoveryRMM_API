@@ -72,7 +72,13 @@ public sealed class PatchServerConfigCommandHandler(IConfigurationService config
     : IRequestHandler<PatchServerConfigCommand, Result<ServerConfiguration>>
 {
     public async Task<Result<ServerConfiguration>> Handle(PatchServerConfigCommand cmd, CancellationToken ct)
-        => Result<ServerConfiguration>.Success(await config.PatchServerAsync(cmd.Updates, cmd.ChangedBy));
+    {
+        var windowErrors = MaintenanceWindowJsonValidator.ValidatePatch(cmd.Updates);
+        if (windowErrors.Count > 0)
+            return Result<ServerConfiguration>.Failure(windowErrors);
+
+        return Result<ServerConfiguration>.Success(await config.PatchServerAsync(cmd.Updates, cmd.ChangedBy));
+    }
 }
 
 public sealed class ResetServerConfigCommandHandler(IConfigurationService config)
@@ -86,21 +92,39 @@ public sealed class PatchNatsConfigCommandHandler(IConfigurationService config)
     : IRequestHandler<PatchNatsConfigCommand, Result<ServerConfiguration>>
 {
     public async Task<Result<ServerConfiguration>> Handle(PatchNatsConfigCommand cmd, CancellationToken ct)
-        => Result<ServerConfiguration>.Success(await config.PatchServerAsync(cmd.Updates, cmd.ChangedBy));
+    {
+        var windowErrors = MaintenanceWindowJsonValidator.ValidatePatch(cmd.Updates);
+        if (windowErrors.Count > 0)
+            return Result<ServerConfiguration>.Failure(windowErrors);
+
+        return Result<ServerConfiguration>.Success(await config.PatchServerAsync(cmd.Updates, cmd.ChangedBy));
+    }
 }
 
 public sealed class UpdateClientConfigCommandHandler(IConfigurationService config)
     : IRequestHandler<UpdateClientConfigCommand, Result<ClientConfiguration>>
 {
     public async Task<Result<ClientConfiguration>> Handle(UpdateClientConfigCommand cmd, CancellationToken ct)
-        => Result<ClientConfiguration>.Success(await config.UpdateClientAsync(cmd.ClientId, cmd.Config, cmd.ChangedBy));
+    {
+        var windowErrors = MaintenanceWindowJsonValidator.ValidateConfiguration(cmd.Config);
+        if (windowErrors.Count > 0)
+            return Result<ClientConfiguration>.Failure(windowErrors);
+
+        return Result<ClientConfiguration>.Success(await config.UpdateClientAsync(cmd.ClientId, cmd.Config, cmd.ChangedBy));
+    }
 }
 
 public sealed class PatchClientConfigCommandHandler(IConfigurationService config)
     : IRequestHandler<PatchClientConfigCommand, Result<ClientConfiguration>>
 {
     public async Task<Result<ClientConfiguration>> Handle(PatchClientConfigCommand cmd, CancellationToken ct)
-        => Result<ClientConfiguration>.Success(await config.PatchClientAsync(cmd.ClientId, cmd.Updates, cmd.ChangedBy));
+    {
+        var windowErrors = MaintenanceWindowJsonValidator.ValidatePatch(cmd.Updates);
+        if (windowErrors.Count > 0)
+            return Result<ClientConfiguration>.Failure(windowErrors);
+
+        return Result<ClientConfiguration>.Success(await config.PatchClientAsync(cmd.ClientId, cmd.Updates, cmd.ChangedBy));
+    }
 }
 
 public sealed class DeleteClientConfigCommandHandler(IConfigurationService config)
@@ -117,14 +141,26 @@ public sealed class UpdateSiteConfigCommandHandler(IConfigurationService config)
     : IRequestHandler<UpdateSiteConfigCommand, Result<SiteConfiguration>>
 {
     public async Task<Result<SiteConfiguration>> Handle(UpdateSiteConfigCommand cmd, CancellationToken ct)
-        => Result<SiteConfiguration>.Success(await config.UpdateSiteAsync(cmd.SiteId, cmd.Config, cmd.ChangedBy));
+    {
+        var windowErrors = MaintenanceWindowJsonValidator.ValidateConfiguration(cmd.Config);
+        if (windowErrors.Count > 0)
+            return Result<SiteConfiguration>.Failure(windowErrors);
+
+        return Result<SiteConfiguration>.Success(await config.UpdateSiteAsync(cmd.SiteId, cmd.Config, cmd.ChangedBy));
+    }
 }
 
 public sealed class PatchSiteConfigCommandHandler(IConfigurationService config)
     : IRequestHandler<PatchSiteConfigCommand, Result<SiteConfiguration>>
 {
     public async Task<Result<SiteConfiguration>> Handle(PatchSiteConfigCommand cmd, CancellationToken ct)
-        => Result<SiteConfiguration>.Success(await config.PatchSiteAsync(cmd.SiteId, cmd.Updates, cmd.ChangedBy));
+    {
+        var windowErrors = MaintenanceWindowJsonValidator.ValidatePatch(cmd.Updates);
+        if (windowErrors.Count > 0)
+            return Result<SiteConfiguration>.Failure(windowErrors);
+
+        return Result<SiteConfiguration>.Success(await config.PatchSiteAsync(cmd.SiteId, cmd.Updates, cmd.ChangedBy));
+    }
 }
 
 public sealed class DeleteSiteConfigCommandHandler(IConfigurationService config)
@@ -559,6 +595,10 @@ public sealed class ImportServerConfigurationCommandHandler(IConfigurationServic
             return Result<ServerConfigurationImportResult>.Failure(
                 unknown.Select(key => Error.Validation(key, $"Campo não reconhecido: {key}")).ToArray());
         }
+
+        var windowErrors = MaintenanceWindowJsonValidator.ValidatePatch(updates);
+        if (windowErrors.Count > 0)
+            return Result<ServerConfigurationImportResult>.Failure(windowErrors);
 
         var updated = await config.PatchServerAsync(updates, cmd.ChangedBy);
         return Result<ServerConfigurationImportResult>.Success(
