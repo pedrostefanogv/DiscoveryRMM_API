@@ -305,6 +305,7 @@ public class AutomationTaskRepository : IAutomationTaskRepository
         // escolhido na UI seria descartado no PUT.
         existing.CollectorFieldDefinitionId = task.CollectorFieldDefinitionId;
         existing.WriteOutputToNote = task.WriteOutputToNote;
+        existing.TaskRespectMaintenanceWindow = task.TaskRespectMaintenanceWindow;
         existing.ExecutionOrder = task.ExecutionOrder;
         existing.Key = task.Key;
         existing.AllowDefer = task.AllowDefer;

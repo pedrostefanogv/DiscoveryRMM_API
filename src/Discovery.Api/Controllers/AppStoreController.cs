@@ -1000,6 +1000,27 @@ public class AppStoreController(
         return result.ToActionResult();
     }
 
+    /// <summary>
+    /// Prévia da intenção de atualização por pacote no escopo (quem executa:
+    /// manual, auto-update da Loja ou task de automação) + janela de manutenção
+    /// vigente. Somente leitura — a tela usa para simular e apontar conflitos.
+    /// </summary>
+    [HttpGet("approvals/update-intent")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    public async Task<IActionResult> GetUpdateIntent(
+        [FromQuery] int scopeType = 0,
+        [FromQuery] Guid? scopeId = null,
+        [FromQuery] int installationType = 0,
+        [FromQuery] string? search = null)
+    {
+        var result = await mediator.Send(new GetAppStoreUpdateIntentQuery(
+            (AppApprovalScopeType)scopeType,
+            scopeId,
+            installationType,
+            search));
+        return result.ToActionResult();
+    }
+
     /// <summary>Create/update an approval rule.</summary>
     [HttpPost("approvals")]
     [RequirePermission(ResourceType.AppStore, ActionType.Edit)]

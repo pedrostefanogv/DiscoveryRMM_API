@@ -294,6 +294,35 @@ public sealed class GetAppStoreResolvedApprovalsQueryHandler(IAppStoreService sv
     }
 }
 
+public sealed class GetAppStoreUpdateIntentQueryHandler(IAppStoreUpdateIntentService svc)
+    : IRequestHandler<GetAppStoreUpdateIntentQuery, Result<AppStoreUpdateIntentPageDto>>
+{
+    public async Task<Result<AppStoreUpdateIntentPageDto>> Handle(GetAppStoreUpdateIntentQuery q, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(q.ScopeType))
+        {
+            return Result<AppStoreUpdateIntentPageDto>.Failure(
+                Error.Validation("scopeType", "Escopo de aprovação inválido."));
+        }
+
+        if (!Enum.IsDefined((AppInstallationType)q.InstallationType))
+        {
+            return Result<AppStoreUpdateIntentPageDto>.Failure(
+                Error.Validation("installationType", "Tipo de instalação inválido."));
+        }
+
+        if (q.ScopeType != AppApprovalScopeType.Global && q.ScopeId is null)
+        {
+            return Result<AppStoreUpdateIntentPageDto>.Failure(
+                Error.Validation("scopeId", "Informe o cliente, site ou agente do escopo consultado."));
+        }
+
+        var page = await svc.GetUpdateIntentAsync(
+            q.ScopeType, q.ScopeId, (AppInstallationType)q.InstallationType, q.Search, ct);
+        return Result<AppStoreUpdateIntentPageDto>.Success(page);
+    }
+}
+
 // ── Audit ────────────────────────────────────────────────────────────
 
 public sealed class GetAppStoreApprovalAuditQueryHandler(IAppStoreService svc)

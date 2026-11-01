@@ -52,6 +52,17 @@ public sealed record GetAppStoreResolvedApprovalsQuery(
     string? Search = null
 ) : IQuery<Result<AppApprovalResolvedPageDto>>;
 
+/// <summary>
+/// Prévia da intenção de atualização por pacote no escopo (Loja × automação),
+/// com a janela de manutenção vigente. Não executa nada.
+/// </summary>
+public sealed record GetAppStoreUpdateIntentQuery(
+    AppApprovalScopeType ScopeType,
+    Guid? ScopeId,
+    int InstallationType,
+    string? Search = null
+) : IQuery<Result<AppStoreUpdateIntentPageDto>>;
+
 // ── Audit ────────────────────────────────────────────────────────────
 public sealed record GetAppStoreApprovalAuditQuery(
     int? InstallationType = null,

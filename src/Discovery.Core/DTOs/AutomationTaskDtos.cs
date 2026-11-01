@@ -42,6 +42,8 @@ public class AutomationTaskSummaryDto
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>Opt-in: respeitar a janela de manutenção do agent nas ações de pacote.</summary>
+    public bool TaskRespectMaintenanceWindow { get; set; }
     /// <summary>Ordem de execução no agent (0–99): menor executa primeiro.</summary>
     public int ExecutionOrder { get; set; } = 50;
     /// <summary>Chave padronizada (normalizada) da tarefa.</summary>
@@ -177,6 +179,8 @@ public class CreateAutomationTaskRequest
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>Opt-in: respeitar a janela de manutenção do agent nas ações de pacote. Ausente = false.</summary>
+    public bool TaskRespectMaintenanceWindow { get; set; }
     /// <summary>Ordem de execução no agent (0–99). Ausente = default do tipo de ação.</summary>
     public int? ExecutionOrder { get; set; }
     /// <summary>Chave padronizada (normalizada [a-z0-9_-]). Ausente = derivada do nome.</summary>

@@ -292,8 +292,12 @@ public class ServerConfiguration
     public string? MaintenanceWindowJson { get; set; } = string.Empty;
 
     /// <summary>
-    /// Política de tools MCP do chat do agent: JSON
-    /// { mode: "all"|"allowlist", allow: [nomes] }. Null/vazio = herda/all.
+    /// [LEGADO] Política de tools MCP do chat do agent (M243): JSON
+    /// { mode: "all"|"allowlist", allow: [nomes] }. NÃO é mais lida pelo
+    /// payload do agent nem editável nas telas de configuração — a fonte de
+    /// verdade é a governança de /settings/mcp-tools (mcp_tool_policies),
+    /// da qual o servidor deriva a allowlist enviada ao agent. A coluna
+    /// permanece apenas para histórico; uma migração futura pode removê-la.
     /// </summary>
     public string? McpToolPolicyJson { get; set; } = string.Empty;
 }

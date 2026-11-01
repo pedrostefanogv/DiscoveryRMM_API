@@ -460,7 +460,7 @@ public class P2pOverviewServiceTests
     }
 
     // Repositórios/Redis não são usados por GetOverviewAsync.
-    private static P2pService CreateService(DiscoveryDbContext db) => new(db, null!, null!, null!);
+    private static P2pService CreateService(DiscoveryDbContext db) => new(db, null!, null!, null!, null!, null!);
 
     private static P2pAgentTelemetry Snapshot(
         long id, Guid agentId, Guid siteId, Guid clientId, DateTime collectedAt,

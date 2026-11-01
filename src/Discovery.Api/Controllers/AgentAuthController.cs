@@ -961,6 +961,20 @@ public class AgentAuthController : ControllerBase
         return MapResult(await _mediator.Send(new GetAgentP2pSeedPlanQuery(id), ct), Ok);
     }
 
+    /// <summary>
+    /// Bootstrap P2P via nuvem: o agent PUXA a lista de peers online do seu
+    /// cliente (HeartbeatCache/Redis) com endereçamento libp2p. Gateado pelo
+    /// toggle CloudBootstrapEnabled (disabled=true = sucesso com zero peers).
+    /// </summary>
+    [HttpPost("me/p2p/bootstrap")]
+    public async Task<IActionResult> BootstrapP2p([FromBody] P2pCloudBootstrapRequest? request, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+        return MapResult(await _mediator.Send(new GetAgentP2pCloudBootstrapQuery(id, request), ct), Ok);
+    }
+
     [HttpPost("me/p2p/telemetry")]
     public async Task<IActionResult> IngestP2pTelemetry([FromBody] P2pTelemetryRequest request, CancellationToken ct)
     {

@@ -25,17 +25,23 @@ public class P2pService : IP2pService
     private readonly IAgentRepository _agentRepo;
     private readonly ISiteRepository _siteRepo;
     private readonly IRedisService _redis;
+    private readonly IHeartbeatCacheService _heartbeatCache;
+    private readonly IConfigurationResolver _configResolver;
 
     public P2pService(
         DiscoveryDbContext db,
         IAgentRepository agentRepo,
         ISiteRepository siteRepo,
-        IRedisService redis)
+        IRedisService redis,
+        IHeartbeatCacheService heartbeatCache,
+        IConfigurationResolver configResolver)
     {
         _db = db;
         _agentRepo = agentRepo;
         _siteRepo = siteRepo;
         _redis = redis;
+        _heartbeatCache = heartbeatCache;
+        _configResolver = configResolver;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -65,6 +71,78 @@ public class P2pService : IP2pService
                 plan.ConfiguredPercent,
                 plan.MinSeeds,
                 plan.SelectedSeeds));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // CLOUD BOOTSTRAP P2P (opção A, 2026-11-01)
+    //
+    // Substitui a tabela agent_p2p_bootstraps (dropada em M127): a fonte de
+    // verdade dos peers online é o HeartbeatCache (Redis), alimentado a cada
+    // heartbeat que já carrega peerId/addrs/port do libp2p. O agent PUXA a
+    // lista (POST /me/p2p/bootstrap) — nada é publicado por heartbeat.
+    // Escopo: TODO o cliente (cross-site/VLAN), decisão do usuário.
+    // ──────────────────────────────────────────────────────────────────────
+    public async Task<P2pCloudBootstrapResponseDto> GetCloudBootstrapPeersAsync(
+        Guid agentId,
+        int maxPeers = 8,
+        CancellationToken ct = default)
+    {
+        const int hardMaxPeers = 16;
+        if (maxPeers <= 0) maxPeers = 8;
+        if (maxPeers > hardMaxPeers) maxPeers = hardMaxPeers;
+
+        var agent = await _agentRepo.GetByIdAsync(agentId)
+            ?? throw new InvalidOperationException("Agent not found");
+
+        var site = await _siteRepo.GetByIdAsync(agent.SiteId);
+        var clientId = site?.ClientId ?? Guid.Empty;
+        if (clientId == Guid.Empty)
+        {
+            return new P2pCloudBootstrapResponseDto(Array.Empty<P2pCloudBootstrapPeerDto>(), Disabled: true);
+        }
+
+        // Toggle "Bootstrap P2P via Nuvem" (server → cliente; site NÃO participa
+        // para este campo por design — o agent recebe o mesmo valor).
+        var config = await _configResolver.ResolveForClientAsync(clientId);
+        if (!config.CloudBootstrapEnabled)
+        {
+            return new P2pCloudBootstrapResponseDto(Array.Empty<P2pCloudBootstrapPeerDto>(), Disabled: true);
+        }
+
+        // Candidatos: agents do MESMO CLIENTE (cross-site/VLAN por design).
+        // Heartbeat existe no cache = online (chave expirada já saiu do Redis).
+        var candidates = await _agentRepo.GetByClientIdAsync(clientId);
+        var peers = new List<P2pCloudBootstrapPeerDto>();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Id == agentId) continue;
+            var hb = await _heartbeatCache.GetHeartbeatAsync(candidate.Id, ct);
+            var peerId = hb?.PeerId?.Trim();
+            if (string.IsNullOrEmpty(peerId)) continue;
+            if (hb!.Port is not int port || port <= 0) continue;
+            var addrs = hb.Addrs;
+            if (addrs is null || addrs.Count == 0) continue;
+            // O agent já anuncia apenas IPs roteáveis, mas heartbeats antigos ou
+            // manipulados podem carregar loopback/link-local — dial sempre falharia.
+            var usable = addrs.Where(a =>
+            {
+                if (!System.Net.IPAddress.TryParse(a, out var ip)) return false;
+                if (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) return false;
+                return !System.Net.IPAddress.IsLoopback(ip);
+            }).ToList();
+            if (usable.Count == 0) continue;
+            peers.Add(new P2pCloudBootstrapPeerDto(peerId, candidate.Id.ToString(), usable, port));
+        }
+
+        // Amostragem aleatória: sem isso os candidatos (ordenados por hostname)
+        // fariam os MESMOS maxPeers serem retornados sempre — agents cujo
+        // hostname ordena depois do corte nunca seriam descobertos via nuvem.
+        if (peers.Count > maxPeers)
+        {
+            peers = peers.OrderBy(_ => Random.Shared.Next()).Take(maxPeers).ToList();
+        }
+
+        return new P2pCloudBootstrapResponseDto(peers, Disabled: false);
     }
 
     // internal para testes; clientIdOverride evita a consulta ao repositório de

@@ -88,6 +88,9 @@ public partial class DiscoveryDbContext
             entity.Property(t => t.NotificationMode).HasColumnName("notification_mode").HasConversion<int>();
             entity.Property(t => t.CollectorFieldDefinitionId).HasColumnName("collector_field_definition_id");
             entity.Property(t => t.WriteOutputToNote).HasColumnName("write_output_to_note").HasDefaultValue(false);
+            // Opt-in por tarefa: respeitar a janela de manutenção do agent nas
+            // ações de pacote (coluna criada pela M256, default false).
+            entity.Property(t => t.TaskRespectMaintenanceWindow).HasColumnName("task_respect_maintenance_window").HasDefaultValue(false);
             // Ordem de execução da policy no agent (0–99). Existente sem valor
             // definido cai no fallback 50; a migração M222 faz o backfill por tipo.
             entity.Property(t => t.ExecutionOrder).HasColumnName("execution_order").HasDefaultValue(50);

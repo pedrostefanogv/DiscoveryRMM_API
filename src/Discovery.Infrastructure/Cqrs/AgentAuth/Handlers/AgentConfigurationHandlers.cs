@@ -15,7 +15,9 @@ public sealed class GetAgentConfigurationHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
     IConfigurationService configService,
-    IAgentTlsCertificateProbe tlsProbe
+    IAgentTlsCertificateProbe tlsProbe,
+    IMcpToolPolicyRepository mcpPolicyRepo,
+    ILogger<GetAgentConfigurationHandler> logger
 ) : IRequestHandler<GetAgentConfigurationQuery, Result<object>>
 {
     public async Task<Result<object>> Handle(GetAgentConfigurationQuery q, CancellationToken ct)
@@ -41,6 +43,36 @@ public sealed class GetAgentConfigurationHandler(
         // sequenciais dobrariam o pior caso de latência do endpoint.
         var apiProbeTask = tlsProbe.GetExpectedTlsCertHashAsync(ct);
         var natsProbeTask = tlsProbe.GetExpectedNatsTlsCertHashAsync(ct);
+
+        // Política de tools MCP do chat do agent: DERIVADA das políticas efetivas
+        // de governança (mcp_tool_policies) no escopo do agente. A tela
+        // /settings/mcp-tools é a ÚNICA fonte de verdade — o campo legado
+        // mcp_tool_policy_json das configurações (server/client/site) não é mais
+        // lido nem editável. Comportamento:
+        //   • nenhuma tool desabilitada no escopo (ou nenhuma política) → null:
+        //     o agent usa o default "all" (zero mudança de comportamento);
+        //   • ao menos uma desabilitada → { mode: "allowlist", allow: [habilitadas] }:
+        //     o agent recusa com tool_not_allowed o que o servidor já filtra antes
+        //     de oferecer ao LLM (defesa em profundidade no gate local do agent).
+        object? mcpToolPolicy = null;
+        try
+        {
+            var mcpPolicies = await mcpPolicyRepo.GetEffectivePoliciesAsync(
+                site?.ClientId, agent.SiteId, agent.Id, ct);
+            mcpToolPolicy = DeriveMcpToolPolicy(mcpPolicies);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Cancelamento do request não é falha da governança: propaga para o
+            // pipeline em vez de devolver um payload parcial como sucesso.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Falha ao consultar a governança não pode impedir o provisionamento
+            // do agent: sem política o agent fica em mode "all" (compat).
+            logger.LogWarning(ex, "Falha ao derivar mcpToolPolicy para o agent {AgentId}", agent.Id);
+        }
 
         var effective = new Dictionary<string, object?>
         {
@@ -102,11 +134,12 @@ public sealed class GetAgentConfigurationHandler(
 
             // Update policies (JSON strings)
             ["agentUpdatePolicy"] = TryDeserializeJson(clientConfig?.AgentUpdatePolicyJson ?? serverConfig.AgentUpdatePolicyJson),
-            // Janela de manutenção (reboot/patches) e política de tools MCP do chat:
-            // cascata site > client > server; null/vazio herda. O agent tolera ausência
-            // (defaults: janela off, mode all — compatibilidade com frota existente).
+            // Janela de manutenção (reboot/patches): cascata site > client > server;
+            // null/vazio herda. O agent tolera ausência (default: janela off).
+            // mcpToolPolicy vem das políticas de governança (ver derivação acima);
+            // o JSON legado mcp_tool_policy_json não é mais consumido.
             ["maintenanceWindow"] = TryDeserializeJson(siteConfig?.MaintenanceWindowJson ?? clientConfig?.MaintenanceWindowJson ?? serverConfig.MaintenanceWindowJson),
-            ["mcpToolPolicy"] = TryDeserializeJson(siteConfig?.McpToolPolicyJson ?? clientConfig?.McpToolPolicyJson ?? serverConfig.McpToolPolicyJson),
+            ["mcpToolPolicy"] = mcpToolPolicy,
 
             // Branding & notification
             ["brandingSettings"] = TryDeserializeJson(serverConfig.BrandingSettingsJson),
@@ -147,6 +180,30 @@ public sealed class GetAgentConfigurationHandler(
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Deriva o payload "mcpToolPolicy" do agent a partir das políticas efetivas
+    /// de governança (mcp_tool_policies) — a tela /settings/mcp-tools é a única
+    /// fonte de verdade. Null quando nenhuma tool está desabilitada no escopo
+    /// (o agent usa o default "all": compat com a frota existente). Com ao menos
+    /// uma tool desabilitada, envia { mode: "allowlist", allow: [habilitadas] }
+    /// para o gate local do agent (defesa em profundidade — o servidor já filtra
+    /// as desabilitadas antes de oferecer as tools ao LLM).
+    /// </summary>
+    internal static object? DeriveMcpToolPolicy(IReadOnlyList<McpToolPolicy> policies)
+    {
+        if (policies.Count == 0 || policies.All(p => p.IsEnabled))
+            return null;
+
+        return new
+        {
+            mode = "allowlist",
+            allow = policies
+                .Where(p => p.IsEnabled)
+                .Select(p => p.ToolName)
+                .ToArray(),
+        };
     }
 
     private static object? TryDeserializeJson(string? json)

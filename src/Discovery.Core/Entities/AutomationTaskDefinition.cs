@@ -89,6 +89,16 @@ public class AutomationTaskDefinition
     public bool WriteOutputToNote { get; set; }
 
     /// <summary>
+    /// Opt-in por tarefa: quando true, o agent SÓ executa a ação de pacote
+    /// (install/upgrade/uninstall) DENTRO da janela de manutenção efetiva do
+    /// agente (Configurações → Servidor, janela com fuso IANA). Fora da janela
+    /// a execução vira NoOp "deferred_to_window" (sucesso — não conta como
+    /// falha e não ativa o circuit breaker). Default false: sem o campo o
+    /// comportamento é o atual (executar em qualquer horário).
+    /// </summary>
+    public bool TaskRespectMaintenanceWindow { get; set; }
+
+    /// <summary>
     /// Ordem de execução na policy do agent (0–99): o agent executa da menor
     /// para a maior e, no empate, roda primeiro a tarefa atualizada há mais
     /// tempo. O default vem do <see cref="AutomationTaskActionType"/>.

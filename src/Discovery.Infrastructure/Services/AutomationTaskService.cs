@@ -175,6 +175,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = request.ToastTiming ?? AutomationToastTiming.After,
             CollectorFieldDefinitionId = request.CollectorFieldDefinitionId,
             WriteOutputToNote = request.WriteOutputToNote,
+            TaskRespectMaintenanceWindow = request.TaskRespectMaintenanceWindow,
             // 0–99 com default por tipo de ação quando o operador não informa.
             ExecutionOrder = AutomationTaskExecutionOrder.ResolveForCreate(request.ExecutionOrder, request.ActionType),
             Key = NormalizeTaskKey(request.Key, request.Name),
@@ -287,6 +288,7 @@ public class AutomationTaskService : IAutomationTaskService
         existing.ToastTiming = request.ToastTiming ?? existing.ToastTiming;
         existing.CollectorFieldDefinitionId = request.CollectorFieldDefinitionId;
         existing.WriteOutputToNote = request.WriteOutputToNote;
+        existing.TaskRespectMaintenanceWindow = request.TaskRespectMaintenanceWindow;
         // Ausente preserva a ordem atual (não reseta para o default ao editar).
         if (request.ExecutionOrder.HasValue)
         {
@@ -733,6 +735,7 @@ public class AutomationTaskService : IAutomationTaskService
                 ToastTiming = task.ToastTiming,
                 CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
                 WriteOutputToNote = task.WriteOutputToNote,
+                TaskRespectMaintenanceWindow = task.TaskRespectMaintenanceWindow,
                 ExecutionOrder = task.ExecutionOrder,
                 TriggerImmediate = task.TriggerImmediate,
                 TriggerRecurring = task.TriggerRecurring,
@@ -1506,6 +1509,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             WriteOutputToNote = task.WriteOutputToNote,
+            TaskRespectMaintenanceWindow = task.TaskRespectMaintenanceWindow,
             ExecutionOrder = task.ExecutionOrder,
             Key = task.Key,
             PackageAuthorized = task.PackageAuthorized,
@@ -1535,6 +1539,7 @@ public class AutomationTaskService : IAutomationTaskService
             ToastTiming = task.ToastTiming,
             CollectorFieldDefinitionId = task.CollectorFieldDefinitionId,
             WriteOutputToNote = task.WriteOutputToNote,
+            TaskRespectMaintenanceWindow = task.TaskRespectMaintenanceWindow,
             ExecutionOrder = task.ExecutionOrder,
             Key = task.Key,
             PackageAuthorized = task.PackageAuthorized,
@@ -1586,6 +1591,7 @@ public class AutomationTaskService : IAutomationTaskService
             task.ToastTiming,
             task.CollectorFieldDefinitionId,
             task.WriteOutputToNote,
+            task.TaskRespectMaintenanceWindow,
             task.ExecutionOrder,
             task.Key,
             task.AllowDefer,

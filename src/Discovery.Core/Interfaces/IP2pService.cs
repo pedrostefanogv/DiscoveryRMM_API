@@ -28,6 +28,19 @@ public interface IP2pService
     Task<int> CheckTelemetryRateLimitAsync(Guid agentId, CancellationToken ct = default);
 
     /// <summary>
+    /// Bootstrap P2P via nuvem (opção A, 2026-11-01): retorna até maxPeers
+    /// peers ONLINE do MESMO CLIENTE com endereçamento libp2p
+    /// (peerId/addrs/port), lidos do HeartbeatCache (Redis). É PULL — o
+    /// servidor não publica nada por heartbeat. Se o toggle
+    /// CloudBootstrapEnabled estiver desligado para o cliente, retorna
+    /// Disabled=true (o agent trata como sucesso sem backoff).
+    /// </summary>
+    Task<P2pCloudBootstrapResponseDto> GetCloudBootstrapPeersAsync(
+        Guid agentId,
+        int maxPeers = 8,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Retorna status de distribuição de artifacts para o site do agente.
     /// </summary>
     Task<(List<P2pDistributionStatusItem> Items, int Total)> GetDistributionStatusPageAsync(

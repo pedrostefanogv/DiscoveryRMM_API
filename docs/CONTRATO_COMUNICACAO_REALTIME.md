@@ -1,6 +1,6 @@
 # Contrato de Comunicacao em Tempo Real - DiscoveryRMM API
 
-> Versao: 4.4.0 | Data: 2026-05-13
+> Versao: 4.6.0 | Data: 2026-11-01
 > Publico: Servidor (C# - C:\Projetos\DiscoveryRMM_API), Agent (Go - C:\Projetos\Discovery), Frontend (JS/TS - C:\Projetos\DiscoveryRMM_Site)
 > Proposito: Especificacao canonica executavel. Todos os componentes DEVEM validar entrada e saida contra este documento.
 > Status: periodo de transicao ate 2026-06-01. Durante a transicao, formato legado gera warning. Apos essa data, mensagem nao conforme eh rejeitada.
@@ -11,6 +11,7 @@
 
 | Versao | Data       | Mudancas                                                                                                                                                                                                                                                        |
 | ------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.6.0  | 2026-11-01 | `POST /api/v1/agent-auth/me/p2p/bootstrap` RE-ADICIONADO (modelo PULL, opcao A): lista de peers online do mesmo cliente lida do HeartbeatCache (Redis), gateada por `CloudBootstrapEnabled`, 60min+jitter no agent. `peer.online` permanece como acelerador na transicao Offline->Online. |
 | 4.5.0  | 2026-07-27 | Inclusao dos subjects de acesso remoto nativo (`remote.session.*`) para screen capture, terminal interativo, transferencia de arquivos, proxy de rede, gravacao de sessao e sinalizacao WebRTC. Substitui MeshCentral.                                          |
 | 4.4.0  | 2026-05-13 | Descoberta P2P movida para o heartbeat: `AgentHeartbeat` enriquecido com `peerId`/`addrs`/`port`; `POST /p2p/bootstrap` removido; evento `peer.online` publicado em `tenant.{c}.p2p.events` na transicao Offline->Online detectada pelo `HeartbeatCacheService` |
 | 4.2.0  | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`) com subjects dedicados (`*.agents.command`), envelope de dispatch, regras de idempotencia e diretrizes de ACL para alto volume.                                                            |

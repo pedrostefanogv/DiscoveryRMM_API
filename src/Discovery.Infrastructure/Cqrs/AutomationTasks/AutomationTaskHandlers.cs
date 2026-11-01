@@ -158,6 +158,7 @@ public sealed class CreateAutomationTaskCommandHandler(
             NotificationMode = cmd.NotificationMode,
             CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId,
             WriteOutputToNote = cmd.WriteOutputToNote ?? false,
+            TaskRespectMaintenanceWindow = cmd.TaskRespectMaintenanceWindow,
             Key = cmd.Key,
             ToastTiming = cmd.ToastTiming,
             IsActive = cmd.IsActive
@@ -277,6 +278,7 @@ public sealed class UpdateAutomationTaskCommandHandler(
             NotificationMode = cmd.NotificationMode ?? current.NotificationMode,
             CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId ?? current.CollectorFieldDefinitionId,
             WriteOutputToNote = cmd.WriteOutputToNote ?? current.WriteOutputToNote,
+            TaskRespectMaintenanceWindow = cmd.TaskRespectMaintenanceWindow ?? current.TaskRespectMaintenanceWindow,
             Key = cmd.Key ?? current.Key,
             ToastTiming = cmd.ToastTiming ?? current.ToastTiming,
             Reason = cmd.Reason

@@ -86,6 +86,11 @@ public class AgentAutomationTaskPolicyDto
     public Guid? CollectorFieldDefinitionId { get; set; }
     /// <summary>Grava a saida da execucao como nota no agent.</summary>
     public bool WriteOutputToNote { get; set; }
+    /// <summary>
+    /// Opt-in por tarefa: respeitar a janela de manutenção do agent nas ações
+    /// de pacote. Ausente/false = comportamento atual (executa fora da janela).
+    /// </summary>
+    public bool TaskRespectMaintenanceWindow { get; set; }
     /// <summary>Ordem de execução no agent (0–99): menor executa primeiro; empate pela data de update.</summary>
     public int ExecutionOrder { get; set; }
     public bool TriggerImmediate { get; set; }

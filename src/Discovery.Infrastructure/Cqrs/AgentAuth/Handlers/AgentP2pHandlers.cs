@@ -27,3 +27,14 @@ public sealed class IngestP2pTelemetryHandler(
         return Result<List<P2pErrorDetail>>.Success(errors);
     }
 }
+
+public sealed class GetAgentP2pCloudBootstrapHandler(
+    IP2pService p2pService
+) : IRequestHandler<GetAgentP2pCloudBootstrapQuery, Result<P2pCloudBootstrapResponseDto>>
+{
+    public async Task<Result<P2pCloudBootstrapResponseDto>> Handle(GetAgentP2pCloudBootstrapQuery q, CancellationToken ct)
+    {
+        var response = await p2pService.GetCloudBootstrapPeersAsync(q.AgentId, ct: ct);
+        return Result<P2pCloudBootstrapResponseDto>.Success(response);
+    }
+}

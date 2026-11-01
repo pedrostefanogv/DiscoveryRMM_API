@@ -15,7 +15,7 @@ public class P2pTelemetryRateLimitTests
     public async Task AllowsUpToFiveRequestsThenLimits()
     {
         var redis = new FakeRedisService { TtlSeconds = 120 };
-        var service = new P2pService(null!, null!, null!, redis);
+        var service = new P2pService(null!, null!, null!, redis, null!, null!);
         var agentId = Guid.NewGuid();
 
         for (var i = 1; i <= 5; i++)
@@ -33,7 +33,7 @@ public class P2pTelemetryRateLimitTests
     {
         // RedisService.IncrementAsync devolve 0 quando o Redis está fora.
         var redis = new FakeRedisService { IncrementResult = 0 };
-        var service = new P2pService(null!, null!, null!, redis);
+        var service = new P2pService(null!, null!, null!, redis, null!, null!);
 
         Assert.That(await service.CheckTelemetryRateLimitAsync(Guid.NewGuid()), Is.Zero);
     }

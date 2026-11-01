@@ -17,7 +17,10 @@ public static class ConfigurationFieldCatalog
         "InventoryIntervalHours",
         "AgentUpdatePolicyJson",
         "MaintenanceWindowJson",
-        "McpToolPolicyJson",
+        // "McpToolPolicyJson" removido do catálogo: o campo ficou LEGADO.
+        // A política de tools MCP do chat é gerenciada apenas em
+        // /settings/mcp-tools (mcp_tool_policies) e o payload do agent deriva
+        // a allowlist dessas políticas (GetAgentConfigurationHandler).
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
         "BackgroundProcessingSettingsJson",

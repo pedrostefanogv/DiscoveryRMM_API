@@ -205,10 +205,21 @@ Content-Type: application/json
 }
 ```
 
-**Observações:**
-- Até **3 peers** retornados (aleatórios, mesmo clientId, exclui o próprio agent, online nos últimos 10 min).
-- Resposta vazia se não houver peers disponíveis.
-- Este endpoint também dispara publicação de snapshot de discovery via NATS (com debounce por site).
+**Observações (revisão 2026-11-01 — opção A):**
+- O endpoint foi RE-CRIADO sobre o HeartbeatCache (Redis): fonte de verdade são os
+  heartbeats (que já carregam `peerId`/`addrs`/`port` do libp2p). Não há tabela
+  `agent_p2p_bootstraps` (dropada em M127) e NADA é publicado por heartbeat — o
+  modelo é PULL: cada agent puxa a lista.
+- Peers retornados: até `maxPeers` (default 8, teto 16), agents ONLINE do MESMO
+  CLIENTE (cross-site/VLAN por design), com `peerId` + `port` do listener libp2p,
+  excluindo o próprio agent.
+- Gateado pelo toggle de configuração `CloudBootstrapEnabled` ("Bootstrap P2P via
+  Nuvem", server → cliente): desligado responde `200 {"peers":[],"disabled":true}`
+  (o agent trata como sucesso, sem backoff).
+- O agent executa ciclos automáticos a cada 60 min com jitter ±15% (backoff
+  exponencial até 6h em falha) além do botão manual "Sincronizar agora".
+- O evento `peer.online` (NATS, transição Offline→Online) continua existindo como
+  acelerador pontual de chegada, independente deste endpoint.
 
 ### 2.4 Sync Manifest
 
