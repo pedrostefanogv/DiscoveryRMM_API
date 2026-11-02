@@ -40,8 +40,7 @@ public class PatchApprovalResolverTests
                 typeof(AgentWindowsUpdate),
                 typeof(AgentWindowsUpdateSnapshot),
                 typeof(PatchApproval),
-                typeof(PatchPolicy),
-                typeof(AppCatalogEntry)
+                typeof(PatchPolicy)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -61,7 +60,6 @@ public class PatchApprovalResolverTests
             modelBuilder.Entity<AgentWindowsUpdateSnapshot>(entity => entity.HasKey(item => item.AgentId));
             modelBuilder.Entity<PatchApproval>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<PatchPolicy>(entity => entity.HasKey(item => item.Id));
-            modelBuilder.Entity<AppCatalogEntry>(entity => entity.HasKey(item => item.Id));
         }
     }
 
@@ -338,7 +336,7 @@ public class PatchApprovalResolverTests
         Assert.That(snapshot.DeniedCount, Is.EqualTo(0));
     }
 
-    // ── WU-21 (D24): catálogo curado para apps de terceiros ─────────────────
+    // ── WU-19/WU-20: apps de terceiros (choco/winget) ───────────────────────
 
     private static PatchPolicy ThirdPartyPolicy() => new()
     {
@@ -370,26 +368,11 @@ public class PatchApprovalResolverTests
         UpdatedAt = DateTime.UtcNow
     };
 
-    private static AppCatalogEntry CatalogEntry(string appId, string status, string source = "choco") => new()
-    {
-        Id = Guid.NewGuid(),
-        Source = source,
-        PackageId = appId,
-        Name = appId,
-        Version = "2.0.0",
-        InstallerUrl = "https://example.com/app.msi",
-        Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        Status = status,
-        CuratedAt = DateTime.UtcNow,
-        CreatedAt = DateTime.UtcNow,
-        UpdatedAt = DateTime.UtcNow
-    };
-
     [Test]
     public async Task ProviderManagedThirdPartyAppIsAutoApprovedWithConsentOnly()
     {
         var (db, agentId, _, _) = Seed();
-        // choco: o gerenciador valida o próprio feed; catálogo não é pré-requisito.
+        // choco: o gerenciador valida o próprio feed; basta o consentimento duplo.
         db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "googlechrome"));
         db.PatchPolicies.Add(ThirdPartyPolicy());
         await db.SaveChangesAsync();
@@ -417,54 +400,5 @@ public class PatchApprovalResolverTests
 
         var row = await db.AgentWindowsUpdates.SingleAsync();
         Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
-    }
-
-    [Test]
-    public async Task DirectDownloadMsiWithoutCuratedCatalogStaysUnknown()
-    {
-        var (db, agentId, _, _) = Seed();
-        db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "vendor-app", source: "msi"));
-        db.PatchPolicies.Add(ThirdPartyPolicy());
-        await db.SaveChangesAsync();
-
-        var resolver = new PatchApprovalResolver(db);
-        await resolver.RecomputeForAgentAsync(agentId);
-
-        var row = await db.AgentWindowsUpdates.SingleAsync();
-        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown),
-            "download direto exige versão curada (hash/assinatura vêm do catálogo)");
-    }
-
-    [Test]
-    public async Task DirectDownloadMsiWithActiveCatalogEntryIsAutoApproved()
-    {
-        var (db, agentId, _, _) = Seed();
-        db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "vendor-app", source: "msi"));
-        db.PatchPolicies.Add(ThirdPartyPolicy());
-        db.AppCatalogEntries.Add(CatalogEntry("vendor-app", "active", source: "msi"));
-        await db.SaveChangesAsync();
-
-        var resolver = new PatchApprovalResolver(db);
-        await resolver.RecomputeForAgentAsync(agentId);
-
-        var row = await db.AgentWindowsUpdates.SingleAsync();
-        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.AutoApproved));
-    }
-
-    [Test]
-    public async Task RevokedCatalogEntryBlocksDirectDownloadAutoApproval()
-    {
-        var (db, agentId, _, _) = Seed();
-        db.AgentWindowsUpdates.Add(ThirdPartyUpdate(agentId, "vendor-app", source: "msi"));
-        db.PatchPolicies.Add(ThirdPartyPolicy());
-        db.AppCatalogEntries.Add(CatalogEntry("vendor-app", "revoked", source: "msi"));
-        await db.SaveChangesAsync();
-
-        var resolver = new PatchApprovalResolver(db);
-        await resolver.RecomputeForAgentAsync(agentId);
-
-        var row = await db.AgentWindowsUpdates.SingleAsync();
-        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown),
-            "versão revogada (CVE/regressão) não pode ser auto-aprovada");
     }
 }

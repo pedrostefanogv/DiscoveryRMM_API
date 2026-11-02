@@ -235,37 +235,5 @@ public partial class DiscoveryDbContext
                 .HasForeignKey(state => state.AgentId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
-
-        // Catálogo de apps de terceiros (WU-21/D24, M251).
-        modelBuilder.Entity<AppCatalogEntry>(entity =>
-        {
-            entity.ToTable("app_catalog_entries");
-            entity.HasKey(entry => entry.Id);
-            entity.HasIndex(entry => new { entry.Source, entry.PackageId, entry.Version })
-                .IsUnique()
-                .HasDatabaseName("ux_app_catalog_entries_pkg_version");
-            entity.HasIndex(entry => entry.Status).HasDatabaseName("ix_app_catalog_entries_status");
-
-            entity.Property(entry => entry.Id).HasColumnName("id").ValueGeneratedNever();
-            entity.Property(entry => entry.Source).HasColumnName("source").HasMaxLength(20);
-            entity.Property(entry => entry.PackageId).HasColumnName("package_id").HasMaxLength(200);
-            entity.Property(entry => entry.Name).HasColumnName("name").HasMaxLength(300);
-            entity.Property(entry => entry.Publisher).HasColumnName("publisher").HasMaxLength(200);
-            entity.Property(entry => entry.Version).HasColumnName("version").HasMaxLength(100);
-            entity.Property(entry => entry.InstallerUrl).HasColumnName("installer_url").HasMaxLength(2000);
-            entity.Property(entry => entry.Sha256).HasColumnName("sha256").HasMaxLength(64);
-            entity.Property(entry => entry.InstallerType).HasColumnName("installer_type").HasMaxLength(20);
-            entity.Property(entry => entry.SilentArgs).HasColumnName("silent_args").HasMaxLength(500);
-            entity.Property(entry => entry.ProductCode).HasColumnName("product_code").HasMaxLength(100);
-            entity.Property(entry => entry.Status).HasColumnName("status").HasMaxLength(20);
-            entity.Property(entry => entry.ReleaseDate).HasColumnName("release_date").HasColumnType("timestamptz");
-            entity.Property(entry => entry.Notes).HasColumnName("notes").HasMaxLength(1000);
-            entity.Property(entry => entry.CuratedBy).HasColumnName("curated_by").HasMaxLength(200);
-            entity.Property(entry => entry.CuratedAt).HasColumnName("curated_at").HasColumnType("timestamptz");
-            entity.Property(entry => entry.RevokedBy).HasColumnName("revoked_by").HasMaxLength(200);
-            entity.Property(entry => entry.RevokedAt).HasColumnName("revoked_at").HasColumnType("timestamptz");
-            entity.Property(entry => entry.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
-            entity.Property(entry => entry.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
-        });
     }
 }

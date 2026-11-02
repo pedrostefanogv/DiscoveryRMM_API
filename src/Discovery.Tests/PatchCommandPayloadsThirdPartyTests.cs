@@ -39,46 +39,6 @@ public class PatchCommandPayloadsThirdPartyTests
     }
 
     [Test]
-    public void InstallThirdPartyIncludesCatalogIntegrityWhenCurated()
-    {
-        var catalog = new Dictionary<string, AppCatalogEntry>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["googlechrome"] = new()
-            {
-                Id = Guid.NewGuid(),
-                Source = "choco",
-                PackageId = "googlechrome",
-                Name = "Google Chrome",
-                Version = "121.0",
-                InstallerUrl = "https://dl.google.com/chrome/121.msi",
-                Sha256 = new string('a', 64),
-                InstallerType = "msi",
-                SilentArgs = "/qn",
-                Status = "active"
-            }
-        };
-
-        var payload = PatchCommandPayloads.InstallThirdParty(
-            "choco",
-            [Update("choco:googlechrome", "choco"), Update("choco:7zip", "choco")],
-            catalogByAppId: catalog);
-
-        using var document = JsonDocument.Parse(payload);
-        var apps = document.RootElement.GetProperty("apps");
-
-        var chrome = apps[0];
-        Assert.That(chrome.GetProperty("id").GetString(), Is.EqualTo("googlechrome"));
-        Assert.That(chrome.GetProperty("installerUrl").GetString(), Is.EqualTo("https://dl.google.com/chrome/121.msi"));
-        Assert.That(chrome.GetProperty("sha256").GetString(), Has.Length.EqualTo(64));
-        Assert.That(chrome.GetProperty("silentArgs").GetString(), Is.EqualTo("/qn"));
-        Assert.That(chrome.GetProperty("installerType").GetString(), Is.EqualTo("msi"));
-
-        var sevenZip = apps[1];
-        Assert.That(sevenZip.TryGetProperty("sha256", out _), Is.False,
-            "app sem curadoria não leva metadados de integridade");
-    }
-
-    [Test]
     public void SplitBySourceSeparatesOsAndThirdParty()
     {
         var (os, thirdParty) = PatchCommandPayloads.SplitBySource(

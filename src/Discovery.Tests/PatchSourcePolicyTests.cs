@@ -62,4 +62,14 @@ public class PatchSourcePolicyTests
         Assert.That(PatchSourcePolicy.IsThirdPartySource("wua"), Is.False);
         Assert.That(PatchSourcePolicy.IsThirdPartySource(null), Is.False);
     }
+
+    [Test]
+    public void DoesNotClassifyMsiAsThirdPartySource()
+    {
+        // "msi" era a origem do catálogo próprio de download direto (WU-21).
+        // Sem catálogo curado, a origem não existe mais: aceitá-la aqui faria o
+        // consentimento de terceiros valer para uma origem que ninguém serve.
+        Assert.That(PatchSourcePolicy.IsThirdPartySource("msi"), Is.False);
+        Assert.That(PatchSourcePolicy.IsThirdPartySource("MSI"), Is.False);
+    }
 }

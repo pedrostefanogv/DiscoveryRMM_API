@@ -59,11 +59,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
             .Where(update => update.AgentId == agentId && update.IsPresent)
             .ToListAsync(ct);
 
-        // WU-21/D24: apps de terceiros só são auto-aprovados se a versão estiver
-        // no catálogo curado e ativa. Carrega uma vez por agente.
-        var catalogKeys = await LoadActiveCatalogKeysAsync(rows, ct);
-
-        return await ApplyAsync(agentId, rows, approvals, effectivePolicy, catalogKeys, ct);
+        return await ApplyAsync(agentId, rows, approvals, effectivePolicy, ct);
     }
 
     public async Task<int> RecomputeForGroupKeyAsync(string groupKey, CancellationToken ct = default)
@@ -170,37 +166,11 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         await db.SaveChangesAsync(ct);
     }
 
-    /// <summary>Chaves "source:packageId" ativas no catálogo curado (WU-21).</summary>
-    private async Task<IReadOnlySet<string>> LoadActiveCatalogKeysAsync(
-        IReadOnlyList<AgentWindowsUpdate> rows,
-        CancellationToken ct)
-    {
-        var sources = rows
-            .Where(row => PatchSourcePolicy.IsThirdPartySource(row.Source))
-            .Select(row => (row.Source ?? string.Empty).Trim().ToLowerInvariant())
-            .Distinct()
-            .ToList();
-        if (sources.Count == 0)
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        var entries = await db.AppCatalogEntries
-            .AsNoTracking()
-            .Where(entry => entry.Status == "active" && sources.Contains(entry.Source))
-            .Select(entry => new { entry.Source, entry.PackageId })
-            .ToListAsync(ct);
-
-        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries)
-            keys.Add((entry.Source ?? string.Empty).ToLowerInvariant() + ":" + (entry.PackageId ?? string.Empty).ToLowerInvariant());
-        return keys;
-    }
-
     private async Task<int> ApplyAsync(
         Guid agentId,
         IReadOnlyList<AgentWindowsUpdate> rows,
         IReadOnlyList<PatchApproval> approvals,
         PatchPolicy? policy,
-        IReadOnlySet<string> catalogKeys,
         CancellationToken ct)
     {
         var changed = 0;
@@ -208,7 +178,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
 
         foreach (var row in rows)
         {
-            var (state, source) = ResolveApproval(row, approvals, policy, now, catalogKeys);
+            var (state, source) = ResolveApproval(row, approvals, policy, now);
             var status = ResolveStatus(row, state);
 
             if (row.ApprovalState == state && row.ApprovalSource == source && row.Status == status)
@@ -234,8 +204,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         AgentWindowsUpdate update,
         IReadOnlyList<PatchApproval> approvals,
         PatchPolicy? policy,
-        DateTime now,
-        IReadOnlySet<string> catalogKeys)
+        DateTime now)
     {
         var candidates = approvals
             .Where(rule => string.Equals(rule.UpdateKey, update.GroupKey, StringComparison.OrdinalIgnoreCase))
@@ -255,7 +224,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         // Auto-aprovação por política passa antes pelo gate de deferral por
         // idade de publicação (D09). Regras explícitas acima NÃO são afetadas:
         // aprovação manual do operador vence o deferral por decisão de produto.
-        if (policy is not null && AutoApproveMatches(update, policy, catalogKeys))
+        if (policy is not null && AutoApproveMatches(update, policy))
         {
             // Deferral por idade só se aplica a update de OS: apps de terceiros
             // raramente têm data de publicação no inventário, e aplicar o gate
@@ -304,8 +273,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
 
     private static bool AutoApproveMatches(
         AgentWindowsUpdate update,
-        PatchPolicy policy,
-        IReadOnlySet<string> catalogKeys)
+        PatchPolicy policy)
     {
         // Consentimento de ORIGEM (WU-19/WU-20, D22): app de terceiros só é
         // auto-aprovado com duplo consentimento; update de OS respeita "os".
@@ -315,17 +283,8 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         {
             if (!PatchSourcePolicy.ThirdPartyConsented(policy.Sources, policy.AllowThirdPartyApps))
                 return false;
-            // WU-21/D24: só o caminho de DOWNLOAD DIRETO (msi) exige versão curada
-            // e ativa — ali hash/assinatura vêm do catálogo. winget/choco são
-            // gerenciadores de pacote e validam o próprio feed.
-            if (PatchSourcePolicy.RequiresCuratedCatalog(update.Source))
-            {
-                var appId = Discovery.Infrastructure.Cqrs.Patches.PatchCommandPayloads.ExtractAppId(update.UpdateKey);
-                var key = (update.Source ?? string.Empty).Trim().ToLowerInvariant() + ":" +
-                          appId.Trim().ToLowerInvariant();
-                if (!catalogKeys.Contains(key))
-                    return false;
-            }
+            // O gerenciador de pacote (choco/winget) e o download direto validam
+            // o próprio artefato: não há catálogo curado como pré-requisito.
         }
         else if (!PatchSourcePolicy.AllowsOs(policy.Sources))
         {

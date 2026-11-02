@@ -14,7 +14,7 @@ namespace Discovery.Migrations.Migrations;
 /// POST /api/v1/automation/tasks.
 ///
 /// Esta migration é idempotente e roda em qualquer ambiente, garantindo o estado
-/// final (tabelas ausentes). O catálogo oficial é `app_packages` (M251+).
+/// final (tabelas ausentes). O catálogo oficial é `app_packages` (M250).
 /// </summary>
 [Migration(20261231_255)]
 public class M255_DropLegacyAppStoreTablesIfPresent : Migration

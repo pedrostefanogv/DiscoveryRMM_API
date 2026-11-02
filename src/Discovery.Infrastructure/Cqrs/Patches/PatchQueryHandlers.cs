@@ -13,12 +13,12 @@ namespace Discovery.Infrastructure.Cqrs.Patches;
 
 /// <summary>
 /// Filtro de ORIGEM dos updates do agente: "windows" = so patches do SO
-/// (esconde choco/winget/msi), "third-party" = so apps de terceiros, null/"" =
+/// (esconde choco/winget), "third-party" = so apps de terceiros, null/"" =
 /// tudo. Fonte unica para a lista paginada e os contadores do snapshot.
 /// </summary>
 internal static class PatchSourceFilter
 {
-    private static readonly string[] ThirdPartySources = ["choco", "winget", "msi"];
+    private static readonly string[] ThirdPartySources = ["choco", "winget"];
 
     public static bool IsThirdParty(string? source) =>
         source is not null &&

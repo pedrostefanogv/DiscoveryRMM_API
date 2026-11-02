@@ -316,7 +316,6 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
     ISiteRepository siteRepo,
     IPatchRepository patchRepo,
     IPatchApprovalResolver resolver,
-    IAppCatalogRepository catalogRepo,
     IAgentCommandDispatcher dispatcher,
     IAutomationExecutionReportRepository reportRepo,
     IPatchEventPublisher events
@@ -414,16 +413,10 @@ public sealed class BulkAgentWindowsUpdateCommandHandler(
             foreach (var groupBySource in thirdPartyTargets.GroupBy(
                          update => (update.Source ?? string.Empty).ToLowerInvariant()))
             {
-                // WU-21: payload leva URL + SHA-256 do catálogo curado.
-                var appIds = groupBySource
-                    .Select(update => PatchCommandPayloads.ExtractAppId(update.UpdateKey))
-                    .ToList();
-                var catalogEntries = await catalogRepo.GetActiveEntriesForAsync(groupBySource.Key, appIds, ct);
                 var created = await PatchOperations.DispatchAsync(
                     dispatcher, reportRepo, cmd.AgentId,
                     PatchCommandPayloads.InstallThirdParty(
-                        groupBySource.Key, groupBySource.ToList(), 1800,
-                        PatchCommandPayloads.BuildCatalogMap(catalogEntries)),
+                        groupBySource.Key, groupBySource.ToList(), 1800),
                     AutomationExecutionSourceType.PatchInstall,
                     new { mode = "bulk-install", sources = new[] { groupBySource.Key }, updateKeys = groupBySource.Select(update => update.UpdateKey).ToList() },
                     null, ct);
@@ -689,7 +682,6 @@ public sealed class InstallPatchScopeCommandHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
     IConfigurationService configService,
-    IAppCatalogRepository catalogRepo,
     IAgentCommandDispatcher dispatcher,
     IAutomationExecutionReportRepository reportRepo
 ) : IRequestHandler<InstallPatchScopeCommand, Result<PatchDispatchDto>>
@@ -834,16 +826,10 @@ public sealed class InstallPatchScopeCommandHandler(
             foreach (var groupBySource in thirdPartyTargets.GroupBy(
                          update => (update.Source ?? string.Empty).ToLowerInvariant()))
             {
-                // WU-21: payload leva URL + SHA-256 do catálogo curado.
-                var appIds = groupBySource
-                    .Select(update => PatchCommandPayloads.ExtractAppId(update.UpdateKey))
-                    .ToList();
-                var catalogEntries = await catalogRepo.GetActiveEntriesForAsync(groupBySource.Key, appIds, ct);
                 var created = await PatchOperations.DispatchAsync(
                     dispatcher, reportRepo, group.Key,
                     PatchCommandPayloads.InstallThirdParty(
-                        groupBySource.Key, groupBySource.ToList(), 1800,
-                        PatchCommandPayloads.BuildCatalogMap(catalogEntries)),
+                        groupBySource.Key, groupBySource.ToList(), 1800),
                     AutomationExecutionSourceType.PatchInstall,
                     new
                     {

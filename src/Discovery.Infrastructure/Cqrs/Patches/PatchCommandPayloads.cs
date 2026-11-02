@@ -52,29 +52,11 @@ public static class PatchCommandPayloads
     public static string InstallThirdParty(
         string source,
         IEnumerable<AgentWindowsUpdate> updates,
-        int ttlSeconds = 1800,
-        IReadOnlyDictionary<string, AppCatalogEntry>? catalogByAppId = null)
+        int ttlSeconds = 1800)
     {
-        var apps = updates.Select(update =>
-        {
-            var appId = ExtractAppId(update.UpdateKey);
-            var item = new Dictionary<string, object?> { ["id"] = appId };
-
-            // WU-21/D24: quando a versão está no catálogo curado, o agente baixa
-            // do fornecedor e valida o SHA-256 antes de executar.
-            if (catalogByAppId is not null &&
-                catalogByAppId.TryGetValue(appId, out var entry) &&
-                !string.IsNullOrWhiteSpace(entry.InstallerUrl) &&
-                !string.IsNullOrWhiteSpace(entry.Sha256))
-            {
-                item["installerUrl"] = entry.InstallerUrl;
-                item["sha256"] = entry.Sha256;
-                item["silentArgs"] = entry.SilentArgs;
-                item["installerType"] = entry.InstallerType;
-            }
-
-            return item;
-        }).ToList();
+        var apps = updates
+            .Select(update => new Dictionary<string, object?> { ["id"] = ExtractAppId(update.UpdateKey) })
+            .ToList();
 
         return JsonSerializer.Serialize(new Dictionary<string, object?>
         {
@@ -84,22 +66,6 @@ public static class PatchCommandPayloads
             ["ttlSeconds"] = ttlSeconds,
             ["issuedAtUtc"] = DateTime.UtcNow.ToString("O")
         }, Options);
-    }
-
-    /// <summary>
-    /// Indexa entradas de catálogo por packageId (case-insensitive). A lista vem
-    /// ordenada por curadoria mais recente; a primeira ocorrência vence.
-    /// </summary>
-    public static Dictionary<string, AppCatalogEntry> BuildCatalogMap(IEnumerable<AppCatalogEntry> entries)
-    {
-        var map = new Dictionary<string, AppCatalogEntry>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in entries)
-        {
-            if (string.IsNullOrWhiteSpace(entry.PackageId))
-                continue;
-            map.TryAdd(entry.PackageId.Trim(), entry);
-        }
-        return map;
     }
 
     /// <summary>Separa alvos de OS (WUA) e de terceiros (choco/winget).</summary>

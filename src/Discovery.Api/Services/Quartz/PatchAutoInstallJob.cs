@@ -39,7 +39,6 @@ public sealed class PatchAutoInstallJob : IJob
         var redis = scope.ServiceProvider.GetRequiredService<IRedisService>();
         var dispatcher = scope.ServiceProvider.GetRequiredService<IAgentCommandDispatcher>();
         var reportRepo = scope.ServiceProvider.GetRequiredService<IAutomationExecutionReportRepository>();
-        var catalogRepo = scope.ServiceProvider.GetRequiredService<IAppCatalogRepository>();
 
         try
         {
@@ -160,21 +159,12 @@ public sealed class PatchAutoInstallJob : IJob
                     foreach (var groupBySource in thirdPartyTargets.GroupBy(
                                  update => (update.Source ?? string.Empty).ToLowerInvariant()))
                     {
-                        // WU-21: leva metadados do catálogo curado (URL+hash) para
-                        // o agente baixar do fornecedor e validar antes de executar.
-                        var appIds = groupBySource
-                            .Select(update => PatchCommandPayloads.ExtractAppId(update.UpdateKey))
-                            .ToList();
-                        var catalogEntries = await catalogRepo.GetActiveEntriesForAsync(
-                            groupBySource.Key, appIds, ct);
-                        var catalogMap = PatchCommandPayloads.BuildCatalogMap(catalogEntries);
-
                         var tpCommand = new AgentCommand
                         {
                             AgentId = agent.Id,
                             CommandType = CommandType.WindowsUpdate,
                             Payload = PatchCommandPayloads.InstallThirdParty(
-                                groupBySource.Key, groupBySource.ToList(), 1800, catalogMap)
+                                groupBySource.Key, groupBySource.ToList(), 1800)
                         };
                         var created = await dispatcher.DispatchAsync(tpCommand, ct);
                         await Discovery.Infrastructure.Cqrs.Agents.CommandHandlers.RunAutomationTaskCommandHandler.CreateReportAsync(

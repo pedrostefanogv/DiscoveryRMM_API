@@ -9,24 +9,24 @@ using Microsoft.EntityFrameworkCore;
 namespace Discovery.Infrastructure.Repositories;
 
 /// <summary>
-/// Repositório do gerenciador de patches (Windows Update).
+/// RepositÃ³rio do gerenciador de patches (Windows Update).
 ///
 /// Regras de escopo: todas as consultas de frota recebem a access list do
-/// usuário (HasGlobalAccess + AllowedClientIds) e filtram no SQL — nunca
+/// usuÃ¡rio (HasGlobalAccess + AllowedClientIds) e filtram no SQL â€” nunca
 /// confiar em scopeId vindo da query string.
 /// </summary>
 public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 {
     /// <summary>
-    /// Teto da página do agente (offset). Única fonte da verdade: o handler de
-    /// query usa esta constante no clamp, para a página nunca pedir mais linhas
-    /// do que o repositório devolve.
+    /// Teto da pÃ¡gina do agente (offset). Ãšnica fonte da verdade: o handler de
+    /// query usa esta constante no clamp, para a pÃ¡gina nunca pedir mais linhas
+    /// do que o repositÃ³rio devolve.
     /// </summary>
     public const int MaxPageSize = 200;
 
     private const int MaxLimit = 500;
 
-    // ── Agente ──────────────────────────────────────────────────────────────
+    // â”€â”€ Agente â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public async Task<AgentWindowsUpdatePageResult> GetAgentUpdatesPageAsync(
         Guid agentId,
@@ -48,8 +48,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         if (status.HasValue)
         {
-            // "pending"/"installed" são EIXOS de presença, não o status de
-            // aprovação: o resolver grava Status=Approved/Denied para
+            // "pending"/"installed" sÃ£o EIXOS de presenÃ§a, nÃ£o o status de
+            // aprovaÃ§Ã£o: o resolver grava Status=Approved/Denied para
             // pendentes aprovadas/recusadas, e filtrar Status==Pending sumia
             // com elas da aba (contador 2, lista vazia). "approved"/"denied"
             // continuam refinando por status.
@@ -61,22 +61,22 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             };
         }
 
-        // Filtro de origem (aba Atualizações do agente): "windows" esconde os
-        // apps de terceiros (choco/winget/msi) que o agente injeta no MESMO
-        // inventário de patches (WU-19/20) e que já aparecem em Programas —
-        // duplicados na aba. "third-party" mostra só eles; null = tudo.
+        // Filtro de origem (aba AtualizaÃ§Ãµes do agente): "windows" esconde os
+        // apps de terceiros (choco/winget) que o agente injeta no MESMO
+        // inventÃ¡rio de patches (WU-19/20) e que jÃ¡ aparecem em Programas â€”
+        // duplicados na aba. "third-party" mostra sÃ³ eles; null = tudo.
         switch (source?.Trim().ToLowerInvariant())
         {
             case "windows":
-                // NÃO usamos != exclusões diretas: com Source NULL (linhas antigas),
+                // NÃƒO usamos != exclusÃµes diretas: com Source NULL (linhas antigas),
                 // SQL avalia NULL != 'choco' como NULL e a linha SUMIRIA do filtro.
-                // Negação correta: tudo que não é de terceiros.
+                // NegaÃ§Ã£o correta: tudo que nÃ£o Ã© de terceiros.
                 query = query.Where(update =>
-                    !(update.Source == "choco" || update.Source == "winget" || update.Source == "msi"));
+                    !(update.Source == "choco" || update.Source == "winget"));
                 break;
             case "third-party":
                 query = query.Where(update =>
-                    update.Source == "choco" || update.Source == "winget" || update.Source == "msi");
+                    update.Source == "choco" || update.Source == "winget");
                 break;
         }
 
@@ -176,39 +176,39 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         if (validEntries.Count == 0)
         {
-            // Upload SEM lista: nada disso prova que as atualizações sumiram.
-            // Zera contadores e marca Superseded? Não — o inventário bom fica.
-            // Só os metadados do scan e a sonda de estado são atualizados.
+            // Upload SEM lista: nada disso prova que as atualizaÃ§Ãµes sumiram.
+            // Zera contadores e marca Superseded? NÃ£o â€” o inventÃ¡rio bom fica.
+            // SÃ³ os metadados do scan e a sonda de estado sÃ£o atualizados.
             await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
             return;
         }
 
         // O bulk de "marcar ausente" e o SaveChanges das linhas precisam ser
-        // ATÔMICOS: se o SaveChanges falhar depois do UPDATE, o inventário
-        // inteiro ficaria is_present=false no banco (aba vazia) até o próximo
-        // scan. Em provider relacional, tudo roda numa transação.
+        // ATÃ”MICOS: se o SaveChanges falhar depois do UPDATE, o inventÃ¡rio
+        // inteiro ficaria is_present=false no banco (aba vazia) atÃ© o prÃ³ximo
+        // scan. Em provider relacional, tudo roda numa transaÃ§Ã£o.
         //
-        // O pipeline MediatR (TransactionBehavior) já abre transação para TODO
-        // ICommand — inclusive este handler. Abrir uma segunda transação na
-        // mesma conexão lança "The connection is already in a transaction"
-        // (HTTP 500 em POST/PUT /agent-auth/me/windows-updates). Só criamos
-        // transação própria quando o repositório é chamado fora do pipeline.
+        // O pipeline MediatR (TransactionBehavior) jÃ¡ abre transaÃ§Ã£o para TODO
+        // ICommand â€” inclusive este handler. Abrir uma segunda transaÃ§Ã£o na
+        // mesma conexÃ£o lanÃ§a "The connection is already in a transaction"
+        // (HTTP 500 em POST/PUT /agent-auth/me/windows-updates). SÃ³ criamos
+        // transaÃ§Ã£o prÃ³pria quando o repositÃ³rio Ã© chamado fora do pipeline.
         var relational = db.Database.IsRelational();
         await using var transaction = relational && db.Database.CurrentTransaction is null
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
 
-        // Marca tudo como ausente (será reativado o que veio no payload). Em
-        // Postgres o bulk é 1 UPDATE; em providers sem ExecuteUpdate (InMemory dos
-        // testes) cai para o update das próprias entidades — mesmo resultado.
+        // Marca tudo como ausente (serÃ¡ reativado o que veio no payload). Em
+        // Postgres o bulk Ã© 1 UPDATE; em providers sem ExecuteUpdate (InMemory dos
+        // testes) cai para o update das prÃ³prias entidades â€” mesmo resultado.
         //
-        // ATENÇÃO: ExecuteUpdateAsync NÃO sincroniza o change tracker. Se as
+        // ATENÃ‡ÃƒO: ExecuteUpdateAsync NÃƒO sincroniza o change tracker. Se as
         // entidades fossem carregadas ANTES do bulk, elas continuariam com
-        // IsPresent=true na memória e o "row.IsPresent = true" do payload não
-        // viraria UPDATE — o inventário inteiro ficaria is_present=false no
+        // IsPresent=true na memÃ³ria e o "row.IsPresent = true" do payload nÃ£o
+        // viraria UPDATE â€” o inventÃ¡rio inteiro ficaria is_present=false no
         // banco (aba vazia) a cada reenvio. Por isso o bulk roda primeiro e as
-        // entidades são carregadas depois (valores frescos), com o tracker
-        // limpo para não reaproveitar instâncias antigas.
+        // entidades sÃ£o carregadas depois (valores frescos), com o tracker
+        // limpo para nÃ£o reaproveitar instÃ¢ncias antigas.
         if (relational)
         {
             await db.AgentWindowsUpdates
@@ -234,7 +234,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         // Todas as linhas do agente depois desta rodada (existentes + novas),
         // usadas para recalcular os contadores a partir do estado REAL das
-        // linhas — nunca do payload (que pode estar incompleto).
+        // linhas â€” nunca do payload (que pode estar incompleto).
         var rows = new List<AgentWindowsUpdate>(existing);
 
         var existingByKey = existing
@@ -262,31 +262,31 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             ApplyEntry(row, entry, reportedAt, now);
         }
 
-        // Rows que sumiram: mantém histórico (is_present=false) e marca
-        // Superseded quando estavam pendentes/aprovadas — evita "fantasma" na UI.
-        // Exceção: a linha de instalação antiga (guid) do MESMO KB que agora veio
-        // como instalada via QFE (kb:...) fica oculta para não duplicar a aba
+        // Rows que sumiram: mantÃ©m histÃ³rico (is_present=false) e marca
+        // Superseded quando estavam pendentes/aprovadas â€” evita "fantasma" na UI.
+        // ExceÃ§Ã£o: a linha de instalaÃ§Ã£o antiga (guid) do MESMO KB que agora veio
+        // como instalada via QFE (kb:...) fica oculta para nÃ£o duplicar a aba
         // "Instaladas".
         var installedGroupKeys = validEntries
             .Where(entry => entry.IsInstalled)
             .Select(BuildGroupKey)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // Scan parcial sem a lista de instaladas (QFE falhou): NÃO apagar as
-        // linhas instaladas — o silêncio não é prova de remoção.
+        // Scan parcial sem a lista de instaladas (QFE falhou): NÃƒO apagar as
+        // linhas instaladas â€” o silÃªncio nÃ£o Ã© prova de remoÃ§Ã£o.
         var preserveInstalled = string.Equals(scan.Status, "partial", StringComparison.OrdinalIgnoreCase) &&
                                 !validEntries.Any(entry => entry.IsInstalled);
 
         // Scan "partial" sem NENHUMA linha pendente: a busca WUA pode ter falhado
         // e a lista de pendentes veio vazia por erro. Marcar Superseded aqui
-        // apagaria pendências reais da aba — preserva e mantém o contador.
+        // apagaria pendÃªncias reais da aba â€” preserva e mantÃ©m o contador.
         var preservePending = string.Equals(scan.Status, "partial", StringComparison.OrdinalIgnoreCase) &&
                               !validEntries.Any(entry => entry.IsPending);
 
-        // Descartado por falha de LEITURA não é prova de remoção: se o scan
-        // contou itens "unreadable" (ou um motivo que o servidor não conhece),
-        // a lista veio incompleta e marcar Superseded criaria pendência fantasma
-        // ao contrário — apagaria da aba uma atualização que ainda existe.
+        // Descartado por falha de LEITURA nÃ£o Ã© prova de remoÃ§Ã£o: se o scan
+        // contou itens "unreadable" (ou um motivo que o servidor nÃ£o conhece),
+        // a lista veio incompleta e marcar Superseded criaria pendÃªncia fantasma
+        // ao contrÃ¡rio â€” apagaria da aba uma atualizaÃ§Ã£o que ainda existe.
         var scanIncomplete =
             (scan.SkippedReasons is not null &&
              scan.SkippedReasons.Any(reason =>
@@ -308,8 +308,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             }
 
             // Linha antiga do MESMO KB que veio como instalada via QFE: some da
-            // aba (não duplicar). Precisa vir ANTES do guard de leitura
-            // incompleta, senão a linha duplicada ressuscita quando o scan
+            // aba (nÃ£o duplicar). Precisa vir ANTES do guard de leitura
+            // incompleta, senÃ£o a linha duplicada ressuscita quando o scan
             // omite uma das duas.
             if (row.IsInstalled && installedGroupKeys.Contains(row.GroupKey))
             {
@@ -318,8 +318,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 continue;
             }
 
-            // Leitura incompleta também não apaga INSTALADAS ausentes: a linha
-            // sumiu do payload porque não foi possível lê-la, não porque foi
+            // Leitura incompleta tambÃ©m nÃ£o apaga INSTALADAS ausentes: a linha
+            // sumiu do payload porque nÃ£o foi possÃ­vel lÃª-la, nÃ£o porque foi
             // desinstalada.
             if (row.IsInstalled && scanIncomplete)
             {
@@ -335,8 +335,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             {
                 row.IsPresent = true;
                 // Linha que tinha sido marcada Superseded num scan anterior e
-                // reaparece (ainda pendente): volta a ser pendente de verdade —
-                // senão ela entra no contador e no "aprovar em lote" mas some da
+                // reaparece (ainda pendente): volta a ser pendente de verdade â€”
+                // senÃ£o ela entra no contador e no "aprovar em lote" mas some da
                 // lista status=pending.
                 if (row.Status == PatchUpdateStatus.Superseded)
                     row.Status = PatchUpdateStatus.Pending;
@@ -362,9 +362,9 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         snapshot.ScanError = scan.ErrorCode;
         ApplyScanDiagnostics(snapshot, scan);
 
-        // Contadores calculados a partir das LINHAS (preservadas + payload), não
+        // Contadores calculados a partir das LINHAS (preservadas + payload), nÃ£o
         // do payload: scan parcial ou incompleto ("unreadable") preserva linhas,
-        // e contar só o que veio deixaria a aba com número menor que a tabela
+        // e contar sÃ³ o que veio deixaria a aba com nÃºmero menor que a tabela
         // (e vice-versa quando chegam itens novos junto de uma leitura falha).
         snapshot.PendingCount = rows.Count(row =>
             row.IsPresent && row.IsPending && row.Status != PatchUpdateStatus.Superseded);
@@ -373,8 +373,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         if (pendingReboot is not null)
         {
-            // Mesmo filtro do badge em /agents: só motivos de update acendem
-            // "Reinício pendente"; reasons completos ficam gravados.
+            // Mesmo filtro do badge em /agents: sÃ³ motivos de update acendem
+            // "ReinÃ­cio pendente"; reasons completos ficam gravados.
             snapshot.PendingReboot = pendingReboot.Pending && PatchPendingRebootReasons.HasPrimary(pendingReboot.Reasons);
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(pendingReboot.Reasons?.ToArray());
             snapshot.RebootCheckedAt = pendingReboot.CheckedAt?.ToUniversalTime() ?? now;
@@ -393,13 +393,13 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     /// <summary>
     /// Aplica um upload DELTA escrevendo APENAS as linhas tocadas (WU-13).
     ///
-    /// O caminho completo marca tudo ausente e reescreve o inventário inteiro —
-    /// correto, porém caro quando o agente manda um diff pequeno. Aqui:
-    ///  • somente os itens alterados são gravados (upsert por update_key);
-    ///  • somente as chaves em <c>removedKeys</c> são avaliadas para remoção;
-    ///  • as MESMAS guardas do caminho completo valem para remoção (scan parcial
+    /// O caminho completo marca tudo ausente e reescreve o inventÃ¡rio inteiro â€”
+    /// correto, porÃ©m caro quando o agente manda um diff pequeno. Aqui:
+    ///  â€¢ somente os itens alterados sÃ£o gravados (upsert por update_key);
+    ///  â€¢ somente as chaves em <c>removedKeys</c> sÃ£o avaliadas para remoÃ§Ã£o;
+    ///  â€¢ as MESMAS guardas do caminho completo valem para remoÃ§Ã£o (scan parcial
     ///    ou leitura incompleta nunca apaga linha);
-    ///  • delta que esvaziaria o inventário é ignorado (semântica de upload vazio).
+    ///  â€¢ delta que esvaziaria o inventÃ¡rio Ã© ignorado (semÃ¢ntica de upload vazio).
     /// </summary>
     public async Task ApplyInventoryDeltaAsync(
         Guid agentId,
@@ -422,7 +422,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         var removed = new HashSet<string>(
             (removedKeys ?? []).Where(key => !string.IsNullOrWhiteSpace(key)),
             StringComparer.OrdinalIgnoreCase);
-        // Mudança e remoção do MESMO item: o payload manda (evita apagar o que
+        // MudanÃ§a e remoÃ§Ã£o do MESMO item: o payload manda (evita apagar o que
         // acabou de chegar).
         removed.ExceptWith(validEntries.Select(entry => entry.UpdateKey));
 
@@ -433,7 +433,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         if (validEntries.Count == 0 && (removed.Count == 0 || presentRows <= removed.Count))
         {
-            // Delta que esvaziaria o inventário: nada prova que tudo sumiu.
+            // Delta que esvaziaria o inventÃ¡rio: nada prova que tudo sumiu.
             await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
             return;
         }
@@ -464,12 +464,12 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         var relational = db.Database.IsRelational();
         // Mesmo motivo do caminho completo: se o TransactionBehavior do pipeline
-        // já abriu transação, reutilizamos a dele em vez de abrir outra.
+        // jÃ¡ abriu transaÃ§Ã£o, reutilizamos a dele em vez de abrir outra.
         await using var transaction = relational && db.Database.CurrentTransaction is null
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
 
-        // Guardas idênticas às do caminho completo.
+        // Guardas idÃªnticas Ã s do caminho completo.
         var scanIncomplete =
             (scan.SkippedReasons is not null &&
              scan.SkippedReasons.Any(reason =>
@@ -489,7 +489,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
             if (row.IsInstalled)
             {
-                // Leitura incompleta/scan parcial não é prova de desinstalação.
+                // Leitura incompleta/scan parcial nÃ£o Ã© prova de desinstalaÃ§Ã£o.
                 if (preserveInstalled || scanIncomplete)
                     continue;
                 row.IsPresent = false;
@@ -516,8 +516,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         if (transaction is not null)
             await transaction.CommitAsync(ct);
 
-        // Metadados/sonda + contadores (consultados do banco: só as linhas
-        // tocadas foram reescritas, então não há lista em memória confiável).
+        // Metadados/sonda + contadores (consultados do banco: sÃ³ as linhas
+        // tocadas foram reescritas, entÃ£o nÃ£o hÃ¡ lista em memÃ³ria confiÃ¡vel).
         await UpdateScanStatusAsync(agentId, scan, pendingReboot, serviceState, ct);
         await RecomputeSnapshotCountersAsync(agentId, ct);
     }
@@ -525,8 +525,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     /// <summary>Recalcula contadores do snapshot a partir das linhas persistidas.</summary>
     private async Task RecomputeSnapshotCountersAsync(Guid agentId, CancellationToken ct)
     {
-        // Duas contagens simples (não GroupBy com constante: tradução em SQL é
-        // frágil entre providers).
+        // Duas contagens simples (nÃ£o GroupBy com constante: traduÃ§Ã£o em SQL Ã©
+        // frÃ¡gil entre providers).
         var presentRows = db.AgentWindowsUpdates
             .AsNoTracking()
             .Where(update => update.AgentId == agentId && update.IsPresent);
@@ -548,7 +548,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
     /// <summary>
     /// Aplica um item do payload na linha persistida. Compartilhado entre o
-    /// caminho completo e o delta para as duas rotas não divergirem.
+    /// caminho completo e o delta para as duas rotas nÃ£o divergirem.
     /// </summary>
     private static void ApplyEntry(
         AgentWindowsUpdate row,
@@ -578,7 +578,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         row.SupportUrl = entry.SupportUrl;
         row.PublishedAt = entry.PublishedAt;
         row.LastDeployedAt = entry.LastDeployedAt;
-        // InstalledAt é corrigível (locale do QFE/WMI): omissão mantém o valor.
+        // InstalledAt Ã© corrigÃ­vel (locale do QFE/WMI): omissÃ£o mantÃ©m o valor.
         if (entry.InstalledAt.HasValue)
             row.InstalledAt = entry.InstalledAt;
         row.ReportedAt = reportedAt;
@@ -673,7 +673,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         };
         await ApplyAgentPendingRebootAsync(agentId, meta, DateTime.UtcNow, ct);
 
-        // Mesmo filtro do badge: só motivos de update acendem "Reinício pendente".
+        // Mesmo filtro do badge: sÃ³ motivos de update acendem "ReinÃ­cio pendente".
         var badgePending = pending && PatchPendingRebootReasons.HasPrimary(reasons);
 
         var snapshot = await db.AgentWindowsUpdateSnapshots
@@ -683,8 +683,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             snapshot.PendingReboot = badgePending;
             snapshot.PendingRebootReasons = PatchJson.SerializeStringArray(reasons.ToArray());
             snapshot.RebootCheckedAt = checkedAt.Kind == DateTimeKind.Utc ? checkedAt : checkedAt.ToUniversalTime();
-            // Sem reinício pendente a decisão da política deixa de valer: limpar
-            // evita a UI mostrar "notificar operador" para uma máquina já reiniciada.
+            // Sem reinÃ­cio pendente a decisÃ£o da polÃ­tica deixa de valer: limpar
+            // evita a UI mostrar "notificar operador" para uma mÃ¡quina jÃ¡ reiniciada.
             if (!badgePending)
             {
                 snapshot.RebootAction = null;
@@ -728,9 +728,9 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     }
 
     /// <summary>
-    /// Grava o diagnóstico do scan (bloco opcional "scan"). O código do erro
+    /// Grava o diagnÃ³stico do scan (bloco opcional "scan"). O cÃ³digo do erro
     /// acompanha o status (limpa em scan ok, como <c>ScanError</c>); os demais
-    /// campos são preservados quando o agente não os envia.
+    /// campos sÃ£o preservados quando o agente nÃ£o os envia.
     /// </summary>
     private static void ApplyScanDiagnostics(AgentWindowsUpdateSnapshot snapshot, PatchScanMeta scan)
     {
@@ -738,7 +738,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         if (scan.SkippedCount.HasValue)
         {
             snapshot.SkippedCount = scan.SkippedCount.Value;
-            // Contador zerado LIMPA os motivos antigos: senão a aba mostraria
+            // Contador zerado LIMPA os motivos antigos: senÃ£o a aba mostraria
             // "0 ignorados (drivers fora do escopo: 2)" para sempre.
             if (scan.SkippedCount.Value == 0)
                 snapshot.SkippedReasons = null;
@@ -773,12 +773,12 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             snapshot.LastInstallSuccessAt = state.LastInstallSuccessAt.Value.ToUniversalTime();
         if (state.DownloadInProgress.HasValue)
             snapshot.DownloadInProgress = state.DownloadInProgress.Value;
-        // Campos de POLÍTICA (WSUS/AU/deferral/horas ativas) têm semântica
-        // diferente dos demais: "ausente" pode significar "a política saiu da
-        // máquina". O agente manda policyKnown=true quando conseguiu ler a
-        // política (inclusive "nenhuma configurada") — nesse caso atribuímos o
+        // Campos de POLÃTICA (WSUS/AU/deferral/horas ativas) tÃªm semÃ¢ntica
+        // diferente dos demais: "ausente" pode significar "a polÃ­tica saiu da
+        // mÃ¡quina". O agente manda policyKnown=true quando conseguiu ler a
+        // polÃ­tica (inclusive "nenhuma configurada") â€” nesse caso atribuÃ­mos o
         // valor, inclusive vazio/zero, para a UI parar de mostrar WSUS/deferral
-        // que não existem mais. Sem policyKnown (agente antigo/leitura falhou)
+        // que nÃ£o existem mais. Sem policyKnown (agente antigo/leitura falhou)
         // vale a regra conservadora: nunca apagar o valor conhecido.
         if (state.PolicyKnown == true)
         {
@@ -791,7 +791,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         }
         else
         {
-            // wsusServer vazio ("não configurado") nunca apaga um servidor conhecido.
+            // wsusServer vazio ("nÃ£o configurado") nunca apaga um servidor conhecido.
             if (!string.IsNullOrWhiteSpace(state.WsusServer))
                 snapshot.WsusServer = state.WsusServer;
             if (state.AuOptions.HasValue)
@@ -807,9 +807,9 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         }
         if (state.QfeInstalledCount.HasValue)
             snapshot.QfeInstalledCount = state.QfeInstalledCount.Value;
-        // Percentual só existe enquanto há download: quando a sonda diz que o
-        // download terminou, o valor antigo é limpo (senão a UI mostraria
-        // "42%" de um download que já acabou).
+        // Percentual sÃ³ existe enquanto hÃ¡ download: quando a sonda diz que o
+        // download terminou, o valor antigo Ã© limpo (senÃ£o a UI mostraria
+        // "42%" de um download que jÃ¡ acabou).
         if (state.DownloadInProgress == false)
             snapshot.DownloadPercent = null;
         else if (state.DownloadPercent.HasValue)
@@ -832,7 +832,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
         // Badge em /agents: somente motivos principais (updates a instalar).
         // Motivos residuais (file_rename/computer_rename) ficam gravados nos
-        // reasons para o painel de detalhes, mas não acendem o badge.
+        // reasons para o painel de detalhes, mas nÃ£o acendem o badge.
         agent.PendingReboot = meta.Pending && PatchPendingRebootReasons.HasPrimary(meta.Reasons);
         agent.PendingRebootReasons = PatchJson.SerializeStringArray(meta.Reasons?.ToArray());
         agent.PendingRebootCheckedAt = meta.CheckedAt?.ToUniversalTime() ?? now;
@@ -900,8 +900,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             if (status == PatchUpdateStatus.Installing)
                 row.InstallStartedAt = now;
 
-            // Instalação confirmada pelo agente: a linha deixa de ser pendente.
-            // O próximo scan cria/atualiza a linha de "instalada" via QFE.
+            // InstalaÃ§Ã£o confirmada pelo agente: a linha deixa de ser pendente.
+            // O prÃ³ximo scan cria/atualiza a linha de "instalada" via QFE.
             if (status == PatchUpdateStatus.Installed)
             {
                 row.IsPending = false;
@@ -914,25 +914,6 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             }
         }
         await db.SaveChangesAsync(ct);
-    }
-
-    public async Task<IReadOnlyList<string>> GetThirdPartyAppKeysAsync(int limit, CancellationToken ct = default)
-    {
-        var take = Math.Clamp(limit <= 0 ? 200 : limit, 1, 1000);
-        var rows = await db.AgentWindowsUpdates
-            .AsNoTracking()
-            .Where(update => update.IsPresent &&
-                             (update.Source == "choco" || update.Source == "winget"))
-            .Select(update => new { update.UpdateKey })
-            .Distinct()
-            .Take(take)
-            .ToListAsync(ct);
-
-        return rows
-            .Select(row => row.UpdateKey)
-            .Where(key => !string.IsNullOrWhiteSpace(key))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
     }
 
     public async Task RecordInstallFailureAsync(
@@ -958,15 +939,15 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             row.InstallError = error;
             row.FailureClass = failureClass;
             row.AttemptCount += 1;
-            // O backoff depende do número de falhas JÁ registradas (WU-08):
-            // só classe transient agenda nova tentativa; as demais exigem ação.
+            // O backoff depende do nÃºmero de falhas JÃ registradas (WU-08):
+            // sÃ³ classe transient agenda nova tentativa; as demais exigem aÃ§Ã£o.
             row.NextAttemptAt = PatchFailureClassifier.NextAttemptAt(failureClass, row.AttemptCount, now);
             row.UpdatedAt = now;
         }
         await db.SaveChangesAsync(ct);
     }
 
-    // ── Frota ───────────────────────────────────────────────────────────────
+    // â”€â”€ Frota â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private IQueryable<PatchRowContext> BuildScopedRows(
         Guid? clientId,
@@ -1207,7 +1188,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 SiteName = group.Key.SiteName,
                 ClientId = group.Key.ClientId,
                 ClientName = group.Key.ClientName,
-                // Pendentes "acionáveis" (recusadas ficam no contador próprio).
+                // Pendentes "acionÃ¡veis" (recusadas ficam no contador prÃ³prio).
                 PendingCount = group.Count(row => row.update.ApprovalState != PatchApprovalState.Denied),
                 CriticalCount = group.Count(row => row.update.ApprovalState != PatchApprovalState.Denied &&
                     row.update.Severity != null &&
@@ -1233,9 +1214,9 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         var pendingQuery = BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
             .Where(row => row.Update.IsPending);
 
-        // Conformidade mede o que está PENDENTE E NÃO BLOQUEADO: um KB recusado
-        // de propósito pelo operador não pode derrubar o percentual da frota
-        // (decisão do produto). Recusados continuam em contador próprio/tile.
+        // Conformidade mede o que estÃ¡ PENDENTE E NÃƒO BLOQUEADO: um KB recusado
+        // de propÃ³sito pelo operador nÃ£o pode derrubar o percentual da frota
+        // (decisÃ£o do produto). Recusados continuam em contador prÃ³prio/tile.
         var actionableQuery = pendingQuery
             .Where(row => row.Update.ApprovalState != PatchApprovalState.Denied);
 
@@ -1365,7 +1346,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         return await query.Select(row => row.agent.Id).Take(safeLimit).ToListAsync(ct);
     }
 
-    // ── Aprovações ──────────────────────────────────────────────────────────
+    // â”€â”€ AprovaÃ§Ãµes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public async Task<IReadOnlyList<PatchApproval>> GetApprovalsAsync(
         PatchApprovalScopeType? scopeType,
@@ -1514,7 +1495,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 (rule.ScopeType == PatchApprovalScopeType.Agent && rule.AgentId == agentId))
             .ToListAsync(ct);
 
-    // ── Políticas ───────────────────────────────────────────────────────────
+    // â”€â”€ PolÃ­ticas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public Task<PatchPolicy?> GetPolicyAsync(
         PatchApprovalScopeType scopeType,
@@ -1565,7 +1546,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     public async Task<IReadOnlyList<PatchPolicy>> GetPoliciesAsync(CancellationToken ct = default)
         => await db.PatchPolicies.AsNoTracking().OrderBy(policy => policy.ScopeType).ToListAsync(ct);
 
-    // ── Enforcement no SO ───────────────────────────────────────────────────
+    // â”€â”€ Enforcement no SO â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     public async Task<PatchOsState> SaveOsStateAsync(PatchOsState state, CancellationToken ct = default)
     {
@@ -1603,7 +1584,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         await db.SaveChangesAsync(ct);
     }
 
-    // ── Helpers ─────────────────────────────────────────────────────────────
+    // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     private static string BuildGroupKey(AgentWindowsUpdateEntry entry)
     {
@@ -1627,10 +1608,10 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     }
 
     /// <summary>
-    /// Projeção intermediária das consultas de frota. É uma CLASSE com
-    /// inicializador de objeto (não record com construtor): o EF compõe filtros
-    /// sobre projeções de inicializador de forma previsível — projeções por
-    /// construtor em query intermediária correm risco de "could not be translated".
+    /// ProjeÃ§Ã£o intermediÃ¡ria das consultas de frota. Ã‰ uma CLASSE com
+    /// inicializador de objeto (nÃ£o record com construtor): o EF compÃµe filtros
+    /// sobre projeÃ§Ãµes de inicializador de forma previsÃ­vel â€” projeÃ§Ãµes por
+    /// construtor em query intermediÃ¡ria correm risco de "could not be translated".
     /// </summary>
     private sealed class PatchRowContext
     {

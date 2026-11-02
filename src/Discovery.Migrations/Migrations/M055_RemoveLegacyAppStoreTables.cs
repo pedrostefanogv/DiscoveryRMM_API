@@ -22,7 +22,7 @@ public class M055_RemoveLegacyAppStoreTables : Migration
     /// de 2026-10-31 (42501 permission denied → 25P02 → HTTP 500 no POST de
     /// automation task).
     ///
-    /// Como o catálogo oficial agora é `app_packages` (M251+) e o mapeamento EF das
+    /// Como o catálogo oficial agora é `app_packages` (M250) e o mapeamento EF das
     /// tabelas legadas foi removido, um rollback não deve ressuscitá-las: Down é no-op.
     /// Para reverter de verdade, restaure um backup anterior à M055.
     /// </summary>

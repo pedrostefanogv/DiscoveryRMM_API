@@ -365,15 +365,15 @@ public static class WindowsUpdateInventoryParser
     }
 
     /// <summary>
-    /// Chaves canônicas de apps de terceiros (WU-19/WU-20): "choco:&lt;id&gt;",
-    /// "winget:&lt;id&gt;" e "msi:&lt;id&gt;". Antes eram descartadas pelo parser
+    /// Chaves canônicas de apps de terceiros (WU-19/WU-20): "choco:&lt;id&gt;"
+    /// e "winget:&lt;id&gt;". Antes eram descartadas pelo parser
     /// (o agente contava o pendente, mas a API não gravava a linha). O ID é
     /// validado aqui apenas como transporte: o agente revalida por allowlist
     /// antes de usá-lo como argumento de processo.
     /// </summary>
     private static string? NormalizeThirdPartyKey(string key)
     {
-        foreach (var source in new[] { "choco", "winget", "msi" })
+        foreach (var source in new[] { "choco", "winget" })
         {
             var prefix = source + ":";
             if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

@@ -57,7 +57,10 @@ public class MigrationIntegrityTests
     /// </summary>
     // 239 e 240: reservadas para outro agente (não criadas neste checkout ainda);
     // M241/M242 (audit chain e runbook) preenchem 241-242.
-    private static readonly int[] KnownVersionGaps = { 25, 26, 27, 28, 29, 147, 148, 149, 150, 151, 189, 190, 237, 239, 240 };
+    // 251: M251_CreateAppCatalogEntries removida junto com o catálogo curado de
+    // apps de terceiros (WU-21). Bancos que já a aplicaram mantêm o registro
+    // órfão no VersionInfo; a M258 (DROP ... IF EXISTS) garante o estado final.
+    private static readonly int[] KnownVersionGaps = { 25, 26, 27, 28, 29, 147, 148, 149, 150, 151, 189, 190, 237, 239, 240, 251 };
 
     [Test]
     public void Migration_versions_have_no_undocumented_gaps()
