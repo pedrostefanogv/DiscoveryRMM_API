@@ -191,6 +191,7 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.DecommissionAgent => TryNormalizeDecommission(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.TicketChatInvite => TryNormalizeTicketChatInvite(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.WindowsUpdate => TryNormalizeWindowsUpdate(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.SoftwareInstall => TryNormalizeSoftwareInstall(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
@@ -1173,6 +1174,73 @@ public sealed class SpecialCommandPayloadValidator
             }
 
             installationType = providedSource.Trim().ToLowerInvariant().Contains("choco") ? "chocolatey" : "winget";
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["packageId"] = packageId,
+            ["installationType"] = installationType,
+            ["source"] = installationType
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, JsonOptions);
+        return true;
+    }
+
+    /// <summary>
+    /// Normaliza o comando de instalação de um app do catálogo da loja: exige
+    /// packageId e canonicaliza installationType/source para
+    /// winget|chocolatey|custom (diferente de update/uninstall, o tipo custom é
+    /// preservado — ele define a execução do instalador publicado).
+    /// </summary>
+    private static bool TryNormalizeSoftwareInstall(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!TryGetRequiredString(payload, "packageId", out var packageId, out validationError))
+            return false;
+
+        packageId = packageId.Trim();
+        if (packageId.Length == 0)
+        {
+            validationError = "field 'packageId' must be a non-empty string.";
+            return false;
+        }
+
+        static string CanonicalizeSource(string value)
+        {
+            var normalized = value.Trim().ToLowerInvariant();
+            if (normalized.Contains("choco"))
+                return "chocolatey";
+            if (normalized.Contains("custom"))
+                return "custom";
+            return "winget";
+        }
+
+        var installationType = "winget";
+        if (payload.TryGetProperty("installationType", out var typeElement) && typeElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(typeElement, out var providedType))
+            {
+                validationError = "field 'installationType' must be a string.";
+                return false;
+            }
+
+            installationType = CanonicalizeSource(providedType);
+        }
+        else if (payload.TryGetProperty("source", out var sourceElement) && sourceElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!TryReadString(sourceElement, out var providedSource))
+            {
+                validationError = "field 'source' must be a string.";
+                return false;
+            }
+
+            installationType = CanonicalizeSource(providedSource);
         }
 
         var normalized = new Dictionary<string, object?>

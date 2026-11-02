@@ -43,5 +43,10 @@ public enum CommandType
 
     // Gerenciador de patches do Windows (WUA): scan, instalação seletiva,
     // hide/unhide e aplicação/rollback de política de Windows Update.
-    WindowsUpdate = 24
+    WindowsUpdate = 24,
+
+    // Instalação de um aplicativo do catálogo da loja (winget/choco/custom) que
+    // ainda não existe na máquina. Disparada pela aba Aplicativos do detalhe do
+    // agent; o pacote é identificado pelo payload (não há inventário prévio).
+    SoftwareInstall = 25
 }

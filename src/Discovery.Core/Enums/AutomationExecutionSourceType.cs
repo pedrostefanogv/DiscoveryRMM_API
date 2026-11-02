@@ -12,5 +12,8 @@ public enum AutomationExecutionSourceType
     // Gerenciador de patches do Windows (WUA).
     PatchScan = 6,
     PatchInstall = 7,
-    PatchOsPolicy = 8
+    PatchOsPolicy = 8,
+    // Instalação de app do catálogo da loja a partir do detalhe do agent
+    // (pacote ainda não instalado na máquina).
+    SoftwareInstall = 9
 }
