@@ -25,6 +25,11 @@ public record ScheduledTaskActionRequest(string Action, string TaskName, string?
 public record SoftwareInventoryReportRequest(DateTime? CollectedAt, List<SoftwareInventoryItemRequest>? Software);
 public record SoftwareInventoryItemRequest(string Name, string? Version, string? Publisher, string? InstallId, string? Serial, string? Source, string? InstallDate, string? InstallSource, string? AvailableVersion = null, bool UpdateAvailable = false, string? UpdateSource = null, string? UpdatePackageId = null);
 public record UpdateSoftwareRequest(bool ConfirmUnapproved = false);
+/// <summary>
+/// Instala um app do catálogo da loja que ainda não está na máquina. Sem
+/// InventoryId: o pacote vem do catálogo (packageId + tipo de instalação).
+/// </summary>
+public record InstallSoftwareRequest(string PackageId, AppInstallationType InstallationType = AppInstallationType.Winget, bool? ConfirmUnapproved = null);
 public record UpsertAgentCustomFieldValueRequest(JsonElement Value);
 public record SendFanoutCommandRequest(CommandType CommandType, string Payload, DateTime? ExpiresAtUtc = null, string? IdempotencyKey = null, Guid? CommandId = null);
 public record FanoutDispatchResponse(Guid DispatchId, string Subject, string TargetScope, Guid? TargetClientId, Guid? TargetSiteId, DateTime IssuedAtUtc, DateTime? ExpiresAtUtc, string IdempotencyKey);

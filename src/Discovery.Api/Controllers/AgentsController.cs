@@ -519,6 +519,37 @@ public class AgentsController : ControllerBase
     }
 
     /// <summary>
+    /// Instala no agent um aplicativo do catálogo da loja (winget/chocolatey/
+    /// custom) que ainda não está na máquina. Sem inventoryId: a identidade vem
+    /// do catálogo (packageId + tipo de instalação).
+    /// </summary>
+    [HttpPost("{id:guid}/software/install")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> InstallSoftware(
+        Guid id,
+        [FromBody] InstallSoftwareRequest? request = null,
+        CancellationToken ct = default)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.PackageId))
+            return BadRequest(new { error = "O identificador do pacote é obrigatório." });
+
+        var result = await _mediator.Send(
+            new InstallAgentSoftwareCommand(
+                id, request.PackageId, request.InstallationType, request.ConfirmUnapproved ?? false),
+            ct);
+
+        return result.Match<IActionResult>(
+            success: _ => Accepted(new { success = true, dispatched = true }),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                // Pacote bloqueado pela loja: exige confirmação explícita.
+                "Conflict" => Conflict(new { requiresConfirmation = true, error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
+    }
+
+    /// <summary>
     /// Desinstala um aplicativo instalado no agent. O agent resolve a
     /// estratégia (gerenciador → MSI ProductCode → UninstallString).
     /// </summary>

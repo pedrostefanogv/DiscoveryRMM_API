@@ -259,6 +259,124 @@ public class SpecialCommandPayloadValidatorTests
     }
 
     [Test]
+    public void SoftwareInstall_ShouldRequirePackageIdAndNormalizeType()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "packageId": "  Google.Chrome  ",
+              "installationType": "Chocolatey"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.SoftwareInstall, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            // packageId chega aparado e o tipo é canonicalizado para o valor wire do agent.
+            Assert.That(json.RootElement.GetProperty("packageId").GetString(), Is.EqualTo("Google.Chrome"));
+            Assert.That(json.RootElement.GetProperty("installationType").GetString(), Is.EqualTo("chocolatey"));
+            Assert.That(json.RootElement.GetProperty("source").GetString(), Is.EqualTo("chocolatey"));
+        });
+    }
+
+    [Test]
+    public void SoftwareInstall_ShouldPreserveCustomType()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "packageId": "meu.instalador",
+              "installationType": "custom"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.SoftwareInstall, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            // Custom é preservado: o agent usa o instalador publicado, não o gerenciador.
+            Assert.That(json.RootElement.GetProperty("installationType").GetString(), Is.EqualTo("custom"));
+            Assert.That(json.RootElement.GetProperty("source").GetString(), Is.EqualTo("custom"));
+        });
+    }
+
+    [Test]
+    public void SoftwareInstall_ShouldFallbackToSourceWhenTypeMissing()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var payload = """
+            {
+              "packageId": "Google.Chrome",
+              "source": "choco"
+            }
+            """;
+
+        var ok = validator.TryNormalize(CommandType.SoftwareInstall, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("installationType").GetString(), Is.EqualTo("chocolatey"));
+            Assert.That(json.RootElement.GetProperty("source").GetString(), Is.EqualTo("chocolatey"));
+        });
+    }
+
+    [Test]
+    public void SoftwareInstall_ShouldDefaultToWingetWhenTypeAndSourceMissing()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var ok = validator.TryNormalize(
+            CommandType.SoftwareInstall, """{"packageId":"Google.Chrome"}""",
+            out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.Multiple(() =>
+        {
+            Assert.That(json.RootElement.GetProperty("installationType").GetString(), Is.EqualTo("winget"));
+            Assert.That(json.RootElement.GetProperty("source").GetString(), Is.EqualTo("winget"));
+        });
+    }
+
+    [Test]
+    public void SoftwareInstall_ShouldRejectMissingPackageId()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var ok = validator.TryNormalize(CommandType.SoftwareInstall, """{"installationType":"winget"}""", out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("packageId"));
+    }
+
+    [Test]
+    public void SoftwareInstall_ShouldRejectNonStringInstallationType()
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        var ok = validator.TryNormalize(
+            CommandType.SoftwareInstall, """{"packageId":"Google.Chrome","installationType":3}""",
+            out _, out var error);
+
+        Assert.That(ok, Is.False);
+        Assert.That(error, Does.Contain("installationType"));
+    }
+
+    [Test]
     public void Decommission_ShouldAcceptEmptyPayloadAndNormalizeAuditFields()
     {
         var validator = new SpecialCommandPayloadValidator();

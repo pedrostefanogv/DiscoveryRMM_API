@@ -80,6 +80,82 @@ public sealed class UpdateAgentSoftwareCommandHandler(
     }
 }
 
+/// <summary>
+/// Instala no agent um pacote do catálogo da loja que ainda não está na máquina.
+/// Como não existe item de inventário, o pacote é identificado por
+/// packageId + tipo de instalação vindos do catálogo. A política de aprovação da
+/// loja é aplicada aqui (gate do servidor) e reforçada por
+/// <paramref name="InstallAgentSoftwareCommand.ConfirmUnapproved"/>.
+/// </summary>
+public sealed class InstallAgentSoftwareCommandHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IAppStoreService appStoreService,
+    IAgentCommandDispatcher dispatcher,
+    IAutomationExecutionReportRepository reportRepo
+) : IRequestHandler<InstallAgentSoftwareCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(InstallAgentSoftwareCommand cmd, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
+        if (agent is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var packageId = (cmd.PackageId ?? string.Empty).Trim();
+        if (packageId.Length == 0)
+            return Result<VoidResult>.Failure(Error.Validation("packageId",
+                "O identificador do pacote é obrigatório."));
+
+        var source = SourceFromInstallationType(cmd.InstallationType);
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var approved = await appStoreService.IsPackageApprovedAsync(
+            site?.ClientId, agent.SiteId, cmd.AgentId, cmd.InstallationType, packageId, ct);
+
+        if (!approved && !cmd.ConfirmUnapproved)
+        {
+            return Result<VoidResult>.Failure(Error.Conflict(
+                "Este aplicativo não está aprovado na loja para este agente. Confirme para instalar mesmo assim."));
+        }
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            packageId,
+            installationType = source,
+            source
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = cmd.AgentId,
+            CommandType = CommandType.SoftwareInstall,
+            Payload = payload
+        };
+        var created = await dispatcher.DispatchAsync(command, ct);
+
+        // Auditoria: registra a execução no histórico de operações de automação,
+        // atualizado com o resultado quando o agent responde.
+        await RunAutomationTaskCommandHandler.CreateReportAsync(
+            reportRepo, created, null, null, AutomationExecutionSourceType.SoftwareInstall,
+            new { packageId, source, approved, confirmUnapproved = cmd.ConfirmUnapproved });
+
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+
+    /// <summary>
+    /// Converte o tipo do catálogo no identificador aceito pelo agent. Diferente
+    /// de <c>NormalizeUpdateSource</c>, preserva <c>custom</c>: o agent usa o
+    /// instalador publicado, não o gerenciador de pacotes.
+    /// </summary>
+    private static string SourceFromInstallationType(AppInstallationType installationType) =>
+        installationType switch
+        {
+            AppInstallationType.Chocolatey => "chocolatey",
+            AppInstallationType.Custom => "custom",
+            _ => "winget"
+        };
+}
+
 public sealed class UninstallAgentSoftwareCommandHandler(
     IAgentRepository agentRepo,
     IAgentSoftwareRepository softwareRepo,

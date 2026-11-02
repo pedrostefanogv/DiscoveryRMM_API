@@ -92,10 +92,117 @@ public class SoftwareCommandHandlerTests
         Assert.That(dispatcher.Last!.CommandType, Is.EqualTo(CommandType.SoftwareUninstall));
     }
 
+    [Test]
+    public async Task Install_Approved_DispatchesSoftwareInstall()
+    {
+        var dispatcher = new FakeDispatcher();
+        var reports = new FakeReportRepo();
+        var handler = new InstallAgentSoftwareCommandHandler(
+            new FakeAgentRepo(), new FakeSiteRepo(),
+            new FakeAppStore(approved: true), dispatcher, reports);
+
+        var result = await handler.Handle(
+            new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(dispatcher.Last, Is.Not.Null);
+        Assert.That(dispatcher.Last!.CommandType, Is.EqualTo(CommandType.SoftwareInstall));
+        Assert.That(dispatcher.Last.Payload, Does.Contain("\"packageId\":\"Google.Chrome\""));
+        Assert.That(dispatcher.Last.Payload, Does.Contain("\"installationType\":\"winget\""));
+        Assert.That(reports.Created, Has.Count.EqualTo(1));
+        Assert.That(reports.Created[0].SourceType, Is.EqualTo(AutomationExecutionSourceType.SoftwareInstall));
+        Assert.That(reports.Created[0].AgentId, Is.EqualTo(AgentId));
+    }
+
+    [Test]
+    public async Task Install_Custom_PreservesCustomSourceInPayload()
+    {
+        var dispatcher = new FakeDispatcher();
+        var handler = new InstallAgentSoftwareCommandHandler(
+            new FakeAgentRepo(), new FakeSiteRepo(),
+            new FakeAppStore(approved: true), dispatcher, new FakeReportRepo());
+
+        var result = await handler.Handle(
+            new InstallAgentSoftwareCommand(AgentId, "meu.pacote.custom", AppInstallationType.Custom), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        // Custom deve chegar intacto ao agent: ele usa o instalador publicado, não o gerenciador.
+        Assert.That(dispatcher.Last!.Payload, Does.Contain("\"installationType\":\"custom\""));
+        Assert.That(dispatcher.Last.Payload, Does.Contain("\"source\":\"custom\""));
+    }
+
+    [Test]
+    public async Task Install_Unapproved_WithoutConfirmation_ReturnsConflictAndDoesNotDispatch()
+    {
+        var dispatcher = new FakeDispatcher();
+        var reports = new FakeReportRepo();
+        var handler = new InstallAgentSoftwareCommandHandler(
+            new FakeAgentRepo(), new FakeSiteRepo(),
+            new FakeAppStore(approved: false), dispatcher, reports);
+
+        var result = await handler.Handle(
+            new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget), CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Code, Is.EqualTo("Conflict"));
+        Assert.That(dispatcher.Last, Is.Null);
+        Assert.That(reports.Created, Is.Empty);
+    }
+
+    [Test]
+    public async Task Install_Unapproved_WithConfirmation_Dispatches()
+    {
+        var dispatcher = new FakeDispatcher();
+        var reports = new FakeReportRepo();
+        var handler = new InstallAgentSoftwareCommandHandler(
+            new FakeAgentRepo(), new FakeSiteRepo(),
+            new FakeAppStore(approved: false), dispatcher, reports);
+
+        var result = await handler.Handle(
+            new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget, ConfirmUnapproved: true), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(dispatcher.Last!.CommandType, Is.EqualTo(CommandType.SoftwareInstall));
+        Assert.That(reports.Created, Has.Count.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Install_MissingAgent_ReturnsNotFound()
+    {
+        var handler = new InstallAgentSoftwareCommandHandler(
+            new FakeAgentRepo(agent: null), new FakeSiteRepo(),
+            new FakeAppStore(approved: true), new FakeDispatcher(), new FakeReportRepo());
+
+        var result = await handler.Handle(
+            new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget), CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Code, Is.EqualTo("NotFound"));
+    }
+
+    [Test]
+    public async Task Install_EmptyPackageId_ReturnsValidation()
+    {
+        var handler = new InstallAgentSoftwareCommandHandler(
+            new FakeAgentRepo(), new FakeSiteRepo(),
+            new FakeAppStore(approved: true), new FakeDispatcher(), new FakeReportRepo());
+
+        var result = await handler.Handle(
+            new InstallAgentSoftwareCommand(AgentId, "   ", AppInstallationType.Winget), CancellationToken.None);
+
+        Assert.That(result.IsFailure, Is.True);
+        Assert.That(result.Errors[0].Code, Is.EqualTo("Validation"));
+        Assert.That(result.Errors[0].Field, Is.EqualTo("packageId"));
+    }
+
     private sealed class FakeAgentRepo : IAgentRepository
     {
-        public Task<Agent?> GetByIdAsync(Guid id)
-            => Task.FromResult<Agent?>(new Agent { Id = id, SiteId = Guid.NewGuid(), Hostname = "host" });
+        private readonly Agent? _agent;
+        public FakeAgentRepo() : this(DefaultAgent()) { }
+        public FakeAgentRepo(Agent? agent) => _agent = agent;
+        private static Agent DefaultAgent() =>
+            new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid(), Hostname = "host" };
+        public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(_agent);
         public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Agent>>(
                 ids.Select(id => new Agent { Id = id, SiteId = Guid.NewGuid(), Hostname = "host" }).ToList());

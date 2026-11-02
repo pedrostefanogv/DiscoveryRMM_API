@@ -29,6 +29,20 @@ public class CommandTypeWireMapperTests
     }
 
     [Test]
+    public void SoftwareInstall_MapsToWireValue()
+    {
+        Assert.That(
+            CommandTypeWireMapper.ToWireValue(CommandType.SoftwareInstall),
+            Is.EqualTo("softwareinstall"));
+    }
+
+    [Test]
+    public void SoftwareInstall_IsSpecialCommand()
+    {
+        Assert.That(CommandTypeWireMapper.IsSpecialCommand(CommandType.SoftwareInstall), Is.True);
+    }
+
+    [Test]
     public void WireValues_AreUnique()
     {
         var values = Enum.GetValues<CommandType>()
