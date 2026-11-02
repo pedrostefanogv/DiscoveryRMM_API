@@ -185,6 +185,12 @@ public class AppApprovalRuleResolvedDto
     /// <summary>Nome do pacote no catálogo (vazio quando o pacote não existe mais).</summary>
     public string? PackageName { get; set; }
 
+    /// <summary>
+    /// false quando o pacote referenciado não existe mais no catálogo (removido ou
+    /// na lixeira): a UI marca a regra como órfã e oferece a limpeza.
+    /// </summary>
+    public bool HasPackage { get; set; } = true;
+
     /// <summary>Motivo informado ao criar/atualizar a regra (pode ser nulo).</summary>
     public string? Reason { get; set; }
 
@@ -224,6 +230,10 @@ public class AppApprovalResolvedRuleDto
 {
     public string PackageId { get; set; } = string.Empty;
     public string? PackageName { get; set; }
+
+    /// <summary>false quando o pacote não existe mais no catálogo (regra órfã).</summary>
+    public bool HasPackage { get; set; } = true;
+
     public AppInstallationType InstallationType { get; set; }
 
     /// <summary>Ação efetiva (a do nível mais específico que tem regra).</summary>
@@ -363,6 +373,55 @@ public class AppCatalogSyncStatusDto
     public bool Running { get; set; }
     /// <summary>Resultado da última sincronização concluída (sucesso ou falha). Null se nunca sincronizado nesta instância.</summary>
     public AppCatalogSyncResultDto? LastResult { get; set; }
+}
+
+/// <summary>Resultado do restore de um pacote custom da lixeira.</summary>
+public class RestoreCustomAppPackageResult
+{
+    public string PackageId { get; set; } = string.Empty;
+
+    /// <summary>Mensagem para a UI: as aprovações antigas foram excluídas no soft delete.</summary>
+    public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>Resultado do purge (exclusão definitiva) de um pacote custom.</summary>
+public class PurgeCustomAppPackageResult
+{
+    public string PackageId { get; set; } = string.Empty;
+
+    /// <summary>true quando o purge falhou ao remover o asset no object storage (linha retida na lixeira).</summary>
+    public bool PurgeFailed { get; set; }
+
+    /// <summary>Object key do asset que não pôde ser removido/verificado (quando PurgeFailed).</summary>
+    public string? ObjectKey { get; set; }
+
+    /// <summary>Detalhe do erro de storage (quando PurgeFailed).</summary>
+    public string? Error { get; set; }
+}
+
+/// <summary>Regra de aprovação órfã (pacote Custom inexistente no catálogo).</summary>
+public class OrphanApprovalRuleDto
+{
+    public Guid RuleId { get; set; }
+    public AppInstallationType InstallationType { get; set; }
+    public string PackageId { get; set; } = string.Empty;
+    public AppApprovalScopeType ScopeType { get; set; }
+    public Guid? ClientId { get; set; }
+    public Guid? SiteId { get; set; }
+    public Guid? AgentId { get; set; }
+    public AppApprovalActionType Action { get; set; }
+    public string? Reason { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+/// <summary>Resultado da limpeza de regras de aprovação órfãs.</summary>
+public class CleanupOrphanApprovalRulesResult
+{
+    public bool DryRun { get; set; }
+    public IReadOnlyList<OrphanApprovalRuleDto> Orphans { get; set; } = [];
+
+    /// <summary>Regras efetivamente removidas (0 em dry-run).</summary>
+    public int Removed { get; set; }
 }
 
 public class ChocolateySyncResultDto

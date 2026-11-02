@@ -821,7 +821,7 @@ public class AppStoreController(
         CancellationToken ct = default)
     {
         var package = await packages.GetByInstallationTypeAndPackageIdAsync(
-            AppInstallationType.Custom, packageId, ct);
+            AppInstallationType.Custom, packageId, cancellationToken: ct);
 
         if (package is null || string.IsNullOrWhiteSpace(package.IconObjectKey))
             return NotFound();
@@ -840,17 +840,147 @@ public class AppStoreController(
         }
     }
 
-    /// <summary>Remove um pacote custom (e os arquivos no object storage).</summary>
+    /// <summary>Corpo do DELETE de pacote custom (soft delete): exige confirmar digitando o packageId.</summary>
+    public sealed class DeleteCustomPackageRequest
+    {
+        public string? Confirm { get; set; }
+        public string? Reason { get; set; }
+    }
+
+    /// <summary>
+    /// SOFT DELETE do pacote custom: move para a lixeira (restaurável) e exclui
+    /// definitivamente as regras de aprovação (com auditoria). O arquivo e o ícone
+    /// permanecem no object storage. Exige confirm = packageId.
+    /// </summary>
     [HttpDelete("custom/{packageId}")]
     [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
-    public async Task<IActionResult> DeleteCustomPackage(string packageId, CancellationToken ct)
+    public async Task<IActionResult> DeleteCustomPackage(string packageId, [FromBody] DeleteCustomPackageRequest? request, CancellationToken ct)
     {
-        var result = await mediator.Send(new DeleteCustomAppPackageCommand(packageId), ct);
+        var result = await mediator.Send(new DeleteCustomAppPackageCommand(
+            packageId, request?.Confirm, request?.Reason, Username), ct);
         return result.Match<IActionResult>(
             success: _ => NoContent(),
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+    }
+
+    /// <summary>
+    /// Restaura um pacote custom da lixeira. As aprovações anteriores foram
+    /// excluídas no soft delete — a resposta avisa que precisam ser recadastradas.
+    /// </summary>
+    [HttpPost("custom/{packageId}/restore")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    public async Task<IActionResult> RestoreCustomPackage(string packageId, CancellationToken ct)
+    {
+        var result = await mediator.Send(new RestoreCustomAppPackageCommand(packageId), ct);
+        return result.Match<IActionResult>(
+            success: value => Ok(new { packageId = value.PackageId, message = value.Message }),
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    /// <summary>
+    /// PURGE (exclusão definitiva) de um pacote na lixeira: apaga regras restantes,
+    /// os assets no object storage e a linha. Em falha do storage, retém a linha e
+    /// responde 409 { purgeFailed, objectKey, error } — force=true apaga a linha
+    /// sem tocar no storage (o varredor de órfãos remove o arquivo depois).
+    /// </summary>
+    [HttpDelete("custom/{packageId}/permanent")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    public async Task<IActionResult> PurgeCustomPackage(
+        string packageId,
+        [FromQuery] string? confirm = null,
+        [FromQuery] bool force = false,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new PurgeCustomAppPackageCommand(packageId, confirm, force), ct);
+        return result.Match<IActionResult>(
+            success: value => value.PurgeFailed
+                ? Conflict(new { purgeFailed = true, objectKey = value.ObjectKey, error = value.Error })
+                : NoContent(),
+            failure: errors =>
+            {
+                var payload = new { errors = errors.Select(e => new { e.Code, e.Message }) };
+                return errors[0].Code == "NotFound" ? NotFound(payload) : BadRequest(payload);
+            });
+    }
+
+    /// <summary>Itens da lixeira de pacotes custom.</summary>
+    public sealed class CustomPackageTrashItemDto
+    {
+        public Guid Id { get; set; }
+        public string PackageId { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string? Publisher { get; set; }
+        public string? Version { get; set; }
+        public string? Description { get; set; }
+        public string? FileName { get; set; }
+        public long? FileSizeBytes { get; set; }
+        public bool HasFile { get; set; }
+        public bool HasIcon { get; set; }
+        public DateTime? DeletedAt { get; set; }
+        public string? DeletedBy { get; set; }
+        public string? DeleteReason { get; set; }
+        public DateTime? PurgeFailedAt { get; set; }
+        public string? PurgeError { get; set; }
+    }
+
+    /// <summary>Lixeira de pacotes custom (só excluídos), com busca e paginação por cursor.</summary>
+    [HttpGet("custom/trash")]
+    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    public async Task<IActionResult> GetCustomTrash(
+        [FromServices] IAppPackageRepository packages,
+        [FromQuery] string? search = null,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 20,
+        CancellationToken ct = default)
+    {
+        var normalizedLimit = Math.Clamp(limit, 1, 200);
+        var (items, hasMore) = await packages.ListCustomTrashAsync(search, cursor, normalizedLimit, ct);
+        var lastItem = hasMore && items.Count > 0 ? items[^1] : null;
+
+        return Ok(new
+        {
+            items = items.Select(p => new CustomPackageTrashItemDto
+            {
+                Id = p.Id,
+                PackageId = p.PackageId,
+                Name = p.Name,
+                Publisher = p.Publisher,
+                Version = p.Version,
+                Description = p.Description,
+                FileName = p.FileName,
+                FileSizeBytes = p.FileSizeBytes,
+                HasFile = !string.IsNullOrWhiteSpace(p.FileObjectKey),
+                HasIcon = !string.IsNullOrWhiteSpace(p.IconObjectKey),
+                DeletedAt = p.DeletedAt,
+                DeletedBy = p.DeletedBy,
+                DeleteReason = p.DeleteReason,
+                PurgeFailedAt = p.PurgeFailedAt,
+                PurgeError = p.PurgeError
+            }),
+            nextCursor = lastItem is null
+                ? null
+                : Discovery.Core.Helpers.CursorPaginationHelper.EncodeNameCursor(lastItem.Name, lastItem.Id),
+            hasMore
+        });
+    }
+
+    /// <summary>
+    /// Localiza (dry-run=true, padrão) ou remove regras de aprovação Custom cujo
+    /// pacote não existe mais no catálogo — as regras "sem nome" na aba Aprovações.
+    /// </summary>
+    [HttpPost("approvals/orphans/cleanup")]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    public async Task<IActionResult> CleanupOrphanApprovals([FromQuery] bool dryRun = true, CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new CleanupOrphanApprovalRulesCommand(dryRun, Username), ct);
+        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new
+        {
+            errors = errors.Select(e => new { e.Code, e.Message })
+        }));
     }
 
     /// <summary>

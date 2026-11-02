@@ -403,6 +403,29 @@ public class CustomPackageAssetService : ICustomPackageAssetService
         await storage.DeleteAsync(objectKey, cancellationToken);
     }
 
+    public async Task<bool?> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey))
+            return false;
+
+        var storage = await _storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        try
+        {
+            return await storage.ExistsAsync(objectKey, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A VERIFICAÇÃO falhou (rede/API/storage): o chamador precisa
+            // distinguir "não existe" de "não sei" — devolve null, não false.
+            _logger?.LogWarning(ex, "Falha ao verificar a existencia de {ObjectKey} no object storage.", objectKey);
+            return null;
+        }
+    }
+
     private static string NormalizeKind(string kind)
     {
         var normalized = (kind ?? string.Empty).Trim().ToLowerInvariant();

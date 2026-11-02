@@ -132,4 +132,15 @@ public interface IAppStoreService
         int limit,
         string? cursor,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Localiza (e, sem dry-run, remove com auditoria) regras de aprovação Custom
+    /// cujo pacote não existe mais no catálogo (removido ou na lixeira).
+    /// Double de teste que não implementar herda falha explícita.
+    /// </summary>
+    Task<CleanupOrphanApprovalRulesResult> CleanupOrphanApprovalRulesAsync(
+        bool dryRun,
+        string? changedBy,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Cleanup de regras órfãs não implementado neste double de teste.");
 }

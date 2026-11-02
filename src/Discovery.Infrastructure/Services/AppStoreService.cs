@@ -99,7 +99,7 @@ public class AppStoreService : IAppStoreService
         var package = await _appPackageRepo.GetByInstallationTypeAndPackageIdAsync(
             installationType,
             packageId.Trim(),
-            cancellationToken);
+            cancellationToken: cancellationToken);
 
         return package is null ? null : MapUnifiedToDto(package);
     }
@@ -184,14 +184,25 @@ public class AppStoreService : IAppStoreService
         // Estado ANTERIOR: trocar o instalador/ícone deixa o objeto antigo no
         // storage — sem apagá-lo o vazamento é permanente (o índice de limpeza
         // dele já expirou muito antes de o vínculo ser trocado).
+        // includeDeleted: a linha pode estar na lixeira — salvar de novo é uma
+        // RECRIAÇÃO (D5): a linha volta ao catálogo e as aprovações órfãs são
+        // descartadas logo abaixo.
         var previous = await _appPackageRepo.GetByInstallationTypeAndPackageIdAsync(
-            AppInstallationType.Custom, normalizedPackageId, cancellationToken);
+            AppInstallationType.Custom, normalizedPackageId, includeDeleted: true, cancellationToken: cancellationToken);
 
         // Quando ha icone enviado ao storage, a loja serve a imagem pela propria
         // API (endpoint anonimo /custom/{id}/icon); caso contrario vale a URL externa.
         var iconUrl = !string.IsNullOrWhiteSpace(request.IconObjectKey)
             ? $"/api/v1/app-store/custom/{Uri.EscapeDataString(normalizedPackageId)}/icon"
             : request.IconUrl;
+
+        // D5: recriar um packageId NÃO herda aprovação. Na criação (ou recriação
+        // de um pacote que estava na lixeira) as regras existentes do packageId
+        // são descartadas em HARD, com auditoria.
+        if (previous is null || previous.IsDeleted)
+        {
+            await DiscardOrphanApprovalRulesAsync(normalizedPackageId, cancellationToken);
+        }
 
         var saved = await _appPackageRepo.UpsertCustomAsync(new Discovery.Core.Entities.AppPackage
         {
@@ -269,6 +280,89 @@ public class AppStoreService : IAppStoreService
         {
             // best-effort
         }
+    }
+
+    /// <summary>
+    /// D5: apaga em HARD as regras de aprovação de um packageId custom que está
+    /// sendo (re)criado, com auditoria "recriação descartou aprovação órfã".
+    /// </summary>
+    private async Task DiscardOrphanApprovalRulesAsync(
+        string normalizedPackageId,
+        CancellationToken cancellationToken)
+    {
+        var rules = await _approvalRepo.GetByPackageAsync(AppInstallationType.Custom, normalizedPackageId);
+        foreach (var rule in rules)
+        {
+            await _auditService.LogAsync(
+                AppApprovalAuditChangeType.Deleted,
+                rule,
+                rule.Action,
+                rule.AutoUpdateEnabled,
+                "Recriação descartou aprovação órfã.",
+                changedBy: null,
+                ipAddress: null);
+            await _approvalRepo.DeleteAsync(rule.Id);
+        }
+    }
+
+    /// <summary>
+    /// Localiza (e, sem dry-run, remove com auditoria) regras de aprovação Custom
+    /// cujo pacote não existe mais no catálogo (excluído ou na lixeira).
+    /// </summary>
+    public async Task<CleanupOrphanApprovalRulesResult> CleanupOrphanApprovalRulesAsync(
+        bool dryRun,
+        string? changedBy,
+        CancellationToken cancellationToken = default)
+    {
+        var allRules = await _approvalRepo.GetAllByInstallationTypeAsync(AppInstallationType.Custom);
+
+        var orphans = new List<Discovery.Core.Entities.AppApprovalRule>();
+        foreach (var group in allRules.GroupBy(rule => rule.PackageId, StringComparer.OrdinalIgnoreCase))
+        {
+            var packages = await _appPackageRepo.GetByInstallationTypeAndPackageIdsAsync(
+                AppInstallationType.Custom, [group.Key], cancellationToken);
+            if (packages.Count == 0)
+                orphans.AddRange(group);
+        }
+
+        var dtoList = orphans.Select(rule => new OrphanApprovalRuleDto
+        {
+            RuleId = rule.Id,
+            InstallationType = rule.InstallationType,
+            PackageId = rule.PackageId,
+            ScopeType = rule.ScopeType,
+            ClientId = rule.ClientId,
+            SiteId = rule.SiteId,
+            AgentId = rule.AgentId,
+            Action = rule.Action,
+            Reason = rule.Reason,
+            UpdatedAt = rule.UpdatedAt
+        }).ToList();
+
+        var removed = 0;
+        if (!dryRun)
+        {
+            foreach (var rule in orphans)
+            {
+                await _auditService.LogAsync(
+                    AppApprovalAuditChangeType.Deleted,
+                    rule,
+                    rule.Action,
+                    rule.AutoUpdateEnabled,
+                    "Regra órfã removida: pacote custom não existe mais no catálogo.",
+                    changedBy,
+                    ipAddress: null);
+                await _approvalRepo.DeleteAsync(rule.Id);
+                removed++;
+            }
+        }
+
+        return new CleanupOrphanApprovalRulesResult
+        {
+            DryRun = dryRun,
+            Orphans = dtoList,
+            Removed = removed
+        };
     }
 
     public async Task<bool> DeleteCustomPackageFileAsync(
@@ -500,8 +594,10 @@ public class AppStoreService : IAppStoreService
             cancellationToken);
 
         var namesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var existingIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var package in packages)
         {
+            existingIds.Add(package.PackageId);
             if (!string.IsNullOrWhiteSpace(package.Name))
                 namesById[package.PackageId] = package.Name;
         }
@@ -510,6 +606,8 @@ public class AppStoreService : IAppStoreService
         {
             if (namesById.TryGetValue(item.PackageId, out var name))
                 item.PackageName = name;
+            // O lookup em lote JÁ exclui pacotes na lixeira: achou ⇒ existe no catálogo.
+            item.HasPackage = existingIds.Contains(item.PackageId);
         }
     }
 
@@ -530,8 +628,10 @@ public class AppStoreService : IAppStoreService
 
             // Índice sem case: pacote custom pode estar gravado com outro caso.
             var namesById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var existingIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var package in packages)
             {
+                existingIds.Add(package.PackageId);
                 if (!string.IsNullOrWhiteSpace(package.Name))
                     namesById[package.PackageId] = package.Name;
             }
@@ -540,6 +640,8 @@ public class AppStoreService : IAppStoreService
             {
                 if (namesById.TryGetValue(dto.PackageId, out var name))
                     dto.PackageName = name;
+                // O lookup em lote JÁ exclui pacotes na lixeira: achou ⇒ existe.
+                dto.HasPackage = existingIds.Contains(dto.PackageId);
             }
         }
     }

@@ -19,6 +19,7 @@ public class AppPackageRepository : IAppPackageRepository
     public async Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(
         AppInstallationType installationType,
         string packageId,
+        bool includeDeleted = false,
         CancellationToken cancellationToken = default)
     {
         // Match EXATO de propósito: este lookup é usado no upsert de pacote
@@ -30,9 +31,9 @@ public class AppPackageRepository : IAppPackageRepository
         var normalized = NormalizePackageId(packageId, installationType);
         return await _db.AppPackages
             .AsNoTracking()
-            .SingleOrDefaultAsync(
-                x => x.InstallationType == installationType && x.PackageId == normalized,
-                cancellationToken);
+            .Where(x => x.InstallationType == installationType && x.PackageId == normalized)
+            .Where(x => includeDeleted || !x.IsDeleted)
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<AppPackage>> GetByInstallationTypeAndPackageIdsAsync(
@@ -69,13 +70,15 @@ public class AppPackageRepository : IAppPackageRepository
         IQueryable<AppPackage> query,
         AppInstallationType installationType,
         IReadOnlyCollection<string> packageIds)
-        => query.Where(x => x.InstallationType == installationType && packageIds.Contains(x.PackageId));
+        // Pacotes na lixeira (is_deleted) não contam como catálogo: regras que
+        // apontam para eles são marcadas como órfãs na listagem de aprovações.
+        => query.Where(x => x.InstallationType == installationType && !x.IsDeleted && packageIds.Contains(x.PackageId));
 
     /// <summary>Filtro por lista IGNORANDO caixa (pacotes Custom).</summary>
     public static IQueryable<AppPackage> FilterCustomByPackageIds(
         IQueryable<AppPackage> query,
         IReadOnlyCollection<string> loweredPackageIds)
-        => query.Where(x => x.InstallationType == AppInstallationType.Custom && loweredPackageIds.Contains(x.PackageId.ToLower()));
+        => query.Where(x => x.InstallationType == AppInstallationType.Custom && !x.IsDeleted && loweredPackageIds.Contains(x.PackageId.ToLower()));
 
     public async Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(
         AppInstallationType installationType,
@@ -111,7 +114,7 @@ public class AppPackageRepository : IAppPackageRepository
         string? search,
         string? architecture)
     {
-        query = query.Where(x => x.InstallationType == installationType);
+        query = query.Where(x => x.InstallationType == installationType && !x.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -140,7 +143,7 @@ public class AppPackageRepository : IAppPackageRepository
     {
         return await _db.AppPackages
             .AsNoTracking()
-            .Where(x => x.InstallationType == installationType)
+            .Where(x => x.InstallationType == installationType && !x.IsDeleted)
             .OrderBy(x => x.PackageId)
             .ToListAsync(cancellationToken);
     }
@@ -314,6 +317,18 @@ public class AppPackageRepository : IAppPackageRepository
         current.UpdatedAt = now;
         current.SyncedAt = now;
 
+        // Recriação: salvar um pacote que estava na lixeira o traz de volta ao
+        // catálogo (as aprovações órfãs já foram descartadas pelo service — D5).
+        if (current.IsDeleted)
+        {
+            current.IsDeleted = false;
+            current.DeletedAt = null;
+            current.DeletedBy = null;
+            current.DeleteReason = null;
+            current.PurgeFailedAt = null;
+            current.PurgeError = null;
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         return current;
     }
@@ -366,6 +381,118 @@ public class AppPackageRepository : IAppPackageRepository
         _db.AppPackages.Remove(current);
         await _db.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    public async Task<AppPackage?> SoftDeleteCustomAsync(
+        string packageId,
+        string? deletedBy,
+        string? reason,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedPackageId = NormalizePackageId(packageId, AppInstallationType.Custom);
+        var current = await _db.AppPackages.SingleOrDefaultAsync(
+            x => x.InstallationType == AppInstallationType.Custom && x.PackageId == normalizedPackageId,
+            cancellationToken);
+
+        if (current is null || current.IsDeleted)
+            return null;
+
+        var snapshot = new AppPackage
+        {
+            Id = current.Id,
+            InstallationType = current.InstallationType,
+            PackageId = current.PackageId,
+            FileObjectKey = current.FileObjectKey,
+            IconObjectKey = current.IconObjectKey
+        };
+
+        current.IsDeleted = true;
+        current.DeletedAt = DateTime.UtcNow;
+        current.DeletedBy = deletedBy;
+        current.DeleteReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        // Um restore limpa tudo: falha de purge anterior não pode sobreviver ao novo ciclo.
+        current.PurgeFailedAt = null;
+        current.PurgeError = null;
+        current.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return snapshot;
+    }
+
+    public async Task<bool> RestoreCustomAsync(string packageId, CancellationToken cancellationToken = default)
+    {
+        var normalizedPackageId = NormalizePackageId(packageId, AppInstallationType.Custom);
+        var current = await _db.AppPackages.SingleOrDefaultAsync(
+            x => x.InstallationType == AppInstallationType.Custom && x.PackageId == normalizedPackageId,
+            cancellationToken);
+
+        if (current is null || !current.IsDeleted)
+            return false;
+
+        current.IsDeleted = false;
+        current.DeletedAt = null;
+        current.DeletedBy = null;
+        current.DeleteReason = null;
+        current.PurgeFailedAt = null;
+        current.PurgeError = null;
+        current.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    public async Task<(IReadOnlyList<AppPackage> Items, bool HasMore)> ListCustomTrashAsync(
+        string? search,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _db.AppPackages
+            .AsNoTracking()
+            .Where(x => x.InstallationType == AppInstallationType.Custom && x.IsDeleted);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim();
+            var pattern = $"%{term}%";
+            query = query.Where(x =>
+                EF.Functions.ILike(x.PackageId, pattern) ||
+                EF.Functions.ILike(x.Name, pattern) ||
+                (x.Publisher != null && EF.Functions.ILike(x.Publisher, pattern)) ||
+                (x.Description != null && EF.Functions.ILike(x.Description, pattern)));
+        }
+
+        if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyNameCursor(query, cursorName, cursorId,
+                x => x.Name, x => x.Id);
+        }
+
+        var items = await query
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.Id)
+            .Take(limit + 1)
+            .ToListAsync(cancellationToken);
+
+        var hasMore = items.Count > limit;
+        var page = hasMore ? items.Take(limit).ToList() : items;
+        return (page, hasMore);
+    }
+
+    public async Task SetPurgeFailureAsync(string packageId, string error, CancellationToken cancellationToken = default)
+    {
+        var normalizedPackageId = NormalizePackageId(packageId, AppInstallationType.Custom);
+        var current = await _db.AppPackages.SingleOrDefaultAsync(
+            x => x.InstallationType == AppInstallationType.Custom && x.PackageId == normalizedPackageId,
+            cancellationToken);
+
+        if (current is null)
+            return;
+
+        current.PurgeFailedAt = DateTime.UtcNow;
+        current.PurgeError = error.Length > 2000 ? error[..2000] : error;
+        current.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<AppPackage?> ClearCustomFileAsync(string packageId, CancellationToken cancellationToken = default)

@@ -68,6 +68,9 @@ public static class DatabaseSanitizationChecks
     /// <summary>Somente relatório: anexo apontando para uma entidade-pai inexistente.</summary>
     public const string AttachmentOrphan = "attachment-orphan-parent";
 
+    /// <summary>Regras de aprovação Custom cujo pacote não existe mais no catálogo (removido ou na lixeira).</summary>
+    public const string AppStoreOrphanCustomApprovalRules = "appstore-orphan-custom-approval-rules";
+
     public static readonly IReadOnlyList<SanitizationCheckDescriptor> All =
     [
         new(InvalidWorkflowState, "Chamados sem estado ou com estado inválido",
@@ -104,6 +107,8 @@ public static class DatabaseSanitizationChecks
             "Somente relatório: seguidores apontando para chamado ou usuário inexistente.", ReportOnly: true),
         new(AttachmentOrphan, "Anexos com entidade-pai inexistente",
             "Somente relatório: anexos cujo registro-pai não existe mais (exige decisão sobre o storage).", ReportOnly: true),
+        new(AppStoreOrphanCustomApprovalRules, "Regras de aprovação de pacote custom inexistente",
+            "Remove (com auditoria) regras da Loja apontando para pacotes custom que não existem mais no catálogo — as regras 'sem nome' que reapareciam na aba Aprovações."),
     ];
 }
 

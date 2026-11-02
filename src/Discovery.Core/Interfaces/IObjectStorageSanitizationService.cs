@@ -15,12 +15,17 @@ public static class ObjectStorageSanitizationChecks
     /// <summary>Somente relatório: inventário do bucket (objetos e bytes por prefixo).</summary>
     public const string BucketInventory = "object-storage-bucket-inventory";
 
+    /// <summary>Sessões de multipart upload abandonadas sob app-store/custom/ — abortadas (o storage descarta as partes).</summary>
+    public const string IncompleteMultipartUploads = "appstore-incomplete-multipart-uploads";
+
     public static readonly IReadOnlyList<ObjectStorageSanitizationCheckDescriptor> All =
     [
         new(OrphanCustomAssets, "Assets da loja sem vínculo",
             "Instaladores/ícones em app-store/custom/ que nenhum pacote referencia (troca de arquivo antes de salvar, aba fechada, upload abandonado). Objetos mais novos que a idade mínima são preservados: podem estar a caminho do vínculo."),
         new(BucketInventory, "Inventário do bucket",
             "Somente relatório: total de objetos e bytes no bucket, agrupados pelo prefixo raiz. Anexos de chamados, relatórios e imagens de KB vivem em clients/ e NÃO são removidos por esta limpeza.", ReportOnly: true),
+        new(IncompleteMultipartUploads, "Uploads multipart incompletos da loja",
+            "Sessões de multipart sob app-store/custom/ mais antigas que a idade mínima (upload em andamento ou abandonado) são ABORTADAS — o storage descarta as partes enviadas."),
     ];
 }
 

@@ -66,7 +66,7 @@ public sealed class RunAutomationTaskCommandHandler(
     {
         try
         {
-            var package = await appPackageRepo.GetByInstallationTypeAndPackageIdAsync(installationType, packageId, ct);
+            var package = await appPackageRepo.GetByInstallationTypeAndPackageIdAsync(installationType, packageId, cancellationToken: ct);
             if (package is null || string.IsNullOrWhiteSpace(package.MetadataJson))
                 return null;
 

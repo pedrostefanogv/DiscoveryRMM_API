@@ -24,7 +24,7 @@ public class WingetManifestsSyncServiceTests
         public int CatalogCount { get; set; }
 
         public Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(
-            AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default)
+            AppInstallationType installationType, string packageId, bool includeDeleted = false, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
         public Task<IReadOnlyList<AppPackage>> GetByInstallationTypeAndPackageIdsAsync(

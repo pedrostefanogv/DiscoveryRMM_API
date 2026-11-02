@@ -1132,7 +1132,7 @@ public class AgentAuthController : ControllerBase
         if (agent is null) return Unauthorized();
 
         var package = await appPackages.GetByInstallationTypeAndPackageIdAsync(
-            AppInstallationType.Custom, packageId, ct);
+            AppInstallationType.Custom, packageId, cancellationToken: ct);
 
         if (package is null || string.IsNullOrWhiteSpace(package.FileObjectKey))
             return NotFound(new { message = "Instalador nao encontrado para este pacote custom." });

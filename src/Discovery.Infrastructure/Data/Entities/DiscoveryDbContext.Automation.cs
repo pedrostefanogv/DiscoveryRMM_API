@@ -284,6 +284,15 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.FileContentType).HasColumnName("file_content_type").HasMaxLength(200);
             entity.Property(p => p.FileSizeBytes).HasColumnName("file_size_bytes");
             entity.Property(p => p.FileChecksum).HasColumnName("file_checksum").HasMaxLength(200);
+            // Lixeira (soft delete) — M257.
+            entity.Property(p => p.IsDeleted).HasColumnName("is_deleted").HasDefaultValue(false);
+            entity.Property(p => p.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
+            entity.Property(p => p.DeletedBy).HasColumnName("deleted_by").HasMaxLength(256);
+            entity.Property(p => p.DeleteReason).HasColumnName("delete_reason").HasMaxLength(2000);
+            entity.Property(p => p.PurgeFailedAt).HasColumnName("purge_failed_at").HasColumnType("timestamptz");
+            entity.Property(p => p.PurgeError).HasColumnName("purge_error").HasMaxLength(2000);
+            entity.HasIndex(p => new { p.InstallationType, p.IsDeleted }).HasDatabaseName("ix_app_packages_installation_is_deleted");
+
             entity.Property(p => p.SourceGeneratedAt).HasColumnName("source_generated_at").HasColumnType("timestamptz");
             entity.Property(p => p.LastUpdated).HasColumnName("last_updated").HasColumnType("timestamptz");
             entity.Property(p => p.SyncedAt).HasColumnName("synced_at").HasColumnType("timestamptz");

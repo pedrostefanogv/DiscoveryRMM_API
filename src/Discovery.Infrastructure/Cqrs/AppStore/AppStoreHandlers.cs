@@ -5,6 +5,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Cqrs.AppStore;
 
@@ -96,11 +97,18 @@ public sealed class UpsertCustomAppPackageCommandHandler(IAppStoreService svc)
     }
 }
 
+/// <summary>Constantes de auditoria para os eventos do ciclo de vida do pacote custom.</summary>
+internal static class CustomPackageAuditReasons
+{
+    public const string Deleted = "custom_package_deleted";
+    public const string Purged = "custom_package_purged";
+}
+
 public sealed class DeleteCustomAppPackageCommandHandler(
     IAppPackageRepository repository,
     IAppApprovalRuleRepository approvalRules,
-    IAppStoreService appStore,
-    ICustomPackageAssetService assets)
+    IAppApprovalAuditRepository auditRepo,
+    IAppStoreService appStore)
     : IRequestHandler<DeleteCustomAppPackageCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteCustomAppPackageCommand cmd, CancellationToken ct)
@@ -108,77 +116,260 @@ public sealed class DeleteCustomAppPackageCommandHandler(
         if (string.IsNullOrWhiteSpace(cmd.PackageId))
             return Result<VoidResult>.Failure(Error.Validation("packageId", "PackageId e obrigatorio."));
 
+        var packageId = cmd.PackageId.Trim();
+
+        // D2: a confirmação é DIGITAR o packageId — evita excluir o pacote errado.
+        if (!string.Equals(cmd.Confirm?.Trim(), packageId, StringComparison.OrdinalIgnoreCase))
+            return Result<VoidResult>.Failure(Error.Validation(
+                "confirm",
+                $"Confirmacao obrigatoria: digite o packageId '{packageId}' para confirmar. " +
+                "As regras de aprovacao deste pacote serao EXCLUIDAS definitivamente."));
+
         var package = await repository.GetByInstallationTypeAndPackageIdAsync(
-            AppInstallationType.Custom, cmd.PackageId, ct);
+            AppInstallationType.Custom, packageId, includeDeleted: true, cancellationToken: ct);
 
         if (package is null)
-            return Result<VoidResult>.Failure(Error.NotFound($"Pacote custom '{cmd.PackageId}' nao encontrado."));
+            return Result<VoidResult>.Failure(Error.NotFound($"Pacote custom '{packageId}' nao encontrado."));
 
-        // Remove as regras de aprovação do pacote ANTES de apagar a linha: sem
-        // isso ficariam órfãs e voltariam a valer se o mesmo packageId fosse
-        // recriado. O histórico de auditoria é preservado (RuleId vira null).
-        await DeleteApprovalRulesAsync(approvalRules, appStore, package.PackageId, ct);
+        if (package.IsDeleted)
+            return Result<VoidResult>.Failure(Error.Validation(
+                "packageId", $"Pacote custom '{packageId}' ja esta na lixeira."));
 
-        // Best-effort: a linha do catalogo e a fonte de verdade; uma falha ao
-        // remover o objeto no storage nao deve impedir o delete do pacote.
-        await TryDeleteAssetAsync(assets, package.FileObjectKey, ct);
-        await TryDeleteAssetAsync(assets, package.IconObjectKey, ct);
-
-        await repository.DeleteCustomAsync(package.PackageId, ct);
-        return Result<VoidResult>.Success(VoidResult.Value);
-    }
-
-    private static async Task DeleteApprovalRulesAsync(
-        IAppApprovalRuleRepository approvalRules,
-        IAppStoreService appStore,
-        string packageId,
-        CancellationToken ct)
-    {
+        // D1: as regras de aprovacao sao removidas ANTES do soft delete, de forma
+        // OBRIGATORIA — se uma regra nao puder ser removida, o pacote NAO sai do
+        // catalogo (regra orfa continuaría valendo). O arquivo/icone NAO sao
+        // apagados do storage aqui: precisam sobreviver a um restore.
         IReadOnlyList<Discovery.Core.Entities.AppApprovalRule> rules;
         try
         {
-            rules = await approvalRules.GetByPackageAsync(AppInstallationType.Custom, packageId);
+            rules = await approvalRules.GetByPackageAsync(AppInstallationType.Custom, package.PackageId);
         }
-        catch
+        catch (Exception ex)
         {
-            // Falha ao listar regras não pode impedir a exclusão do pacote.
-            return;
+            return Result<VoidResult>.Failure(Error.Internal(
+                $"Nao foi possivel listar as regras de aprovacao do pacote '{package.PackageId}': {ex.Message}. " +
+                "O pacote NAO foi excluido."));
         }
 
+        foreach (var rule in rules)
+        {
+            bool removed;
+            try
+            {
+                removed = await appStore.DeleteRuleAsync(
+                    rule.Id,
+                    "Pacote custom movido para a lixeira; aprovacao excluida definitivamente.",
+                    cmd.ChangedBy,
+                    ipAddress: null,
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                return Result<VoidResult>.Failure(Error.Internal(
+                    $"Falha ao remover a regra de aprovacao '{rule.Id}' do pacote '{package.PackageId}': {ex.Message}. " +
+                    "O pacote NAO foi excluido."));
+            }
+
+            if (!removed)
+                return Result<VoidResult>.Failure(Error.Internal(
+                    $"Regra de aprovacao '{rule.Id}' do pacote '{package.PackageId}' nao pode ser removida. " +
+                    "O pacote NAO foi excluido."));
+        }
+
+        var deleted = await repository.SoftDeleteCustomAsync(
+            package.PackageId, cmd.ChangedBy, cmd.Reason, ct);
+        if (deleted is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"Pacote custom '{packageId}' nao encontrado."));
+
+        // Evento do pacote na trilha de aprovacao (sem regra associada).
+        await auditRepo.CreateAsync(new Discovery.Core.Entities.AppApprovalAudit
+        {
+            RuleId = null,
+            ChangeType = AppApprovalAuditChangeType.Deleted,
+            ScopeType = AppApprovalScopeType.Global,
+            InstallationType = AppInstallationType.Custom,
+            PackageId = package.PackageId,
+            Reason = CustomPackageAuditReasons.Deleted,
+            ChangedBy = cmd.ChangedBy,
+            ChangedAt = DateTime.UtcNow
+        });
+
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+public sealed class RestoreCustomAppPackageCommandHandler(IAppPackageRepository repository)
+    : IRequestHandler<RestoreCustomAppPackageCommand, Result<RestoreCustomAppPackageResult>>
+{
+    public async Task<Result<RestoreCustomAppPackageResult>> Handle(RestoreCustomAppPackageCommand cmd, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.PackageId))
+            return Result<RestoreCustomAppPackageResult>.Failure(Error.Validation("packageId", "PackageId e obrigatorio."));
+
+        var restored = await repository.RestoreCustomAsync(cmd.PackageId.Trim(), ct);
+        if (!restored)
+            return Result<RestoreCustomAppPackageResult>.Failure(
+                Error.NotFound($"Pacote custom '{cmd.PackageId}' nao encontrado na lixeira."));
+
+        return Result<RestoreCustomAppPackageResult>.Success(new RestoreCustomAppPackageResult
+        {
+            PackageId = cmd.PackageId.Trim(),
+            Message = "Aprovações anteriores foram excluídas — recadastre as aprovações para este pacote."
+        });
+    }
+}
+
+public sealed class PurgeCustomAppPackageCommandHandler(
+    IAppPackageRepository repository,
+    IAppApprovalRuleRepository approvalRules,
+    IAppApprovalAuditRepository auditRepo,
+    IAppStoreService appStore,
+    ICustomPackageAssetService assets,
+    ILogger<PurgeCustomAppPackageCommandHandler> logger)
+    : IRequestHandler<PurgeCustomAppPackageCommand, Result<PurgeCustomAppPackageResult>>
+{
+    public async Task<Result<PurgeCustomAppPackageResult>> Handle(PurgeCustomAppPackageCommand cmd, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.PackageId))
+            return Result<PurgeCustomAppPackageResult>.Failure(Error.Validation("packageId", "PackageId e obrigatorio."));
+
+        var packageId = cmd.PackageId.Trim();
+
+        if (!string.Equals(cmd.Confirm?.Trim(), packageId, StringComparison.OrdinalIgnoreCase))
+            return Result<PurgeCustomAppPackageResult>.Failure(Error.Validation(
+                "confirm",
+                $"Confirmacao obrigatoria: digite o packageId '{packageId}' para confirmar o purge definitivo."));
+
+        var package = await repository.GetByInstallationTypeAndPackageIdAsync(
+            AppInstallationType.Custom, packageId, includeDeleted: true, cancellationToken: ct);
+
+        if (package is null)
+            return Result<PurgeCustomAppPackageResult>.Failure(Error.NotFound($"Pacote custom '{packageId}' nao encontrado."));
+
+        if (!package.IsDeleted)
+            return Result<PurgeCustomAppPackageResult>.Failure(Error.Validation(
+                "packageId",
+                $"Pacote custom '{packageId}' nao esta na lixeira: use a exclusao normal (soft delete) antes do purge."));
+
+        // (a) Regras restantes saem em HARD, com auditoria.
+        var rules = await approvalRules.GetByPackageAsync(AppInstallationType.Custom, package.PackageId);
         foreach (var rule in rules)
         {
             try
             {
                 await appStore.DeleteRuleAsync(
                     rule.Id,
-                    "Pacote custom excluído da loja.",
+                    "Pacote custom purgado da lixeira.",
                     changedBy: null,
                     ipAddress: null,
                     ct);
             }
-            catch
+            catch (Exception ex)
             {
-                // best-effort: uma regra que não puder ser removida não bloqueia o delete.
+                // Uma regra que não sai não retém o purge: ela é órfã de qualquer
+                // forma e a sanitização/limeza de órfãos a remove depois.
+                logger.LogWarning(ex, "Falha ao remover a regra {RuleId} durante o purge do pacote {PackageId}.", rule.Id, package.PackageId);
             }
         }
+
+        // (b) + (c) Apaga os assets no storage; em falha, verifica existência.
+        foreach (var objectKey in new[] { package.FileObjectKey, package.IconObjectKey })
+        {
+            if (string.IsNullOrWhiteSpace(objectKey))
+                continue;
+
+            string? failure = null;
+            try
+            {
+                await assets.DeleteAsync(objectKey, ct);
+            }
+            catch (NotSupportedException)
+            {
+                // Provider sem storage S3 (local): nada a remover no bucket.
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failure = ex.Message;
+            }
+
+            if (failure is null)
+                continue;
+
+            // D4: o delete no storage falhou — verifica SE o objeto existe.
+            bool? exists;
+            try
+            {
+                exists = await assets.ExistsAsync(objectKey, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Verificacao de existencia falhou para {ObjectKey} durante o purge.", objectKey);
+                exists = null; // verificação falhou
+            }
+
+            if (exists == true || exists is null)
+            {
+                if (cmd.Force)
+                {
+                    // force=true: apaga a linha SEM tocar no storage de novo — o
+                    // varredor de assets órfãos remove o objeto depois.
+                    logger.LogWarning(
+                        "Purge FORCADO do pacote {PackageId}: asset {ObjectKey} mantido no storage (falha: {Error}).",
+                        package.PackageId, objectKey, failure);
+                    continue;
+                }
+
+                var error = exists == true
+                    ? $"O objeto '{objectKey}' continua presente no object storage apos a tentativa de remocao: {failure}"
+                    : $"Nao foi possivel verificar o objeto '{objectKey}' no object storage: {failure}";
+
+                // (c) NÃO apaga a linha: grava purge_failed_at/purge_error e 409.
+                await repository.SetPurgeFailureAsync(package.PackageId, error, ct);
+                return Result<PurgeCustomAppPackageResult>.Success(new PurgeCustomAppPackageResult
+                {
+                    PackageId = package.PackageId,
+                    PurgeFailed = true,
+                    ObjectKey = objectKey,
+                    Error = error
+                });
+            }
+        }
+
+        // (d) DELETE físico + auditoria do evento.
+        var purged = await repository.DeleteCustomAsync(package.PackageId, ct);
+        if (!purged)
+            return Result<PurgeCustomAppPackageResult>.Failure(Error.NotFound($"Pacote custom '{packageId}' nao encontrado."));
+
+        await auditRepo.CreateAsync(new Discovery.Core.Entities.AppApprovalAudit
+        {
+            RuleId = null,
+            ChangeType = AppApprovalAuditChangeType.Deleted,
+            ScopeType = AppApprovalScopeType.Global,
+            InstallationType = AppInstallationType.Custom,
+            PackageId = package.PackageId,
+            Reason = CustomPackageAuditReasons.Purged,
+            ChangedBy = null,
+            ChangedAt = DateTime.UtcNow
+        });
+
+        return Result<PurgeCustomAppPackageResult>.Success(new PurgeCustomAppPackageResult
+        {
+            PackageId = package.PackageId
+        });
     }
+}
 
-    private static async Task TryDeleteAssetAsync(
-        ICustomPackageAssetService assets,
-        string? objectKey,
-        CancellationToken ct)
+public sealed class CleanupOrphanApprovalRulesCommandHandler(IAppStoreService appStore)
+    : IRequestHandler<CleanupOrphanApprovalRulesCommand, Result<CleanupOrphanApprovalRulesResult>>
+{
+    public async Task<Result<CleanupOrphanApprovalRulesResult>> Handle(CleanupOrphanApprovalRulesCommand cmd, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(objectKey))
-            return;
-
-        try
-        {
-            await assets.DeleteAsync(objectKey, ct);
-        }
-        catch
-        {
-            // Ignorado de proposito: objeto orfao no storage nao quebra o delete.
-        }
+        var result = await appStore.CleanupOrphanApprovalRulesAsync(cmd.DryRun, cmd.ChangedBy, ct);
+        return Result<CleanupOrphanApprovalRulesResult>.Success(result);
     }
 }
 

@@ -84,6 +84,17 @@ public class AppApprovalRuleRepository : IAppApprovalRuleRepository
             .ToListAsync();
     }
 
+    public async Task<IReadOnlyList<AppApprovalRule>> GetAllByInstallationTypeAsync(
+        AppInstallationType installationType, CancellationToken cancellationToken = default)
+    {
+        return await _db.AppApprovalRules
+            .AsNoTracking()
+            .Where(x => x.InstallationType == installationType)
+            .OrderBy(x => x.PackageId)
+            .ThenBy(x => x.ScopeType)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<AppApprovalRule> CreateAsync(AppApprovalRule rule)
     {
         rule.Id = IdGenerator.NewId();

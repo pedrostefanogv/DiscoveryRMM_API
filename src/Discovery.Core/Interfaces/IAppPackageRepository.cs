@@ -5,7 +5,12 @@ namespace Discovery.Core.Interfaces;
 
 public interface IAppPackageRepository
 {
-    Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Busca um pacote. Leituras de catálogo EXCLUEM pacotes na lixeira por padrão;
+    /// passe <paramref name="includeDeleted"/> = true quando a lixeira precisa ser
+    /// visível (upsert/restauração/purge).
+    /// </summary>
+    Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(AppInstallationType installationType, string packageId, bool includeDeleted = false, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Busca vários pacotes do mesmo tipo em UMA consulta (evita N+1 na listagem
@@ -37,8 +42,31 @@ public interface IAppPackageRepository
 
     Task<AppPackage> UpsertCustomAsync(AppPackage package, CancellationToken cancellationToken = default);
 
-    /// <summary>Remove um pacote custom pelo packageId. Retorna false se não existir.</summary>
+    /// <summary>
+    /// EXCLUSÃO FÍSICA do pacote custom (purge da lixeira). Retorna false se não existir.
+    /// O soft delete usa <see cref="SoftDeleteCustomAsync"/>.
+    /// </summary>
     Task<bool> DeleteCustomAsync(string packageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Marca o pacote custom como excluído (lixeira): is_deleted/deleted_at/deleted_by/delete_reason.
+    /// Retorna o snapshot do estado anterior ou null se o pacote não existir/for marcado.
+    /// </summary>
+    Task<AppPackage?> SoftDeleteCustomAsync(string packageId, string? deletedBy, string? reason, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Soft delete não implementado neste double de teste.");
+
+    /// <summary>Retira o pacote da lixeira (limpa is_deleted/deleted_at/by/reason e as marcas de purge). false = não encontrado.</summary>
+    Task<bool> RestoreCustomAsync(string packageId, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Restore não implementado neste double de teste.");
+
+    /// <summary>Lista só os pacotes na lixeira (is_deleted), paginação por cursor (Name + Id).</summary>
+    Task<(IReadOnlyList<AppPackage> Items, bool HasMore)> ListCustomTrashAsync(
+        string? search, string? cursor, int limit, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Lixeira não implementada neste double de teste.");
+
+    /// <summary>Registra falha de purge (purge_failed_at/purge_error) — a linha fica retida na lixeira.</summary>
+    Task SetPurgeFailureAsync(string packageId, string error, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Purge failure não implementado neste double de teste.");
 
     /// <summary>
     /// Zera o instalador do pacote custom (FileObjectKey, FileBucket, FilePublicUrl,

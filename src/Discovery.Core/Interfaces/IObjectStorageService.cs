@@ -175,4 +175,23 @@ public interface IObjectStorageService
     private const string MultipartNotSupportedMessage =
         "O storage configurado nao suporta envio multipart com URLs pre-assinadas " +
         "(requer um provider S3-compatível: RustFS/MinIO/S3).";
+
+    /// <summary>
+    /// Lista as SESSÕES de multipart upload em andamento no bucket (opcionalmente
+    /// por prefixo de object key). Usado pela sanitização para abortar envios
+    /// abandonados da loja custom — o SDK Minio 7.0.0 não expõe ListMultipartUploads,
+    /// então providers S3-compatíveis implementam com requisição assinada.
+    /// Providers sem suporte devolvem lista vazia.
+    /// </summary>
+    Task<IReadOnlyList<MultipartUploadSessionInfo>> ListMultipartUploadSessionsAsync(
+        string? prefix,
+        int maxSessions,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MultipartUploadSessionInfo>>([]);
 }
+
+/// <summary>Uma sessão de multipart upload em andamento no bucket.</summary>
+public sealed record MultipartUploadSessionInfo(
+    string ObjectKey,
+    string UploadId,
+    DateTime InitiatedUtc);

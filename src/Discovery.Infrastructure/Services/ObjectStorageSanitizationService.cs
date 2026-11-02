@@ -84,6 +84,11 @@ public sealed class ObjectStorageSanitizationService(
                 storage, listing.Items, minAge, dryRun, cancellationToken));
         }
 
+        if (wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.IncompleteMultipartUploads))
+        {
+            results.Add(await SweepIncompleteMultipartUploadsAsync(storage, minAge, dryRun, cancellationToken));
+        }
+
         return new ObjectStorageSanitizationReport(
             StartedAtUtc: startedAt,
             FinishedAtUtc: DateTime.UtcNow,
@@ -239,6 +244,90 @@ public sealed class ObjectStorageSanitizationService(
             Error: failures.Count > 0 ? string.Join(" | ", failures.Take(5)) : null,
             FoundBytes: foundBytes,
             FixedBytes: deletedBytes,
+            Samples: samples);
+    }
+
+    /// <summary>
+    /// Sessões de multipart sob app-store/custom/ mais antigas que a idade mínima
+    /// são ABORTADAS (o storage descarta as partes). A idade mínima é a proteção
+    /// de um upload em andamento: sessão com menos de minAge não é tocada.
+    /// </summary>
+    private async Task<ObjectStorageSanitizationCheckResult> SweepIncompleteMultipartUploadsAsync(
+        IObjectStorageService storage,
+        int minAgeHours,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        const string title = "Uploads multipart incompletos da loja";
+
+        IReadOnlyList<MultipartUploadSessionInfo> sessions;
+        string? listError = null;
+        try
+        {
+            sessions = await storage.ListMultipartUploadSessionsAsync(CustomAssetsPrefix, MaxScanObjects, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao listar sessões de multipart no object storage.");
+            sessions = [];
+            listError = ex.Message;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var candidates = sessions
+            .Where(session => session.ObjectKey.StartsWith(CustomAssetsPrefix, StringComparison.Ordinal))
+            .Where(session => now - session.InitiatedUtc >= TimeSpan.FromHours(minAgeHours))
+            .ToArray();
+        var skipped = sessions.Count - candidates.Length;
+
+        var samples = candidates.Take(SampleLimit)
+            .Select(session => $"{session.ObjectKey} (uploadId {session.UploadId}, iniciado {session.InitiatedUtc:u})")
+            .ToList();
+
+        if (dryRun || candidates.Length == 0)
+        {
+            return new ObjectStorageSanitizationCheckResult(
+                Key: ObjectStorageSanitizationChecks.IncompleteMultipartUploads,
+                Title: title,
+                Examined: sessions.Count,
+                Found: candidates.Length,
+                Fixed: 0,
+                Skipped: skipped,
+                HasMore: false,
+                Error: listError,
+                FoundBytes: 0,
+                FixedBytes: 0,
+                Samples: samples);
+        }
+
+        var aborted = 0;
+        var failures = new List<string>();
+        foreach (var session in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await storage.AbortMultipartUploadAsync(session.ObjectKey, session.UploadId, cancellationToken);
+                aborted++;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Falha ao abortar o multipart {UploadId} de {ObjectKey}.", session.UploadId, session.ObjectKey);
+                failures.Add($"{session.ObjectKey}: {ex.Message}");
+            }
+        }
+
+        return new ObjectStorageSanitizationCheckResult(
+            Key: ObjectStorageSanitizationChecks.IncompleteMultipartUploads,
+            Title: title,
+            Examined: sessions.Count,
+            Found: candidates.Length,
+            Fixed: aborted,
+            Skipped: skipped + failures.Count,
+            HasMore: false,
+            Error: failures.Count > 0 ? string.Join(" | ", failures.Take(5)) : listError,
+            FoundBytes: 0,
+            FixedBytes: 0,
             Samples: samples);
     }
 

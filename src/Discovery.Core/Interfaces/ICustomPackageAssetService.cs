@@ -44,6 +44,18 @@ public interface ICustomPackageAssetService
         string objectKey,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Verifica SE o objeto existe no storage (StatObject). Usado pelo purge da
+    /// lixeira: quando o DELETE falha, é a existência — não o erro — que decide
+    /// se o purge do banco pode prosseguir.
+    /// Devolve <c>null</c> quando a verificação em si falhou (rede/API/storage).
+    /// Double de teste que não implementar herda falha explícita.
+    /// </summary>
+    Task<bool?> ExistsAsync(
+        string objectKey,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Verificacao de existencia nao implementada neste double de teste.");
+
     // ── Upload multipart DIRETO no storage (instaladores grandes) ────────────
     //
     // O arquivo NÃO passa pela API: ela cria o multipart, pré-assina cada bloco

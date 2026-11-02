@@ -237,7 +237,7 @@ public class ObjectStorageSanitizationServiceTests
         public Task<IReadOnlySet<string>> GetReferencedAssetKeysAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlySet<string>>(new HashSet<string>(referenced, StringComparer.Ordinal));
 
-        public Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<AppPackage?> GetByInstallationTypeAndPackageIdAsync(AppInstallationType installationType, string packageId, bool includeDeleted = false, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<AppPackage>> GetByInstallationTypeAndPackageIdsAsync(AppInstallationType installationType, IReadOnlyCollection<string> packageIds, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<(IReadOnlyList<AppPackage> Items, int TotalCount)> SearchPageAsync(AppInstallationType installationType, string? search, string? architecture, string? cursor, int limit, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<AppPackage>> GetAllByInstallationTypeAsync(AppInstallationType installationType, CancellationToken cancellationToken = default) => throw new NotImplementedException();

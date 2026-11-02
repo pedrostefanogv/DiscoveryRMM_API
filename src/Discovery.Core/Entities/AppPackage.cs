@@ -62,6 +62,19 @@ public class AppPackage
     public string? FileContentType { get; set; }
     public long? FileSizeBytes { get; set; }
     public string? FileChecksum { get; set; }
+    // ── Lixeira (soft delete) ─────────────────────────────────────────────
+    /// <summary>Pacote na lixeira: invisível no catálogo/política efetiva, restaurável.</summary>
+    public bool IsDeleted { get; set; }
+    public DateTime? DeletedAt { get; set; }
+    public string? DeletedBy { get; set; }
+
+    /// <summary>Motivo informado na exclusão (opcional).</summary>
+    public string? DeleteReason { get; set; }
+
+    /// <summary>Purge falhou ao remover o arquivo/ícone no object storage (a linha fica retida na lixeira).</summary>
+    public DateTime? PurgeFailedAt { get; set; }
+    public string? PurgeError { get; set; }
+
     public DateTime? SourceGeneratedAt { get; set; }
     public DateTime? LastUpdated { get; set; }
     public DateTime SyncedAt { get; set; }

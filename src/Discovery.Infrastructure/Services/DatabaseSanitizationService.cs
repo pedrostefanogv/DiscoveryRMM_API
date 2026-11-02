@@ -100,6 +100,7 @@ public sealed class DatabaseSanitizationService(
         await Run(DatabaseSanitizationChecks.AgentOrphanSite, () => InspectOrphanAgentSitesAsync(ct));
         await Run(DatabaseSanitizationChecks.TicketWatcherOrphan, () => InspectOrphanWatchersAsync(ct));
         await Run(DatabaseSanitizationChecks.AttachmentOrphan, () => InspectOrphanAttachmentsAsync(ct));
+        await Run(DatabaseSanitizationChecks.AppStoreOrphanCustomApprovalRules, () => FixOrphanCustomApprovalRulesAsync(dryRun, ct));
 
         return new SanitizationReport(
             startedAt,
@@ -110,6 +111,58 @@ public sealed class DatabaseSanitizationService(
             results.Sum(r => r.Fixed),
             results.Any(r => r.HasMore),
             results);
+    }
+
+    // ── Loja: regras de aprovação de pacote custom inexistente ──────────────
+    private async Task<SanitizationCheckResult> FixOrphanCustomApprovalRulesAsync(bool dryRun, CancellationToken ct)
+    {
+        var key = DatabaseSanitizationChecks.AppStoreOrphanCustomApprovalRules;
+        var rules = await db.AppApprovalRules.AsNoTracking()
+            .Where(r => r.InstallationType == AppInstallationType.Custom)
+            .OrderBy(r => r.PackageId).ThenBy(r => r.ScopeType)
+            .ToListAsync(ct);
+        var examined = rules.Count;
+
+        // Catálogo custom em memória (ids sem case): regra cujo pacote não existe
+        // (ou está na lixeira) é órfã.
+        var packageIds = (await db.AppPackages.AsNoTracking()
+                .Where(p => p.InstallationType == AppInstallationType.Custom && !p.IsDeleted)
+                .Select(p => p.PackageId)
+                .ToListAsync(ct))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var orphans = rules.Where(r => !packageIds.Contains(r.PackageId)).ToList();
+        var samples = orphans.Take(MaxSamples)
+            .Select(r => $"regra {r.Id} → '{r.PackageId}' (escopo {r.ScopeType}) sem pacote no catálogo")
+            .ToList();
+
+        if (dryRun || orphans.Count == 0)
+            return new(key, TitleOf(key), examined, orphans.Count, 0, 0, false, null, samples);
+
+        foreach (var rule in orphans)
+        {
+            db.AppApprovalAudits.Add(new AppApprovalAudit
+            {
+                Id = Guid.NewGuid(),
+                // RuleId fica null: a regra é removida na mesma transação e o FK é
+                // ON DELETE SET NULL — gravar o id quebraria a FK no INSERT.
+                RuleId = null,
+                ChangeType = AppApprovalAuditChangeType.Deleted,
+                ScopeType = rule.ScopeType,
+                ClientId = rule.ClientId,
+                SiteId = rule.SiteId,
+                AgentId = rule.AgentId,
+                InstallationType = rule.InstallationType,
+                PackageId = rule.PackageId,
+                Reason = "Regra órfã removida (sanitização): pacote custom não existe mais no catálogo.",
+                ChangedBy = "sanitization",
+                ChangedAt = DateTime.UtcNow
+            });
+        }
+        db.AppApprovalRules.RemoveRange(orphans);
+        await db.SaveChangesAsync(ct);
+
+        return new(key, TitleOf(key), examined, orphans.Count, orphans.Count, 0, false, null, samples);
     }
 
     private static string TitleOf(string key) =>

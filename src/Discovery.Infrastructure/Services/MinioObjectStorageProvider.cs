@@ -463,6 +463,74 @@ public class MinioObjectStorageProvider : IObjectStorageService
         return parts.OrderBy(part => part.PartNumber).ToArray();
     }
 
+    /// <summary>
+    /// ListMultipartUploads do S3 (GET /{bucket}?uploads). O SDK Minio 7.0.0 não
+    /// expõe a operação, então ela é feita com requisição assinada (SigV4), no
+    /// mesmo padrão de initiate/complete/abort/list-parts.
+    /// </summary>
+    public async Task<IReadOnlyList<MultipartUploadSessionInfo>> ListMultipartUploadSessionsAsync(
+        string? prefix,
+        int maxSessions,
+        CancellationToken cancellationToken = default)
+    {
+        var sessions = new List<MultipartUploadSessionInfo>();
+        string? keyMarker = null;
+        string? uploadIdMarker = null;
+
+        for (var page = 0; page < 100 && sessions.Count < maxSessions; page++)
+        {
+            var query = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["uploads"] = string.Empty,
+                ["max-uploads"] = "1000",
+            };
+
+            if (!string.IsNullOrEmpty(prefix))
+                query["prefix"] = prefix;
+            if (!string.IsNullOrEmpty(keyMarker))
+                query["key-marker"] = keyMarker;
+            if (!string.IsNullOrEmpty(uploadIdMarker))
+                query["upload-id-marker"] = uploadIdMarker;
+
+            // ListMultipartUploads é uma operação de BUCKET: objectKey vazio.
+            var (status, xml) = await SendSignedAsync(
+                _internalBaseUri, HttpMethod.Get, string.Empty, query, null, null, cancellationToken);
+
+            if (status != HttpStatusCode.OK)
+                throw new InvalidOperationException(
+                    $"Falha ao listar as sessões de multipart upload ({(int)status} {status}): {Truncate(xml, 300)}");
+
+            var doc = XDocument.Parse(xml);
+            var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
+
+            sessions.AddRange(doc.Descendants(ns + "Upload")
+                .Select(node => new MultipartUploadSessionInfo(
+                    ObjectKey: node.Element(ns + "Key")?.Value ?? string.Empty,
+                    UploadId: node.Element(ns + "UploadId")?.Value ?? string.Empty,
+                    InitiatedUtc: DateTime.TryParse(
+                        node.Element(ns + "Initiated")?.Value,
+                        CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal,
+                        out var initiated) ? initiated : DateTime.MinValue))
+                .Where(s => !string.IsNullOrWhiteSpace(s.ObjectKey) && !string.IsNullOrWhiteSpace(s.UploadId)));
+
+            var truncated = string.Equals(
+                doc.Descendants(ns + "IsTruncated").FirstOrDefault()?.Value?.Trim(),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+
+            if (!truncated)
+                break;
+
+            keyMarker = doc.Descendants(ns + "NextKeyMarker").FirstOrDefault()?.Value?.Trim();
+            uploadIdMarker = doc.Descendants(ns + "NextUploadIdMarker").FirstOrDefault()?.Value?.Trim();
+            if (string.IsNullOrEmpty(keyMarker))
+                break;
+        }
+
+        return sessions.Take(maxSessions).ToArray();
+    }
+
     public async Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
     {
         ValidateObjectKey(objectKey);
