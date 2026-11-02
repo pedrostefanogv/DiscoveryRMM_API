@@ -1,0 +1,11 @@
+[Unit]
+Description=Verifica periodicamente se o Discovery API ficou com runtime obsoleto
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+Unit=discovery-api-runtime-guard.service
+
+[Install]
+WantedBy=timers.target

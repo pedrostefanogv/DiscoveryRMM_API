@@ -1,0 +1,9 @@
+[Unit]
+Description=Discovery API runtime guard (detecta atualizacao de runtime sob o processo)
+Documentation=file:///opt/discovery-api/current/scripts/linux/discovery-runtime-guard.sh
+After=discovery-api.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/discovery-runtime-guard
+Nice=10

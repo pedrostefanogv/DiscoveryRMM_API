@@ -16,7 +16,10 @@ public static class HealthChecksServiceCollectionExtensions
             .AddCheck<PostgresHealthCheck>("postgresql", tags: ["db", "critical"])
             // Diverge entre modelo EF e schema real vira Unhealthy (não derruba a API).
             .AddCheck<SchemaDriftHealthCheck>("database-schema", tags: ["db", "schema"])
-            .AddCheck<RedisHealthCheck>("redis", tags: ["cache"]);
+            .AddCheck<RedisHealthCheck>("redis", tags: ["cache"])
+            // Runtime .NET atualizado sob o processo (DLLs do framework "(deleted)"):
+            // vira Unhealthy no /health; no-op/Healthy em Windows.
+            .AddCheck<RuntimeStaleHealthCheck>("dotnet-runtime", tags: ["runtime"]);
 
         // NATS health check
         healthChecksBuilder.AddAsyncCheck("nats", async ct =>

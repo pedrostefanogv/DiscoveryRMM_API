@@ -41,9 +41,15 @@ public class MfaController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new BeginFido2RegistrationQuery(userId));
         return result.Match<IActionResult>(
             success: r => Ok(new { options = r.OptionsJson }),
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }),
+                // Runtime .NET atualizado sob o processo: 503 em vez de 400.
+                "RuntimeStale" => StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new { errors = errors.Select(e => new { e.Code, e.Message }) }),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
     }
 
     /// <summary>
@@ -66,6 +72,10 @@ public class MfaController(IMediator mediator) : ControllerBase
             failure: errors => errors[0].Code switch
             {
                 "Unauthorized" => Unauthorized(new { errors = errors.Select(e => new { e.Code, e.Message }) }),
+                // Runtime .NET atualizado sob o processo: 503 em vez de 400.
+                "RuntimeStale" => StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new { errors = errors.Select(e => new { e.Code, e.Message }) }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
     }

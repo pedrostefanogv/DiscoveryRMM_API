@@ -776,6 +776,7 @@ EOF
   fi
 
   write_health_monitor_units
+  write_runtime_guard_units
 }
 
 # Monitor periodico do /health (somente log, sem notificacao externa).
@@ -844,6 +845,60 @@ EOF
 
   sudo systemctl daemon-reload
   sudo systemctl enable --now discovery-health-check.timer >/dev/null 2>&1 || warn "Falha ao habilitar discovery-health-check.timer"
+}
+
+# Guard de runtime: reinicia a API quando o framework .NET (ou uma dependencia
+# nativa) e atualizado sob o processo que ja esta em execucao.
+#
+# Motivo (incidente 2026-11-02): um apt upgrade trocou dotnet-runtime-10.0 de
+# 10.0.13 para 10.0.14 as 09:04 enquanto a API rodava desde 09:02. O dpkg apagou
+# /usr/lib/dotnet/shared/Microsoft.NETCore.App/10.0.13; a primeira assembly
+# carregada SOB DEMANDA passou a falhar com FileNotFoundException
+# (System.Runtime.Serialization.Primitives, pedida pela Fido2NetLib em
+# AssertionOptions.ToJson) e o login por MFA/FIDO2 devolveu HTTP 400 - enquanto o
+# /health seguia 200 e o discovery-health-check.timer nao acusava nada. Sem
+# needrestart instalado, nada reiniciava o servico.
+#
+# O timer abaixo cobre qualquer upgrade de runtime (dotnet, openssl, icu) ou
+# release apagada; o hook do apt antecipa o restart no instante do upgrade.
+write_runtime_guard_units() {
+  local templates_dir="${TEMPLATES_DIR:-}"
+  if [[ -z "$templates_dir" ]]; then
+    templates_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../templates" 2>/dev/null && pwd)"
+  fi
+  local guard_src="$templates_dir/discovery-runtime-guard.sh"
+  local service_src="$templates_dir/discovery-api-runtime-guard.service"
+  local timer_src="$templates_dir/discovery-api-runtime-guard.timer"
+  local hook_src="$templates_dir/apt-discovery-dotnet-restart.conf"
+
+  local missing=0 src
+  for src in "$guard_src" "$service_src" "$timer_src" "$hook_src"; do
+    if [[ ! -f "$src" ]]; then
+      warn "Template do guard de runtime ausente: $src"
+      missing=1
+    fi
+  done
+  if [[ "$missing" -ne 0 ]]; then
+    warn "Guard de runtime nao instalado (templates ausentes)."
+    return 0
+  fi
+
+  log "Criando/verificando guard de runtime .NET (timer systemd + hook do apt)"
+  # O guard e defesa extra: falhar aqui NAO deve abortar o update (set -e).
+  if ! {
+    sudo install -m 755 -o root -g root "$guard_src" /usr/local/sbin/discovery-runtime-guard &&
+      sudo install -m 644 -o root -g root "$service_src" /etc/systemd/system/discovery-api-runtime-guard.service &&
+      sudo install -m 644 -o root -g root "$timer_src" /etc/systemd/system/discovery-api-runtime-guard.timer &&
+      sudo install -m 644 -o root -g root "$hook_src" /etc/apt/apt.conf.d/99-discovery-dotnet-restart
+  }; then
+    warn "Falha ao instalar o guard de runtime; seguindo com o update (sem essa defesa extra)."
+    return 0
+  fi
+
+  sudo systemctl daemon-reload || warn "daemon-reload falhou apos instalar o guard de runtime."
+  if ! sudo systemctl enable --now discovery-api-runtime-guard.timer >/dev/null 2>&1; then
+    warn "Falha ao habilitar discovery-api-runtime-guard.timer"
+  fi
 }
 
 # ── Nginx site proxy ──────────────────────────────────────────────────────

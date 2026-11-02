@@ -52,5 +52,13 @@ public sealed record Error
     public static Error TooManyRequests(string message)
         => new("TooManyRequests", message);
 
+    /// <summary>
+    /// Runtime .NET atualizado sob o processo em execução (ex.: apt upgrade removeu o
+    /// diretório do framework). Assembly carregada sob demanda falha; mapeado para
+    /// HTTP 503 — o serviço volta ao normal quando o processo for reiniciado.
+    /// </summary>
+    public static Error RuntimeStale(string message)
+        => new("RuntimeStale", message);
+
     public override string ToString() => $"{Code}: {Message}";
 }

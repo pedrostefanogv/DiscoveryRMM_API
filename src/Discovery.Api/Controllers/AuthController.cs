@@ -123,9 +123,15 @@ public class AuthController(IMediator mediator, IUserAuthService userAuth) : Con
         var result = await _mediator.Send(new BeginFido2AssertionQuery(userId));
         return result.Match<IActionResult>(
             success: r => Ok(new { options = r.OptionsJson }),
-            failure: errors => errors[0].Code == "Forbidden"
-                ? ForbiddenAuth(errors[0].Message, "mfa_method_mismatch")
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+            failure: errors => errors[0].Code switch
+            {
+                "Forbidden" => ForbiddenAuth(errors[0].Message, "mfa_method_mismatch"),
+                // Runtime .NET atualizado sob o processo: 503 em vez de 400.
+                "RuntimeStale" => StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new { errors = errors.Select(e => new { e.Code, e.Message }) }),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
     }
 
     /// <summary>
@@ -151,6 +157,10 @@ public class AuthController(IMediator mediator, IUserAuthService userAuth) : Con
                 "TooManyRequests" => StatusCode(
                     StatusCodes.Status429TooManyRequests,
                     new { code = "mfa_locked", message = errors[0].Message }),
+                // Runtime .NET atualizado sob o processo: 503 em vez de 400.
+                "RuntimeStale" => StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new { errors = errors.Select(e => new { e.Code, e.Message }) }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
     }
@@ -180,6 +190,10 @@ public class AuthController(IMediator mediator, IUserAuthService userAuth) : Con
                 "TooManyRequests" => StatusCode(
                     StatusCodes.Status429TooManyRequests,
                     new { code = "mfa_locked", message = errors[0].Message }),
+                // Runtime .NET atualizado sob o processo: 503 em vez de 400.
+                "RuntimeStale" => StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new { errors = errors.Select(e => new { e.Code, e.Message }) }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
     }

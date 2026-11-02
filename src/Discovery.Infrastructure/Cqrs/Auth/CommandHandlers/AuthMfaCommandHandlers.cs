@@ -8,6 +8,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
+using Discovery.Infrastructure.Services;
 using MediatR;
 using Microsoft.Extensions.Logging;
 
@@ -155,6 +156,12 @@ public sealed class CompleteFido2AssertionCommandHandler(
             var session = await authService.IssueFullSessionAsync(cmd.UserId, true, cmd.IpAddress, cmd.UserAgent);
             return Result<TokenPairDto>.Success(session);
         }
+        catch (Exception ex) when (RuntimeStaleFailure.IsRuntimeStale(ex))
+        {
+            logger.LogCritical(ex, "Erro ao concluir a asserção FIDO2 do usuário {UserId}: {Hint}",
+                cmd.UserId, RuntimeStaleFailure.OperatorHint);
+            return Result<TokenPairDto>.Failure(RuntimeStaleFailure.CreateError());
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Erro inesperado ao concluir a asserção FIDO2 do usuário {UserId}", cmd.UserId);
@@ -271,6 +278,12 @@ public sealed class CompleteOtpAssertionCommandHandler(
 
             var session = await authService.IssueFullSessionAsync(cmd.UserId, true, cmd.IpAddress, cmd.UserAgent);
             return Result<TokenPairDto>.Success(session);
+        }
+        catch (Exception ex) when (RuntimeStaleFailure.IsRuntimeStale(ex))
+        {
+            logger.LogCritical(ex, "Erro ao concluir a asserção OTP do usuário {UserId}: {Hint}",
+                cmd.UserId, RuntimeStaleFailure.OperatorHint);
+            return Result<TokenPairDto>.Failure(RuntimeStaleFailure.CreateError());
         }
         catch (Exception ex)
         {

@@ -8,6 +8,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
+using Discovery.Infrastructure.Services;
 using MediatR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,12 @@ public sealed class BeginFido2RegistrationQueryHandler(
                 q.UserId, user.Email, user.FullName, existingCredentialIds);
 
             return Result<BeginFido2RegistrationResult>.Success(new BeginFido2RegistrationResult(optionsJson));
+        }
+        catch (Exception ex) when (RuntimeStaleFailure.IsRuntimeStale(ex))
+        {
+            logger.LogCritical(ex, "Falha ao iniciar registro FIDO2 para o usuário {UserId}: {Hint}",
+                q.UserId, RuntimeStaleFailure.OperatorHint);
+            return Result<BeginFido2RegistrationResult>.Failure(RuntimeStaleFailure.CreateError());
         }
         catch (Exception ex)
         {
@@ -102,6 +109,12 @@ public sealed class CompleteFido2RegistrationCommandHandler(
 
             return Result<CompleteFido2RegistrationResult>.Success(
                 new CompleteFido2RegistrationResult(created.Id, "Chave FIDO2 registrada com sucesso."));
+        }
+        catch (Exception ex) when (RuntimeStaleFailure.IsRuntimeStale(ex))
+        {
+            logger.LogCritical(ex, "Falha ao concluir registro FIDO2 para o usuário {UserId}: {Hint}",
+                cmd.UserId, RuntimeStaleFailure.OperatorHint);
+            return Result<CompleteFido2RegistrationResult>.Failure(RuntimeStaleFailure.CreateError());
         }
         catch (Exception ex)
         {

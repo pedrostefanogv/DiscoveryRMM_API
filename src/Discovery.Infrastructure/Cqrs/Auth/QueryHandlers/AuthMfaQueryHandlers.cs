@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.Auth.Queries;
 using Discovery.Core.DTOs.Auth;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Security;
+using Discovery.Infrastructure.Services;
 using MediatR;
 using Microsoft.Extensions.Logging;
 
@@ -26,6 +27,12 @@ public sealed class BeginFido2AssertionQueryHandler(
             var activeKeys = await mfaKeyRepo.GetActiveByUserIdAsync(q.UserId);
             var optionsJson = await fido2Service.BeginAssertionAsync(q.UserId, activeKeys);
             return Result<BeginFido2AssertionResult>.Success(new BeginFido2AssertionResult(optionsJson));
+        }
+        catch (Exception ex) when (RuntimeStaleFailure.IsRuntimeStale(ex))
+        {
+            logger.LogCritical(ex, "Falha ao iniciar a asserção FIDO2 do usuário {UserId}: {Hint}",
+                q.UserId, RuntimeStaleFailure.OperatorHint);
+            return Result<BeginFido2AssertionResult>.Failure(RuntimeStaleFailure.CreateError());
         }
         catch (Exception ex)
         {

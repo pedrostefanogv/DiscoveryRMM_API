@@ -81,7 +81,7 @@ client_max_body_size 64m;
   # "connect-src 'none'" e report-uri em csp-reporting.cloudflare.com) NAO vem
   # daqui: sao do Script Monitor do Rocket Loader do Cloudflare. Para silenciar,
   # desligue o Rocket Loader na zona (Speed > Optimization).
-  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss: ws:; frame-src 'self' blob: data: https: http:; object-src 'self'; base-uri 'self'; frame-ancestors 'self'" always;
+  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://cloudflareinsights.com https: wss: ws:; frame-src 'self' blob: data: https: http:; object-src 'self'; base-uri 'self'; frame-ancestors 'self'" always;
 
   gzip on;
   gzip_types text/css application/javascript application/json image/svg+xml;
@@ -177,7 +177,7 @@ client_max_body_size 64m;
     add_header Pragma "no-cache" always;
     # add_header NAO e herdado por location que declara o seu proprio: sem repetir
     # aqui, a CSP do server block se perde neste endpoint.
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https: wss: ws:; frame-src 'self' blob: data: https: http:; object-src 'self'; base-uri 'self'; frame-ancestors 'self'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://cloudflareinsights.com https: wss: ws:; frame-src 'self' blob: data: https: http:; object-src 'self'; base-uri 'self'; frame-ancestors 'self'" always;
   }
 
   location ^~ /openapi {

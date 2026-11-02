@@ -33,6 +33,11 @@ public static class ResultExtensions
                     {
                         StatusCode = StatusCodes.Status429TooManyRequests
                     },
+                    // Runtime .NET atualizado sob o processo: 503 em vez de 400.
+                    "RuntimeStale" => new ObjectResult(new { errors = errorList })
+                    {
+                        StatusCode = StatusCodes.Status503ServiceUnavailable
+                    },
                     _ => new BadRequestObjectResult(new { errors = errorList })
                 };
             });
