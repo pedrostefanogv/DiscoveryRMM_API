@@ -352,8 +352,11 @@ public class AppStoreSoftDeletePurgeTests
         var service = NewService(db, new AppApprovalRuleRepository(db), new RecordingAuditService());
         var rules = await service.GetRulesByScopeAsync(AppApprovalScopeType.Global, null, AppInstallationType.Custom);
 
-        var rule = rules.Single(r => r.PackageId == packageId);
-        Assert.That(rule.HasPackage, Is.False, "pacote na lixeira = regra órfã");
+        // Duas regras (Allow + Deny) apontam para o MESMO packageId.
+        Assert.That(
+            rules.Where(r => r.PackageId == packageId).Select(r => r.HasPackage),
+            Is.All.False,
+            "pacote na lixeira = regra órfã");
     }
 
     [Test]
@@ -368,7 +371,9 @@ public class AppStoreSoftDeletePurgeTests
         var service = NewService(db, new AppApprovalRuleRepository(db), new RecordingAuditService());
 
         var dryRun = await service.CleanupOrphanApprovalRulesAsync(dryRun: true, changedBy: "ti.user");
-        Assert.That(dryRun.Orphans.Select(o => o.PackageId), Is.EquivalentTo([packageId]));
+        // Duas regras do mesmo packageId aparecem como duas entradas órfãs.
+        Assert.That(dryRun.Orphans.Select(o => o.PackageId).Distinct(), Is.EquivalentTo([packageId]));
+        Assert.That(dryRun.Orphans, Has.Count.EqualTo(2));
         Assert.That(dryRun.Removed, Is.EqualTo(0));
         Assert.That(await db.AppApprovalRules.CountAsync(r => r.PackageId == packageId), Is.EqualTo(2));
 

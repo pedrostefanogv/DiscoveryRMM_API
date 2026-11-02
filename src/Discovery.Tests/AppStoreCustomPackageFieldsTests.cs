@@ -22,8 +22,17 @@ public class AppStoreCustomPackageFieldsTests
     /// configuração, sites e agents) são null! de propósito — mesmo padrão de
     /// P2pOverviewServiceTests/AiChatA2uiReemitTests.
     /// </summary>
+    // D5 (recriação descarta aprovação órfã) consulta regras e audita no upsert:
+    // dependências reais/fake no lugar dos nulls (que causavam NRE).
     private static AppStoreService NewService(DiscoveryDbContext db, ICustomPackageAssetService assets)
-        => new(null!, null!, null!, null!, null!, new AppPackageRepository(db), assets);
+        => new(
+            new AppApprovalRuleRepository(db),
+            new RecordingAuditService(),
+            null!,
+            null!,
+            null!,
+            new AppPackageRepository(db),
+            assets);
 
     private static UpsertCustomAppCatalogPackageRequest NewRequest(string packageId = "foxit") => new()
     {

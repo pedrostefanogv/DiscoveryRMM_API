@@ -32,5 +32,11 @@ internal sealed class AppPackageTestDbContext(DbContextOptions<DiscoveryDbContex
         }
 
         modelBuilder.Entity<AppPackage>(entity => entity.HasKey(p => p.Id));
+
+        // D5 (recriação descarta aprovação órfã): o UpsertCustomCatalogPackage
+        // consulta app_approval_rules e grava app_approval_audits — ambas
+        // precisam existir no modelo deste contexto enxuto.
+        modelBuilder.Entity<AppApprovalRule>(entity => entity.HasKey(r => r.Id));
+        modelBuilder.Entity<AppApprovalAudit>(entity => entity.HasKey(a => a.Id));
     }
 }

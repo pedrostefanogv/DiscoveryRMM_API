@@ -56,11 +56,27 @@ public class AppStoreCustomPackageCommandTests
         return options;
     }
 
+    // D5 (recriação descarta aprovação órfã) usa _approvalRepo/_auditService:
+    // passam a ser fakes reais — os nulls anteriormente tolerados causavam NRE.
     private static AppStoreService NewService(DiscoveryDbContext db)
-        => new(null!, null!, null!, null!, null!, new AppPackageRepository(db), new NoopAssets());
+        => new(
+            new AppApprovalRuleRepository(db),
+            new RecordingAuditService(),
+            null!,
+            null!,
+            null!,
+            new AppPackageRepository(db),
+            new NoopAssets());
 
     private static AppStoreService NewService(DiscoveryDbContext db, ICustomPackageAssetService assets)
-        => new(null!, null!, null!, null!, null!, new AppPackageRepository(db), assets);
+        => new(
+            new AppApprovalRuleRepository(db),
+            new RecordingAuditService(),
+            null!,
+            null!,
+            null!,
+            new AppPackageRepository(db),
+            assets);
 
     [Test]
     public async Task Upsert_rejeita_instalador_que_sumiu_do_storage()

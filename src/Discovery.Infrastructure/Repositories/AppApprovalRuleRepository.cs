@@ -121,8 +121,15 @@ public class AppApprovalRuleRepository : IAppApprovalRuleRepository
 
     public async Task DeleteAsync(Guid id)
     {
-        await _db.AppApprovalRules
-            .Where(x => x.Id == id)
-            .ExecuteDeleteAsync();
+        // Carrega e remove via ChangeTracker em vez de ExecuteDeleteAsync: a
+        // operação é usada no ciclo de vida do pacote custom (soft delete/purge,
+        // limpeza de órfãs) e precisa ser portável para os doubles em memória
+        // dos testes (o provider InMemory não suporta ExecuteDeleteAsync).
+        var existing = await _db.AppApprovalRules.SingleOrDefaultAsync(x => x.Id == id);
+        if (existing is null)
+            return;
+
+        _db.AppApprovalRules.Remove(existing);
+        await _db.SaveChangesAsync();
     }
 }

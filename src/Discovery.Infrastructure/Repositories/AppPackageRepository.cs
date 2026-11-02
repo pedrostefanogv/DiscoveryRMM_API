@@ -453,13 +453,14 @@ public class AppPackageRepository : IAppPackageRepository
 
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var term = search.Trim();
-            var pattern = $"%{term}%";
+            // Busca PORTÁVEL (ToLower().Contains traduz tanto no Npgsql quanto no
+            // provider InMemory dos testes; EF.Functions.ILike é exclusivo do Postgres).
+            var term = search.Trim().ToLowerInvariant();
             query = query.Where(x =>
-                EF.Functions.ILike(x.PackageId, pattern) ||
-                EF.Functions.ILike(x.Name, pattern) ||
-                (x.Publisher != null && EF.Functions.ILike(x.Publisher, pattern)) ||
-                (x.Description != null && EF.Functions.ILike(x.Description, pattern)));
+                x.PackageId.ToLower().Contains(term) ||
+                x.Name.ToLower().Contains(term) ||
+                (x.Publisher != null && x.Publisher.ToLower().Contains(term)) ||
+                (x.Description != null && x.Description.ToLower().Contains(term)));
         }
 
         if (CursorPaginationHelper.TryDecodeNameCursor(cursor, out var cursorName, out var cursorId))
