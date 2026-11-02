@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
@@ -156,6 +157,19 @@ internal static class ObjectStorageCliMode
                 // com valores iguais) inflava Version/UpdatedBy e o audit de
                 // server_configurations a cada update sem nenhuma mudanca real.
                 var toSave = options.Force ? updates : SelectChanged(current, updates);
+
+                // Trava de seguranca: o console pode ter migrado para um provedor
+                // externo (R2/S3) DEPOIS do instalador. Reexecutar o CLI (update do
+                // servidor) com as variaveis DISCOVERY_OBJECT_STORAGE_* antigas
+                // reverteria endpoint/bucket/chaves de volta para o RustFS interno —
+                // ja aconteceu em homolog. Sem --force, nao sobrescreve uma
+                // configuracao externa completa definida pelo console.
+                if (toSave.Count > 0 && !options.Force && ShouldSkipConsoleManaged(current, toSave, out var keepReason))
+                {
+                    Console.WriteLine("[object-storage] " + keepReason);
+                    toSave.Clear();
+                }
+
                 if (toSave.Count == 0)
                 {
                     Console.WriteLine("[object-storage] Configuracao ja gravada e igual ao ambiente; nada a regravar (use --force para regravar).");
@@ -357,7 +371,9 @@ internal static class ObjectStorageCliMode
         {
             BucketName = GetString(nameof(ServerConfiguration.ObjectStorageBucketName), current.ObjectStorageBucketName),
             Endpoint = GetString(nameof(ServerConfiguration.ObjectStorageEndpoint), current.ObjectStorageEndpoint),
-            Region = GetString(nameof(ServerConfiguration.ObjectStorageRegion), current.ObjectStorageRegion),
+            Region = ObjectStorageRegionResolver.Resolve(
+                GetString(nameof(ServerConfiguration.ObjectStorageRegion), current.ObjectStorageRegion),
+                GetString(nameof(ServerConfiguration.ObjectStorageEndpoint), current.ObjectStorageEndpoint)),
             AccessKey = GetString(nameof(ServerConfiguration.ObjectStorageAccessKey), current.ObjectStorageAccessKey),
             SecretKey = GetString(nameof(ServerConfiguration.ObjectStorageSecretKey), current.ObjectStorageSecretKey),
             UrlTtlHours = GetInt(nameof(ServerConfiguration.ObjectStorageUrlTtlHours), current.ObjectStorageUrlTtlHours),
@@ -366,13 +382,63 @@ internal static class ObjectStorageCliMode
         };
     }
 
+    /// <summary>
+    /// Configuracao externa COMPLETA e ativa no banco (o console administra).
+    /// Nesse estado o instalador nao deve reimpor as variaveis do env sem --force.
+    /// </summary>
+    internal static bool IsConsoleManagedExternal(ServerConfiguration current)
+        => !current.ObjectStorageInternal
+           && !string.IsNullOrWhiteSpace(current.ObjectStorageEndpoint)
+           && !string.IsNullOrWhiteSpace(current.ObjectStorageBucketName)
+           && !string.IsNullOrWhiteSpace(current.ObjectStorageAccessKey)
+           && !string.IsNullOrWhiteSpace(current.ObjectStorageSecretKey);
+
+    /// <summary>
+    /// O patch do instalador mexeria na topologia do storage (endpoint/bucket/
+    /// credenciais/modo interno)? Mudanca so de TTL/SSL/path-style nao conta.
+    /// </summary>
+    internal static bool TouchesStorageTopology(IReadOnlyDictionary<string, object> updates)
+        => updates.Keys.Any(key =>
+            key.Equals(nameof(ServerConfiguration.ObjectStorageEndpoint), StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(ServerConfiguration.ObjectStorageBucketName), StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(ServerConfiguration.ObjectStorageAccessKey), StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(ServerConfiguration.ObjectStorageSecretKey), StringComparison.OrdinalIgnoreCase)
+            || key.Equals(nameof(ServerConfiguration.ObjectStorageInternal), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Decide se o CLI deve IGNORAR o que veio do ambiente para nao derrubar a
+    /// configuracao externa do console. <paramref name="reason"/> vai para o log.
+    /// </summary>
+    internal static bool ShouldSkipConsoleManaged(
+        ServerConfiguration current,
+        IReadOnlyDictionary<string, object> pending,
+        out string reason)
+    {
+        if (IsConsoleManagedExternal(current) && TouchesStorageTopology(pending))
+        {
+            reason =
+                "Configuracao de object storage definida pelo console (provedor externo) mantida: " +
+                "as variaveis DISCOVERY_OBJECT_STORAGE_* do instalador NAO foram aplicadas. " +
+                "Use --force (ou ajuste as variaveis) para sobrescrever.";
+            return true;
+        }
+
+        reason = string.Empty;
+        return false;
+    }
+
     /// <summary>Descricao legivel do estado, sempre sem expor o segredo.</summary>
     internal static string DescribeState(ServerConfiguration config)
     {
         var secretConfigured = !string.IsNullOrWhiteSpace(config.ObjectStorageSecretKey);
         var bucket = string.IsNullOrWhiteSpace(config.ObjectStorageBucketName) ? "(vazio)" : config.ObjectStorageBucketName;
         var endpoint = string.IsNullOrWhiteSpace(config.ObjectStorageEndpoint) ? "(vazio)" : config.ObjectStorageEndpoint;
-        var region = string.IsNullOrWhiteSpace(config.ObjectStorageRegion) ? "(vazio)" : config.ObjectStorageRegion;
+        // Região em branco é normal (R2/MinIO): mostra a EFETIVA usada na assinatura.
+        var effectiveRegion = ObjectStorageRegionResolver.Resolve(
+            config.ObjectStorageRegion, config.ObjectStorageEndpoint);
+        var region = string.IsNullOrWhiteSpace(config.ObjectStorageRegion)
+            ? $"(vazio -> {effectiveRegion})"
+            : config.ObjectStorageRegion;
 
         // Prefixo das URLs pre-assinadas (path-style): ajuda a conferir se o
         // location do nginx cobre o bucket.

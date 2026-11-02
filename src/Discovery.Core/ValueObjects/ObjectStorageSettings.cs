@@ -71,9 +71,11 @@ public class ObjectStorageSettings
         if (!string.IsNullOrWhiteSpace(PresignEndpoint) && !TryValidateEndpoint(PresignEndpoint!))
             errors.Add("PresignEndpoint deve ser um host válido ou URL http/https sem path");
 
-        if (string.IsNullOrWhiteSpace(Region))
-            errors.Add("Region é obrigatório");
-        else if (Region.Contains(' '))
+        // Região é OPCIONAL: provedores como Cloudflare R2 não têm região (usam
+        // "auto") e MinIO/RustFS ignoram o valor. Antes, o campo em branco
+        // derrubava a configuração inteira ("Region é obrigatório") e bloqueava
+        // todo upload. A região efetiva vem de ObjectStorageRegionResolver.
+        if (!string.IsNullOrWhiteSpace(Region) && Region.Contains(' '))
             errors.Add("Region não pode conter espaços");
 
         if (string.IsNullOrWhiteSpace(AccessKey))

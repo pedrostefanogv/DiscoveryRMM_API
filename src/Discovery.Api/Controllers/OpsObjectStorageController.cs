@@ -112,7 +112,8 @@ public class OpsObjectStorageController(
             {
                 BucketName = server.ObjectStorageBucketName,
                 Endpoint = server.ObjectStorageEndpoint,
-                Region = server.ObjectStorageRegion,
+                Region = ObjectStorageRegionResolver.Resolve(
+                    server.ObjectStorageRegion, server.ObjectStorageEndpoint),
                 AccessKey = server.ObjectStorageAccessKey,
                 SecretKey = server.ObjectStorageSecretKey,
                 UrlTtlHours = server.ObjectStorageUrlTtlHours > 0 ? server.ObjectStorageUrlTtlHours : 24,
@@ -125,7 +126,9 @@ public class OpsObjectStorageController(
         {
             BucketName = FirstNonEmpty(server.ObjectStorageBucketName, options.Bucket),
             Endpoint = FirstNonEmpty(options.InternalEndpoint, "http://127.0.0.1:9000"),
-            Region = FirstNonEmpty(server.ObjectStorageRegion, options.Region, "us-east-1"),
+            Region = ObjectStorageRegionResolver.Resolve(
+                FirstNonEmpty(server.ObjectStorageRegion, options.Region),
+                FirstNonEmpty(options.PublicEndpoint, options.InternalEndpoint)),
             AccessKey = options.AccessKey,
             SecretKey = options.SecretKey,
             UrlTtlHours = server.ObjectStorageUrlTtlHours > 0

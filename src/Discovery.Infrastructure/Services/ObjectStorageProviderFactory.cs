@@ -91,7 +91,11 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
             BucketName = FirstNonEmpty(serverConfig.ObjectStorageBucketName, options.Bucket),
             Endpoint = internalEndpoint,
             PresignEndpoint = string.IsNullOrWhiteSpace(publicEndpoint) ? null : publicEndpoint,
-            Region = FirstNonEmpty(serverConfig.ObjectStorageRegion, options.Region, "us-east-1"),
+            // Região efetiva: configurada no banco/env ou derivada do endpoint
+            // (R2 -> "auto", AWS -> região do host, MinIO -> us-east-1).
+            Region = ObjectStorageRegionResolver.Resolve(
+                FirstNonEmpty(serverConfig.ObjectStorageRegion, options.Region),
+                string.IsNullOrWhiteSpace(publicEndpoint) ? internalEndpoint : publicEndpoint),
             AccessKey = options.AccessKey,
             SecretKey = options.SecretKey,
             UrlTtlHours = serverConfig.ObjectStorageUrlTtlHours > 0
@@ -259,7 +263,9 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
         {
             BucketName = serverConfig.ObjectStorageBucketName,
             Endpoint = serverConfig.ObjectStorageEndpoint,
-            Region = serverConfig.ObjectStorageRegion,
+            // Campo Região em branco é normal (R2/MinIO): resolver pelo endpoint.
+            Region = ObjectStorageRegionResolver.Resolve(
+                serverConfig.ObjectStorageRegion, serverConfig.ObjectStorageEndpoint),
             AccessKey = serverConfig.ObjectStorageAccessKey,
             SecretKey = decryptedSecret,
             UrlTtlHours = serverConfig.ObjectStorageUrlTtlHours,
