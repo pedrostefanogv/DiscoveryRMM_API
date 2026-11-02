@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
@@ -16,8 +17,15 @@ namespace Discovery.Infrastructure.Services;
 /// 2. sem task, `autoUpdateEnabled` efetivo liga o auto-update da Loja;
 /// 3. caso contrário é manual (operador usa a aba Atualizações).
 ///
-/// Conflito é sinalizado quando a Loja está com auto-update ligado E existe
-/// task de automação para o mesmo pacote: os dois motores agiriam sobre ele.
+/// Política efetiva (resolved.Policy):
+///  - Disabled: a Loja bloqueia tudo — a lista de itens é vazia;
+///  - All: a lista vem do catálogo efetivo (GetEffectiveAppsAsync), não das
+///    regras de aprovação; itens sem regra explícita têm autoUpdate=false;
+///  - PreApproved (ou não resolvida): a lista vem das regras resolvidas.
+///
+/// Conflito é sinalizado quando dois motores agiriam sobre o pacote
+/// (auto-update da Loja + task de automação) ou quando a task escolhida usa
+/// filtros de tags (risco de furo: nem todo agente do escopo é coberto).
 /// </summary>
 public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
 {
@@ -34,19 +42,25 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
     private readonly IConfigurationResolver _configurationResolver;
     private readonly ISiteRepository? _siteRepository;
     private readonly IAgentRepository? _agentRepository;
+    private readonly IClientRepository? _clientRepository;
+    private readonly IConfigurationService? _configurationService;
 
     public AppStoreUpdateIntentService(
         IAppStoreService appStoreService,
         IAutomationTaskRepository automationTasks,
         IConfigurationResolver configurationResolver,
         ISiteRepository? siteRepository = null,
-        IAgentRepository? agentRepository = null)
+        IAgentRepository? agentRepository = null,
+        IClientRepository? clientRepository = null,
+        IConfigurationService? configurationService = null)
     {
         _appStoreService = appStoreService;
         _automationTasks = automationTasks;
         _configurationResolver = configurationResolver;
         _siteRepository = siteRepository;
         _agentRepository = agentRepository;
+        _clientRepository = clientRepository;
+        _configurationService = configurationService;
     }
 
     public async Task<AppStoreUpdateIntentPageDto> GetUpdateIntentAsync(
@@ -61,39 +75,35 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
             scopeType, scopeId, installationType, search, cancellationToken);
 
         var chain = await ResolveScopeChainAsync(scopeType, scopeId, cancellationToken);
-        var scopedTasks = await LoadUpdateTasksAsync(chain, cancellationToken);
-        var maintenanceWindow = await LoadMaintenanceWindowAsync(cancellationToken);
+        var maintenanceWindow = await LoadMaintenanceWindowAsync(chain, cancellationToken);
 
-        var items = new List<AppStoreUpdateIntentItemDto>();
-        foreach (var rule in resolved.Items)
+        var page = new AppStoreUpdateIntentPageDto
         {
-            // Só pacotes permitidos têm intenção de atualização: negado nunca atualiza.
-            if (rule.Action != AppApprovalActionType.Allow)
-                continue;
+            ScopeType = scopeType,
+            ScopeId = scopeId,
+            InstallationType = installationType,
+            Search = resolved.Search,
+            Policy = resolved.Policy,
+            MaintenanceWindow = maintenanceWindow
+        };
 
-            var task = PickAutomationTask(scopedTasks, rule.PackageId, installationType);
-            var conflict = task is not null && rule.AutoUpdateEnabled;
-
-            items.Add(new AppStoreUpdateIntentItemDto
-            {
-                PackageId = rule.PackageId,
-                PackageName = rule.PackageName,
-                Action = rule.Action,
-                AutoUpdateEnabled = rule.AutoUpdateEnabled,
-                Owner = task is not null
-                    ? AppUpdateOwner.Automation
-                    : rule.AutoUpdateEnabled
-                        ? AppUpdateOwner.AutoUpdate
-                        : AppUpdateOwner.Manual,
-                AutomationTaskId = task?.Task.Id,
-                AutomationTaskName = task?.Task.Name,
-                AutomationTriggerSummary = task is null ? null : DescribeTriggers(task.Task),
-                Conflict = conflict,
-                ConflictReason = conflict
-                    ? $"Auto-atualização ligada, mas a automação \"{task!.Task.Name}\" já atualiza este pacote."
-                    : null
-            });
+        // Política Disabled: a Loja bloqueia tudo — ninguém atualiza por catálogo.
+        if (resolved.Policy == AppStorePolicyType.Disabled)
+        {
+            page.Count = 0;
+            page.Items = [];
+            return page;
         }
+
+        var (scopedTasks, truncated) = await LoadUpdateTasksAsync(chain, cancellationToken);
+        page.Truncated = truncated;
+
+        // Política All: a base é o catálogo efetivo do escopo (o agent instala
+        // tudo aprovado), não as regras de aprovação — elas só informam campos
+        // explícitos (autoUpdate) para pacotes que as têm.
+        var items = resolved.Policy == AppStorePolicyType.All
+            ? await BuildItemsFromEffectiveAppsAsync(chain, installationType, resolved, scopedTasks, cancellationToken)
+            : BuildItemsFromResolvedRulesAsync(resolved, scopedTasks, installationType);
 
         // Consistência: o mesmo pacote não aparece duas vezes (a regra resolvida já
         // é uma linha por pacote, mas o catálogo pode ter ids com caixa diferente).
@@ -103,16 +113,109 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
             .OrderBy(item => item.PackageId, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return new AppStoreUpdateIntentPageDto
+        page.Count = deduped.Count;
+        page.Items = deduped;
+        return page;
+    }
+
+    // ── Itens: regras resolvidas (PreApproved / não resolvida) ─────────
+
+    private static List<AppStoreUpdateIntentItemDto> BuildItemsFromResolvedRulesAsync(
+        AppApprovalResolvedPageDto resolved,
+        IReadOnlyList<ScopedTask> scopedTasks,
+        AppInstallationType installationType)
+    {
+        var items = new List<AppStoreUpdateIntentItemDto>();
+        foreach (var rule in resolved.Items)
         {
-            ScopeType = scopeType,
-            ScopeId = scopeId,
-            InstallationType = installationType,
-            Search = resolved.Search,
-            Policy = resolved.Policy,
-            MaintenanceWindow = maintenanceWindow,
-            Count = deduped.Count,
-            Items = deduped
+            // Só pacotes permitidos têm intenção de atualização: negado nunca atualiza.
+            if (rule.Action != AppApprovalActionType.Allow)
+                continue;
+
+            items.Add(BuildItem(rule.PackageId, rule.PackageName, rule.Action, rule.AutoUpdateEnabled, scopedTasks, installationType));
+        }
+
+        return items;
+    }
+
+    // ── Itens: catálogo efetivo (política All) ─────────────────────────
+
+    private async Task<List<AppStoreUpdateIntentItemDto>> BuildItemsFromEffectiveAppsAsync(
+        ScopeChain chain,
+        AppInstallationType installationType,
+        AppApprovalResolvedPageDto resolved,
+        IReadOnlyList<ScopedTask> scopedTasks,
+        CancellationToken cancellationToken)
+    {
+        var apps = await _appStoreService.GetEffectiveAppsAsync(
+            chain.ClientId, chain.SiteId, chain.AgentId, installationType, cancellationToken);
+
+        // Regras explícitas do escopo continuam informando autoUpdate quando existem.
+        var ruleByPackage = resolved.Items
+            .GroupBy(rule => rule.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        var search = resolved.Search?.Trim();
+        var items = new List<AppStoreUpdateIntentItemDto>();
+        foreach (var app in apps)
+        {
+            if (search is { Length: > 0 } &&
+                !app.PackageId.Contains(search, StringComparison.OrdinalIgnoreCase) &&
+                !app.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            ruleByPackage.TryGetValue(app.PackageId, out var rule);
+            items.Add(BuildItem(
+                app.PackageId,
+                string.IsNullOrWhiteSpace(app.Name) ? app.PackageId : app.Name,
+                rule?.Action ?? AppApprovalActionType.Allow,
+                // Item sem regra explícita NÃO tem auto-atualização da Loja.
+                rule?.AutoUpdateEnabled ?? false,
+                scopedTasks,
+                installationType));
+        }
+
+        return items;
+    }
+
+    private static AppStoreUpdateIntentItemDto BuildItem(
+        string packageId,
+        string? packageName,
+        AppApprovalActionType action,
+        bool autoUpdateEnabled,
+        IReadOnlyList<ScopedTask> scopedTasks,
+        AppInstallationType installationType)
+    {
+        var task = PickAutomationTask(scopedTasks, packageId, installationType);
+
+        var reasons = new List<string>();
+        if (task is not null && UsesTagFilters(task.Task))
+        {
+            reasons.Add($"A task \"{task.Task.Name}\" usa filtros de tags — nem todos os agentes do escopo serão cobertos.");
+        }
+        if (task is not null && autoUpdateEnabled)
+        {
+            reasons.Add($"Auto-atualização ligada, mas a automação \"{task.Task.Name}\" já atualiza este pacote.");
+        }
+
+        return new AppStoreUpdateIntentItemDto
+        {
+            PackageId = packageId,
+            PackageName = packageName,
+            Action = action,
+            AutoUpdateEnabled = autoUpdateEnabled,
+            Owner = task is not null
+                ? AppUpdateOwner.Automation
+                : autoUpdateEnabled
+                    ? AppUpdateOwner.AutoUpdate
+                    : AppUpdateOwner.Manual,
+            AutomationTaskId = task?.Task.Id,
+            AutomationTaskName = task?.Task.Name,
+            AutomationTriggerSummary = task is null ? null : DescribeTriggers(task.Task),
+            Conflict = reasons.Count > 0,
+            ConflictReason = reasons.Count == 0 ? null : string.Join(" ", reasons)
         };
     }
 
@@ -168,10 +271,11 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
 
     private sealed record ScopedTask(AutomationTaskDefinition Task, int ScopeRank);
 
-    private async Task<IReadOnlyList<ScopedTask>> LoadUpdateTasksAsync(
+    private async Task<(IReadOnlyList<ScopedTask> Tasks, bool Truncated)> LoadUpdateTasksAsync(
         ScopeChain chain,
         CancellationToken cancellationToken)
     {
+        var truncated = false;
         var loaded = new List<ScopedTask>();
 
         foreach (var scope in ApplicableScopes(chain.AgentId is not null
@@ -211,6 +315,11 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
                 cursor: null,
                 limit: MaxAutomationTasksPerScope);
 
+            // Bateu o limite por escopo: provavelmente há mais tasks do que as
+            // exibidas — sinaliza Truncated em vez de truncar em silêncio.
+            if (tasks.Count >= MaxAutomationTasksPerScope)
+                truncated = true;
+
             foreach (var task in tasks)
             {
                 if (task.DeletedAt is not null)
@@ -220,7 +329,25 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
             }
         }
 
-        return loaded;
+        return (loaded, truncated);
+    }
+
+    /// <summary>
+    /// Task com filtros de tags não cobre todo o escopo: sinaliza conflito
+    /// (risco de furo na atualização). Array vazio "[]" não conta como filtro.
+    /// </summary>
+    private static bool UsesTagFilters(AutomationTaskDefinition task)
+    {
+        foreach (var json in new[] { task.IncludeTagsJson, task.ExcludeTagsJson })
+        {
+            if (string.IsNullOrWhiteSpace(json))
+                continue;
+            if (json.Trim().Equals("[]", StringComparison.Ordinal))
+                continue;
+            return true;
+        }
+
+        return false;
     }
 
     private static ScopedTask? PickAutomationTask(
@@ -261,76 +388,262 @@ public class AppStoreUpdateIntentService : IAppStoreUpdateIntentService
 
     // ── Janela de manutenção ────────────────────────────────────────────
 
-    private async Task<AppMaintenanceWindowInfoDto> LoadMaintenanceWindowAsync(CancellationToken cancellationToken)
+    private async Task<AppMaintenanceWindowInfoDto> LoadMaintenanceWindowAsync(
+        ScopeChain chain,
+        CancellationToken cancellationToken)
     {
         var info = new AppMaintenanceWindowInfoDto { UsesUtc = true };
         if (_configurationResolver is null)
             return info;
 
-        ServerConfiguration? server;
         try
         {
-            server = await _configurationResolver.GetServerAsync();
-        }
-        catch (Exception)
-        {
-            // Resolver indisponível não deve derrubar a simulação.
-            return info;
-        }
+            // Mesma cascata crua que o agent recebe
+            // (site ?? client ?? server — string.Empty num nível de cima BLOQUEIA
+            // o nível de baixo, pois não é null). Null no nível = herda.
+            var serverJson = (await _configurationResolver.GetServerAsync())?.MaintenanceWindowJson;
+            string? clientJson = null;
+            string? siteJson = null;
+            if (_configurationService is not null && chain.ClientId is not null)
+                clientJson = (await _configurationService.GetClientConfigAsync(chain.ClientId.Value))?.MaintenanceWindowJson;
+            if (_configurationService is not null && chain.SiteId is not null)
+                siteJson = (await _configurationService.GetSiteConfigAsync(chain.SiteId.Value))?.MaintenanceWindowJson;
 
-        var json = server?.MaintenanceWindowJson;
-        if (string.IsNullOrWhiteSpace(json))
-            return info;
-
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
+            var json = siteJson ?? clientJson ?? serverJson;
+            if (string.IsNullOrWhiteSpace(json))
                 return info;
 
-            var timeZone = GetString(root, "timeZone") ?? "UTC";
-            var startTime = GetString(root, "startTime") ?? GetString(root, "startUtc") ?? string.Empty;
+            FillFromJson(info, json);
+            return info;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Resolver indisponível não deve derrubar a simulação. OCE propaga.
+            return info;
+        }
+    }
 
-            info.Enabled = root.TryGetProperty("enabled", out var enabled) && enabled.ValueKind == JsonValueKind.True;
-            info.TimeZone = string.IsNullOrWhiteSpace(timeZone) ? "UTC" : timeZone;
-            info.StartTime = startTime;
-            info.StartUtc = GetString(root, "startUtc") ?? startTime;
-            info.DurationMinutes = GetInt(root, "durationMinutes") ?? 60;
-            info.RebootGraceSeconds = GetInt(root, "rebootGraceSeconds") ?? 60;
-            info.UsesUtc = string.IsNullOrWhiteSpace(timeZone)
-                || string.Equals(info.TimeZone, "UTC", StringComparison.OrdinalIgnoreCase);
+    private static void FillFromJson(AppMaintenanceWindowInfoDto info, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            return;
 
-            if (root.TryGetProperty("daysOfWeek", out var days) && days.ValueKind == JsonValueKind.Array)
+        var timeZone = GetString(root, "timeZone");
+        var startTime = GetString(root, "startTime");
+        var startUtc = GetString(root, "startUtc");
+        var durationMinutes = GetInt(root, "durationMinutes") ?? 60;
+        var rebootGraceSeconds = GetInt(root, "rebootGraceSeconds") ?? 60;
+
+        var days = new List<int>();
+        if (GetProperty(root, "daysOfWeek") is { ValueKind: JsonValueKind.Array } daysElement)
+        {
+            foreach (var day in daysElement.EnumerateArray())
             {
-                var list = new List<int>();
-                foreach (var day in days.EnumerateArray())
-                {
-                    if (day.ValueKind == JsonValueKind.Number && day.TryGetInt32(out var value) && value is >= 1 and <= 7)
-                        list.Add(value);
-                }
-                info.DaysOfWeek = list;
+                if (day.ValueKind == JsonValueKind.Number && day.TryGetInt32(out var value) && value is >= 1 and <= 7)
+                    days.Add(value);
             }
         }
-        catch (JsonException)
+
+        info.Enabled = GetProperty(root, "enabled") is { ValueKind: JsonValueKind.True };
+        info.DurationMinutes = durationMinutes;
+        info.RebootGraceSeconds = rebootGraceSeconds;
+        info.DaysOfWeek = days;
+
+        // Modo local: startTime (HH:mm) + timeZone IANA válida e não-UTC.
+        // Modo legado: startUtc ("HH:mm") interpretado como UTC.
+        var tz = ResolveTimeZone(timeZone);
+        var validLocalTz = !string.IsNullOrWhiteSpace(timeZone)
+            && tz is not null
+            && !string.Equals(tz!.Id, TimeZoneInfo.Utc.Id, StringComparison.OrdinalIgnoreCase);
+
+        if (validLocalTz && TryParseTime(startTime, out var localStart))
         {
-            // JSON inválido no servidor: devolve defaults (a UI mostra como desligada).
+            var tzInfo = tz!;
+            info.TimeZone = tzInfo.Id;
+            info.StartTime = startTime!;
+            info.UsesUtc = false;
+
+            var occurrence = ComputeOccurrences(
+                localStart, tzInfo, days, TimeSpan.FromMinutes(durationMinutes), DateTime.UtcNow);
+            FillOccurrence(info, occurrence);
+            return;
         }
 
-        return info;
+        // Legado (ou timeZone ausente/inválida/UTC): hora em UTC. Quando o JSON
+        // só tem startTime + timeZone (inválida), startTime assume o papel de UTC
+        // para que IsOpenNow continue coerente com a interpretação UTC.
+        var legacyTime = !string.IsNullOrWhiteSpace(startUtc) ? startUtc : startTime;
+        info.TimeZone = "UTC";
+        info.StartTime = string.IsNullOrWhiteSpace(startTime) ? legacyTime ?? string.Empty : startTime!;
+        info.UsesUtc = true;
+
+        if (TryParseTime(legacyTime, out var utcStart))
+        {
+            var occurrence = ComputeOccurrences(
+                utcStart, TimeZoneInfo.Utc, days, TimeSpan.FromMinutes(durationMinutes), DateTime.UtcNow);
+            FillOccurrence(info, occurrence);
+        }
+    }
+
+    private static void FillOccurrence(
+        AppMaintenanceWindowInfoDto info,
+        (DateTime? StartUtc, DateTime? EndUtc, bool IsOpenNow, DateTime? NextStartUtc) occurrence)
+    {
+        info.StartUtc = occurrence.StartUtc is null
+            ? string.Empty
+            : occurrence.StartUtc.Value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        info.EndUtc = occurrence.EndUtc is null
+            ? string.Empty
+            : occurrence.EndUtc.Value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        info.IsOpenNow = occurrence.IsOpenNow;
+        info.NextStartUtc = occurrence.NextStartUtc;
+    }
+
+    /// <summary>
+    /// Ocorrência vigente (contendo utcNow) e a próxima abertura. A janela é do
+    /// dia em que ABRIU (pode cruzar a meia-noite); fim = abertura + duração
+    /// (RebootGraceSeconds é tolerância pós-janela, não faz parte da abertura).
+    /// </summary>
+    private static (DateTime? StartUtc, DateTime? EndUtc, bool IsOpenNow, DateTime? NextStartUtc) ComputeOccurrences(
+        TimeOnly start,
+        TimeZoneInfo timeZone,
+        IReadOnlyList<int> days,
+        TimeSpan duration,
+        DateTime utcNow)
+    {
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(utcNow, timeZone);
+
+        // Ocorrência vigente: pode ter aberto hoje ou ontem (janela que cruza
+        // a meia-noite).
+        foreach (var dayOffset in new[] { 0, -1 })
+        {
+            var localDate = localNow.Date.AddDays(dayOffset);
+            if (!DayMatches(localDate, days))
+                continue;
+
+            var startUtc = LocalToUtc(localDate + start.ToTimeSpan(), timeZone);
+            var endUtc = startUtc + duration;
+            if (startUtc <= utcNow && utcNow < endUtc)
+            {
+                var next = FindNextStart(start, timeZone, days, utcNow);
+                return (startUtc, endUtc, true, next);
+            }
+        }
+
+        // Sem janela aberta: StartUtc/EndUtc passam a representar a PRÓXIMA
+        // janela (IsOpenNow=false diz qual é o caso). A UI mostra "próxima
+        // janela abre em …" e nunca recebe um StartUtc vazio quando existe
+        // próxima ocorrência válida.
+        var nextStart = FindNextStart(start, timeZone, days, utcNow);
+        return nextStart is null
+            ? (null, null, false, null)
+            : (nextStart, nextStart.Value + duration, false, nextStart);
+    }
+
+    private static DateTime? FindNextStart(
+        TimeOnly start,
+        TimeZoneInfo timeZone,
+        IReadOnlyList<int> days,
+        DateTime utcNow)
+    {
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(utcNow, timeZone);
+        for (var offset = 0; offset <= 8; offset++)
+        {
+            var localDate = localNow.Date.AddDays(offset);
+            if (!DayMatches(localDate, days))
+                continue;
+
+            var startUtc = LocalToUtc(localDate + start.ToTimeSpan(), timeZone);
+            if (startUtc > utcNow)
+                return startUtc;
+        }
+
+        return null;
+    }
+
+    private static bool DayMatches(DateTime localDate, IReadOnlyList<int> days)
+    {
+        if (days.Count == 0)
+            return true;
+
+        var isoDay = localDate.DayOfWeek == DayOfWeek.Sunday ? 7 : (int)localDate.DayOfWeek;
+        return days.Contains(isoDay);
+    }
+
+    private static DateTime LocalToUtc(DateTime local, TimeZoneInfo timeZone)
+    {
+        var unspecified = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
+
+        // Gap de DST: o horário local não existe. Avança até existir — a janela
+        // abre no primeiro instante válido, nunca "nunca".
+        for (var i = 0; i < 4 && timeZone.IsInvalidTime(unspecified); i++)
+            unspecified = unspecified.AddMinutes(15);
+
+        if (timeZone.IsInvalidTime(unspecified))
+            return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), timeZone);
+
+        // Ambiguidade (fim de DST): a PRIMEIRA ocorrência é a escolhida.
+        if (timeZone.IsAmbiguousTime(unspecified))
+        {
+            var offsets = timeZone.GetAmbiguousTimeOffsets(unspecified);
+            var first = offsets.Max();
+            return DateTime.SpecifyKind(unspecified - first, DateTimeKind.Utc);
+        }
+
+        return TimeZoneInfo.ConvertTimeToUtc(unspecified, timeZone);
+    }
+
+    /// <summary>
+    /// Resolve IANA/Windows id para TimeZoneInfo; null quando inválido/ausente
+    /// (o chamador decide o fallback UTC).
+    /// </summary>
+    private static TimeZoneInfo? ResolveTimeZone(string? timeZone)
+    {
+        if (string.IsNullOrWhiteSpace(timeZone))
+            return null;
+
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timeZone);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return null;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryParseTime(string? value, out TimeOnly time)
+    {
+        time = default;
+        return !string.IsNullOrWhiteSpace(value)
+            && TimeOnly.TryParseExact(value.Trim(), "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out time);
+    }
+
+    private static JsonElement? GetProperty(JsonElement root, string name)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return property.Value;
+        }
+
+        return null;
     }
 
     private static string? GetString(JsonElement root, string name)
-    {
-        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
-            return null;
-        return value.GetString();
-    }
+        => GetProperty(root, name) is { ValueKind: JsonValueKind.String } value ? value.GetString() : null;
 
     private static int? GetInt(JsonElement root, string name)
-    {
-        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Number)
-            return null;
-        return value.TryGetInt32(out var number) ? number : null;
-    }
+        => GetProperty(root, name) is { ValueKind: JsonValueKind.Number } value && value.TryGetInt32(out var number)
+            ? number
+            : null;
 }

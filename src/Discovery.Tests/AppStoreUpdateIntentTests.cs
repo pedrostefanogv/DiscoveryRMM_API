@@ -1,3 +1,4 @@
+using System.Globalization;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -25,6 +26,8 @@ public class AppStoreUpdateIntentTests
     private sealed class FakeAppStoreService : IAppStoreService
     {
         public AppApprovalResolvedPageDto Page { get; set; } = new();
+        public List<EffectiveApprovedAppDto> EffectiveApps { get; set; } = [];
+        public List<(Guid? ClientId, Guid? SiteId, Guid? AgentId)> EffectiveCalls { get; } = [];
         public List<AppApprovalScopeType> Calls { get; } = [];
 
         public Task<AppApprovalResolvedPageDto> GetResolvedRulesAsync(
@@ -33,6 +36,14 @@ public class AppStoreUpdateIntentTests
         {
             Calls.Add(scopeType);
             return Task.FromResult(Page);
+        }
+
+        public Task<IReadOnlyList<EffectiveApprovedAppDto>> GetEffectiveAppsAsync(
+            Guid? clientId, Guid? siteId, Guid? agentId, AppInstallationType installationType,
+            CancellationToken cancellationToken = default)
+        {
+            EffectiveCalls.Add((clientId, siteId, agentId));
+            return Task.FromResult<IReadOnlyList<EffectiveApprovedAppDto>>(EffectiveApps);
         }
 
         public Task<AppCatalogSearchResultDto> SearchCatalogAsync(AppInstallationType installationType, string? search, string? architecture, int limit, string? cursor, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -45,7 +56,6 @@ public class AppStoreUpdateIntentTests
         public Task<bool> DeleteRuleAsync(Guid ruleId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<bool> DeleteRuleAsync(Guid ruleId, string? reason, string? changedBy, string? ipAddress, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AppApprovalAuditPageDto> GetAuditHistoryAsync(AppInstallationType installationType, string? packageId, AppApprovalScopeType? scopeType, Guid? scopeId, string? changedBy, DateTime? changedFrom, DateTime? changedTo, AppApprovalAuditChangeType? changeType, int limit, Guid? cursor, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<IReadOnlyList<EffectiveApprovedAppDto>> GetEffectiveAppsAsync(Guid? clientId, Guid? siteId, Guid? agentId, AppInstallationType installationType, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<bool> IsPackageApprovedAsync(Guid? clientId, Guid? siteId, Guid? agentId, AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<EffectiveApprovedAppPageDto> GetEffectiveAppsPageAsync(AppApprovalScopeType scopeType, Guid? scopeId, AppInstallationType installationType, string? search, int limit, string? cursor, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AppApprovalPackageDiffDto> GetPackageDiffAsync(AppApprovalScopeType scopeType, Guid? scopeId, AppInstallationType installationType, string packageId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -116,11 +126,95 @@ public class AppStoreUpdateIntentTests
         public void ClearCache() => throw new NotSupportedException();
     }
 
+    /// <summary>
+    /// Configurações CRUD por nível (Server/Client/Site) — devolve o blob
+    /// maintenanceWindowJson CRU de cada nível (sem herança aplicada),
+    /// replicando o que o agent recebe pela cascata site ?? client ?? server.
+    /// </summary>
+    private sealed class FakeConfigurationService : IConfigurationService
+    {
+        public ServerConfiguration? Server { get; set; }
+        public ClientConfiguration? Client { get; set; }
+        public SiteConfiguration? Site { get; set; }
+
+        public Task<ServerConfiguration> GetServerConfigAsync()
+            => Task.FromResult(Server ?? new ServerConfiguration());
+        public Task<ClientConfiguration?> GetClientConfigAsync(Guid clientId)
+            => Task.FromResult(Client?.ClientId == clientId ? Client : Client);
+        public Task<SiteConfiguration?> GetSiteConfigAsync(Guid siteId)
+            => Task.FromResult(Site?.SiteId == siteId ? Site : Site);
+
+        public Task<ServerConfiguration> PatchServerAsync(Dictionary<string, object> updates, string? updatedBy = null) => throw new NotSupportedException();
+        public Task<ServerConfiguration> ResetServerAsync(string? resetBy = null) => throw new NotSupportedException();
+        public Task<ClientConfiguration> CreateClientConfigAsync(Guid clientId, ClientConfiguration config, string? createdBy = null) => throw new NotSupportedException();
+        public Task<ClientConfiguration> UpdateClientAsync(Guid clientId, ClientConfiguration config, string? updatedBy = null) => throw new NotSupportedException();
+        public Task<ClientConfiguration> PatchClientAsync(Guid clientId, Dictionary<string, object> updates, string? updatedBy = null) => throw new NotSupportedException();
+        public Task DeleteClientConfigAsync(Guid clientId, string? deletedBy = null) => throw new NotSupportedException();
+        public Task ResetClientPropertyAsync(Guid clientId, string propertyName, string? resetBy = null) => throw new NotSupportedException();
+        public Task<SiteConfiguration> CreateSiteConfigAsync(Guid siteId, SiteConfiguration config, string? createdBy = null) => throw new NotSupportedException();
+        public Task<SiteConfiguration> UpdateSiteAsync(Guid siteId, SiteConfiguration config, string? updatedBy = null) => throw new NotSupportedException();
+        public Task<SiteConfiguration> PatchSiteAsync(Guid siteId, Dictionary<string, object> updates, string? updatedBy = null) => throw new NotSupportedException();
+        public Task DeleteSiteConfigAsync(Guid siteId, string? deletedBy = null) => throw new NotSupportedException();
+        public Task ResetSitePropertyAsync(Guid siteId, string propertyName, string? resetBy = null) => throw new NotSupportedException();
+        public Task<(bool IsValid, string[] Errors)> ValidateAsync(object config) => throw new NotSupportedException();
+        public Task<(bool IsValid, string[] Errors)> ValidateJsonAsync(string objectType, string json) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeSiteRepository : ISiteRepository
+    {
+        public Site? Site { get; set; }
+
+        public Task<Site?> GetByIdAsync(Guid id) => Task.FromResult(Site is not null && Site.Id == id ? Site : null);
+        public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId, bool includeInactive = false) => throw new NotSupportedException();
+        public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false) => throw new NotSupportedException();
+        public Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false) => throw new NotSupportedException();
+        public Task<IEnumerable<Site>> GetByIdsAsync(IEnumerable<Guid> siteIds, bool includeInactive = false) => throw new NotSupportedException();
+        public Task<Site> CreateAsync(Site site) => throw new NotSupportedException();
+        public Task UpdateAsync(Site site) => throw new NotSupportedException();
+        public Task DeleteAsync(Guid id) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeAgentRepository : IAgentRepository
+    {
+        public Agent? Agent { get; set; }
+
+        public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(Agent is not null && Agent.Id == id ? Agent : null);
+        public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotSupportedException();
+        public Task<IEnumerable<Agent>> GetBySiteIdAsync(Guid siteId) => throw new NotSupportedException();
+        public Task<IEnumerable<Agent>> GetByClientIdAsync(Guid clientId) => throw new NotSupportedException();
+        public Task<Agent> CreateAsync(Agent agent) => throw new NotSupportedException();
+        public Task UpdateAsync(Agent agent) => throw new NotSupportedException();
+        public Task UpdateStatusAsync(Guid id, Discovery.Core.Enums.AgentStatus status, string? ipAddress) => throw new NotSupportedException();
+        public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task ApproveZeroTouchAsync(Guid agentId) => throw new NotSupportedException();
+        public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => throw new NotSupportedException();
+        public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => throw new NotSupportedException();
+        public Task DeleteAsync(Guid id) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeClientRepository : IClientRepository
+    {
+        public Client? Client { get; set; }
+
+        public Task<Client?> GetByIdAsync(Guid id) => Task.FromResult(Client is not null && Client.Id == id ? Client : null);
+        public Task<IEnumerable<Client>> GetAllAsync(bool includeInactive = false) => throw new NotSupportedException();
+        public Task<Client> CreateAsync(Client client) => throw new NotSupportedException();
+        public Task UpdateAsync(Client client) => throw new NotSupportedException();
+        public Task DeleteAsync(Guid id) => throw new NotSupportedException();
+    }
+
     private static AppStoreUpdateIntentService Build(
         FakeAppStoreService appStore,
         FakeAutomationTaskRepository tasks,
-        FakeConfigurationResolver? config = null)
-        => new(appStore, tasks, config ?? new FakeConfigurationResolver());
+        FakeConfigurationResolver? config = null,
+        FakeConfigurationService? configService = null,
+        FakeSiteRepository? siteRepo = null,
+        FakeAgentRepository? agentRepo = null,
+        FakeClientRepository? clientRepo = null)
+        => new(appStore, tasks, config ?? new FakeConfigurationResolver(), siteRepo, agentRepo, clientRepo, configService);
 
     private static AppApprovalResolvedRuleDto Rule(
         string packageId,
@@ -143,7 +237,9 @@ public class AppStoreUpdateIntentTests
         Guid? scopeId = null,
         AppInstallationType? installationType = null,
         string? cron = null,
-        string name = "Navegadores")
+        string name = "Navegadores",
+        string? includeTagsJson = null,
+        string? excludeTagsJson = null)
         => new()
         {
             Id = Guid.NewGuid(),
@@ -153,6 +249,8 @@ public class AppStoreUpdateIntentTests
             InstallationType = installationType,
             PackageId = packageId,
             ScopeType = scope,
+            IncludeTagsJson = includeTagsJson,
+            ExcludeTagsJson = excludeTagsJson,
             ClientId = scope == AppApprovalScopeType.Client ? scopeId : null,
             SiteId = scope == AppApprovalScopeType.Site ? scopeId : null,
             AgentId = scope == AppApprovalScopeType.Agent ? scopeId : null,
@@ -300,11 +398,20 @@ public class AppStoreUpdateIntentTests
         Assert.That(page.MaintenanceWindow.Enabled, Is.True);
         Assert.That(page.MaintenanceWindow.StartTime, Is.EqualTo("22:00"));
         Assert.That(page.MaintenanceWindow.TimeZone, Is.EqualTo("America/Sao_Paulo"));
-        Assert.That(page.MaintenanceWindow.StartUtc, Is.EqualTo("01:00"));
         Assert.That(page.MaintenanceWindow.DurationMinutes, Is.EqualTo(120));
         Assert.That(page.MaintenanceWindow.RebootGraceSeconds, Is.EqualTo(30));
         Assert.That(page.MaintenanceWindow.DaysOfWeek, Is.EqualTo(new[] { 1, 2, 3, 4, 5 }));
         Assert.That(page.MaintenanceWindow.UsesUtc, Is.False);
+
+        // StartUtc é agora um INSTANTE UTC calculado de verdade (22:00 em
+        // America/Sao_Paulo = -03:00 → 01:00Z do dia seguinte), não a hora local.
+        Assert.That(page.MaintenanceWindow.StartUtc, Does.Match(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"));
+        var startUtc = DateTime.Parse(page.MaintenanceWindow.StartUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        Assert.That(startUtc.Kind, Is.EqualTo(DateTimeKind.Utc));
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(startUtc, TimeZoneInfo.FindSystemTimeZoneById("America/Sao_Paulo"));
+        Assert.That(localTime.TimeOfDay, Is.EqualTo(new TimeSpan(22, 0, 0)));
+        Assert.That(page.MaintenanceWindow.EndUtc, Is.Not.Empty);
+        Assert.That(page.MaintenanceWindow.NextStartUtc is null || page.MaintenanceWindow.NextStartUtc.Value.Kind == DateTimeKind.Utc, Is.True);
     }
 
     [Test]
@@ -334,6 +441,273 @@ public class AppStoreUpdateIntentTests
         Assert.That(page.Items[0].Owner, Is.EqualTo(AppUpdateOwner.Automation));
         Assert.That(page.Items[0].AutomationTaskName, Is.EqualTo("Task do cliente"));
         Assert.That(appStore.Calls, Is.EqualTo(new[] { AppApprovalScopeType.Client }));
+    }
+
+    // ── Cascata da janela de manutenção (site ?? client ?? server) ──────
+
+    [Test]
+    public async Task Janela_do_site_vence_o_servidor_na_cascata()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var site = new Site { Id = siteId, ClientId = clientId };
+        var config = new FakeConfigurationResolver
+        {
+            Server = new ServerConfiguration
+            {
+                MaintenanceWindowJson = """{"enabled":true,"startUtc":"03:00","durationMinutes":90}"""
+            }
+        };
+        var configService = new FakeConfigurationService
+        {
+            Site = new SiteConfiguration
+            {
+                SiteId = siteId,
+                MaintenanceWindowJson = """{"enabled":true,"startTime":"22:00","timeZone":"America/Sao_Paulo","durationMinutes":60}"""
+            }
+        };
+        var service = Build(appStore, new FakeAutomationTaskRepository(), config, configService,
+            siteRepo: new FakeSiteRepository { Site = site });
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Site, siteId, Tipo);
+
+        Assert.That(page.MaintenanceWindow.StartTime, Is.EqualTo("22:00"));
+        Assert.That(page.MaintenanceWindow.TimeZone, Is.EqualTo("America/Sao_Paulo"));
+        Assert.That(page.MaintenanceWindow.UsesUtc, Is.False, "janela do site (local) vence o servidor (UTC)");
+    }
+
+    [Test]
+    public async Task Janela_do_site_vazia_bloqueia_niveis_inferiores()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var site = new Site { Id = siteId, ClientId = clientId };
+        var config = new FakeConfigurationResolver
+        {
+            Server = new ServerConfiguration
+            {
+                // JSON válido no servidor — mas o site gravou string vazia,
+                // e string.Empty (não null) BLOQUEIA o nível de baixo, igual
+                // à cascata crua que o agent recebe.
+                MaintenanceWindowJson = """{"enabled":true,"startUtc":"03:00"}"""
+            }
+        };
+        var configService = new FakeConfigurationService
+        {
+            Site = new SiteConfiguration { SiteId = siteId, MaintenanceWindowJson = "" }
+        };
+        var service = Build(appStore, new FakeAutomationTaskRepository(), config, configService,
+            siteRepo: new FakeSiteRepository { Site = site });
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Site, siteId, Tipo);
+
+        Assert.That(page.MaintenanceWindow.Enabled, Is.False);
+        Assert.That(page.MaintenanceWindow.UsesUtc, Is.True);
+    }
+
+    [Test]
+    public async Task Escopo_agente_resolve_cascata_via_site_e_cliente()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var config = new FakeConfigurationResolver
+        {
+            Server = new ServerConfiguration
+            {
+                MaintenanceWindowJson = """{"enabled":true,"startUtc":"03:00"}"""
+            }
+        };
+        var configService = new FakeConfigurationService
+        {
+            Client = new ClientConfiguration { ClientId = clientId, MaintenanceWindowJson = """{"enabled":true,"startUtc":"05:00"}""" }
+        };
+        var service = Build(appStore, new FakeAutomationTaskRepository(), config, configService,
+            siteRepo: new FakeSiteRepository { Site = new Site { Id = siteId, ClientId = clientId } },
+            agentRepo: new FakeAgentRepository { Agent = new Agent { Id = agentId, SiteId = siteId } },
+            clientRepo: new FakeClientRepository { Client = new Client { Id = clientId } });
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Agent, agentId, Tipo);
+
+        Assert.That(page.MaintenanceWindow.StartTime, Is.EqualTo("05:00"),
+            "site sem janela: cliente vence o servidor");
+        Assert.That(page.MaintenanceWindow.UsesUtc, Is.True);
+    }
+
+    [Test]
+    public async Task TimeZone_invalida_cai_para_utc_com_isOpenNow_coerente()
+    {
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var config = new FakeConfigurationResolver
+        {
+            // 00:00 "UTC" com duração de 24h: janela SEMPRE aberta em UTC.
+            Server = new ServerConfiguration
+            {
+                MaintenanceWindowJson = """{"enabled":true,"startTime":"00:00","timeZone":"America/Sao_Pauloooo","durationMinutes":1440}"""
+            }
+        };
+        var service = Build(appStore, new FakeAutomationTaskRepository(), config);
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        Assert.That(page.MaintenanceWindow.TimeZone, Is.EqualTo("UTC"));
+        Assert.That(page.MaintenanceWindow.UsesUtc, Is.True);
+        Assert.That(page.MaintenanceWindow.IsOpenNow, Is.True,
+            "janela 00:00-24:00 em UTC está aberta agora");
+    }
+
+    // ── Política (Disabled / All / PreApproved) ────────────────────────
+
+    [Test]
+    public async Task Politica_disabled_lista_vazia()
+    {
+        var appStore = new FakeAppStoreService
+        {
+            Page = new AppApprovalResolvedPageDto
+            {
+                Policy = AppStorePolicyType.Disabled,
+                Items = [Rule("Google.Chrome", autoUpdate: true)]
+            }
+        };
+        var service = Build(appStore, new FakeAutomationTaskRepository());
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        Assert.That(page.Policy, Is.EqualTo(AppStorePolicyType.Disabled));
+        Assert.That(page.Count, Is.EqualTo(0));
+        Assert.That(page.Items, Is.Empty);
+    }
+
+    [Test]
+    public async Task Politica_all_lista_o_catalogo_efetivo()
+    {
+        var appStore = new FakeAppStoreService
+        {
+            Page = new AppApprovalResolvedPageDto
+            {
+                Policy = AppStorePolicyType.All,
+                // Regra sem autoUpdate: pacote do catálogo sem regra explícita
+                // de auto-atualização continua Manual (o teste ao lado cobre o
+                // caso com regra explícita ligada).
+                Items = [Rule("Google.Chrome")]
+            },
+            EffectiveApps =
+            [
+                new EffectiveApprovedAppDto { InstallationType = Tipo, PackageId = "Google.Chrome", Name = "Google Chrome" },
+                new EffectiveApprovedAppDto { InstallationType = Tipo, PackageId = "Mozilla.Firefox", Name = "Firefox" }
+            ]
+        };
+        var tasks = new FakeAutomationTaskRepository();
+        tasks.Tasks.Add(AutomationUpdateTask("Mozilla.Firefox", name: "Firefox task"));
+        var service = Build(appStore, tasks);
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        Assert.That(page.Policy, Is.EqualTo(AppStorePolicyType.All));
+        Assert.That(page.Count, Is.EqualTo(2));
+        Assert.That(page.Items.Select(i => i.PackageId),
+            Is.EqualTo(new[] { "Google.Chrome", "Mozilla.Firefox" }).AsCollection);
+        // Catálogo efetivo NÃO herda autoUpdate da regra: Mozilla tem task,
+        // Google não tem task e não tem regra explícita para auto-update.
+        Assert.That(page.Items.First(i => i.PackageId == "Mozilla.Firefox").Owner, Is.EqualTo(AppUpdateOwner.Automation));
+        Assert.That(page.Items.First(i => i.PackageId == "Google.Chrome").Owner, Is.EqualTo(AppUpdateOwner.Manual));
+        Assert.That(page.Items.First(i => i.PackageId == "Google.Chrome").AutoUpdateEnabled, Is.False);
+        var effectiveCall = appStore.EffectiveCalls[0];
+        Assert.Multiple(() =>
+        {
+            Assert.That(effectiveCall.ClientId, Is.Null);
+            Assert.That(effectiveCall.SiteId, Is.Null);
+            Assert.That(effectiveCall.AgentId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task Politica_all_com_regra_explicita_usa_autoUpdate_da_regra()
+    {
+        var appStore = new FakeAppStoreService
+        {
+            Page = new AppApprovalResolvedPageDto
+            {
+                Policy = AppStorePolicyType.All,
+                Items = [Rule("Google.Chrome", autoUpdate: true)],
+            },
+            EffectiveApps =
+            [
+                new EffectiveApprovedAppDto { InstallationType = Tipo, PackageId = "Google.Chrome", Name = "Google Chrome" }
+            ]
+        };
+        var service = Build(appStore, new FakeAutomationTaskRepository());
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        var item = page.Items[0];
+        Assert.That(item.AutoUpdateEnabled, Is.True, "regra explícita informa autoUpdate mesmo em política All");
+        Assert.That(item.Owner, Is.EqualTo(AppUpdateOwner.AutoUpdate));
+    }
+
+    // ── Conflito por filtros de tags ───────────────────────────────────
+
+    [Test]
+    public async Task Task_com_filtros_de_tags_marca_conflito_de_cobertura()
+    {
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var tasks = new FakeAutomationTaskRepository();
+        tasks.Tasks.Add(AutomationUpdateTask("Google.Chrome", includeTagsJson: """["ti"]""", name: "Chrome ti"));
+        var service = Build(appStore, tasks);
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        var item = page.Items[0];
+        Assert.That(item.Owner, Is.EqualTo(AppUpdateOwner.Automation));
+        Assert.That(item.Conflict, Is.True);
+        Assert.That(item.ConflictReason, Does.Contain("filtros de tags"));
+        Assert.That(item.ConflictReason, Does.Contain("Chrome ti"));
+    }
+
+    [Test]
+    public async Task Task_com_tags_vazias_nao_marca_conflito()
+    {
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var tasks = new FakeAutomationTaskRepository();
+        tasks.Tasks.Add(AutomationUpdateTask("Google.Chrome", includeTagsJson: "[]"));
+        var service = Build(appStore, tasks);
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        Assert.That(page.Items[0].Owner, Is.EqualTo(AppUpdateOwner.Automation));
+        Assert.That(page.Items[0].Conflict, Is.False);
+    }
+
+    // ── Truncamento de tasks por escopo ────────────────────────────────
+
+    [Test]
+    public async Task Tasks_no_limite_por_escopo_marca_truncated()
+    {
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var tasks = new FakeAutomationTaskRepository();
+        for (var i = 0; i < 500; i++)
+            tasks.Tasks.Add(AutomationUpdateTask("Pacote." + i));
+        var service = Build(appStore, tasks);
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        Assert.That(page.Truncated, Is.True);
+    }
+
+    [Test]
+    public async Task Tasks_abaixo_do_limite_nao_marca_truncated()
+    {
+        var appStore = new FakeAppStoreService { Page = new AppApprovalResolvedPageDto { Items = [Rule("Google.Chrome")] } };
+        var tasks = new FakeAutomationTaskRepository();
+        tasks.Tasks.Add(AutomationUpdateTask("Google.Chrome"));
+        var service = Build(appStore, tasks);
+
+        var page = await service.GetUpdateIntentAsync(AppApprovalScopeType.Global, null, Tipo);
+
+        Assert.That(page.Truncated, Is.False);
     }
 
     [Test]

@@ -25,12 +25,26 @@ public class AppMaintenanceWindowInfoDto
     public string StartTime { get; set; } = string.Empty;
     public string TimeZone { get; set; } = "UTC";
     public string StartUtc { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Instante UTC (ISO-8601) em que a ocorrência vigente fecha
+    /// (abertura + duração). Vazio quando nenhuma janela está aberta agora.
+    /// </summary>
+    public string EndUtc { get; set; } = string.Empty;
     public int DurationMinutes { get; set; }
     public int RebootGraceSeconds { get; set; }
     public IReadOnlyList<int> DaysOfWeek { get; set; } = [];
 
-    /// <summary>true quando a config não informou timeZone (janela em UTC).</summary>
+    /// <summary>true quando a config não informou timeZone (janela em UTC),
+    /// quando a timeZone é UTC ou quando a timeZone informada é inválida.</summary>
     public bool UsesUtc { get; set; }
+
+    /// <summary>true quando utcNow está dentro da ocorrência vigente.</summary>
+    public bool IsOpenNow { get; set; }
+
+    /// <summary>Abertura UTC da próxima ocorrência (Kind=Utc); null quando não
+    /// há abertura no horizonte de 8 dias.</summary>
+    public DateTime? NextStartUtc { get; set; }
 }
 
 /// <summary>Intenção de atualização de um pacote no escopo consultado.</summary>
@@ -72,4 +86,10 @@ public class AppStoreUpdateIntentPageDto
     public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
     public int Count { get; set; }
     public List<AppStoreUpdateIntentItemDto> Items { get; set; } = [];
+
+    /// <summary>
+    /// true quando alguma lista de tasks por escopo bateu o limite de consulta
+    /// (500): pode haver tasks não consideradas na simulação.
+    /// </summary>
+    public bool Truncated { get; set; }
 }

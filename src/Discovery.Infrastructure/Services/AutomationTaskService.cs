@@ -1350,6 +1350,10 @@ public class AutomationTaskService : IAutomationTaskService
                 // Ordem entra no fingerprint: mudar a ordem precisa re-sincronizar
                 // os agents para que a fila sequencial use o valor novo.
                 .Append(task.ExecutionOrder).Append('|')
+                // Opt-in da janela de manutenção entra no fingerprint: sem isso o
+                // re-sync dependeria só do LastUpdatedAt (frágil) para um update
+                // que apenas liga/desliga o opt-in.
+                .Append(task.TaskRespectMaintenanceWindow ? '1' : '0').Append('|')
                 .Append(task.IsActive ? '1' : '0');
             // Conteúdo do script entra no fingerprint: sem isso, editar o conteúdo
             // de um script não alterava a policy entregue — os agentes continuavam

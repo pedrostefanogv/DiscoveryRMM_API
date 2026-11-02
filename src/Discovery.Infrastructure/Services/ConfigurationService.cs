@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
 using Discovery.Core.Configuration;
@@ -640,7 +641,7 @@ public class ConfigurationService : IConfigurationService
             errors.Add($"{propName} must be between {min} and {max}.");
     }
 
-    private static object? ConvertToPropertyValue(object value, Type propertyType)
+    internal static object? ConvertToPropertyValue(object value, Type propertyType)
     {
         var isNullable = IsNullableProperty(propertyType);
         var targetType = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
@@ -659,16 +660,31 @@ public class ConfigurationService : IConfigurationService
         return Convert.ChangeType(value, targetType);
     }
 
-    private static object? ConvertJsonElement(JsonElement element, Type targetType, bool isNullable)
+    internal static object? ConvertJsonElement(JsonElement element, Type targetType, bool isNullable)
     {
         if (element.ValueKind == JsonValueKind.Null)
             return isNullable ? null : Activator.CreateInstance(targetType);
 
         if (targetType == typeof(bool))
-            return element.GetBoolean();
+        {
+            if (element.ValueKind != JsonValueKind.String)
+            {
+                try
+                {
+                    return element.GetBoolean();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    throw new ArgumentException($"Não foi possível converter o valor JSON ({element.GetRawText()}) para o tipo Boolean.", ex);
+                }
+            }
 
-        if (targetType == typeof(int))
-            return element.GetInt32();
+            // bool.TryParse: "yes"/"" e numeros no lugar de booleano viram erro CLARO
+            // em vez de FormatException cru escapando como 500.
+            if (!bool.TryParse(element.GetString(), out var parsed))
+                throw new ArgumentException($"Não foi possível converter o valor JSON '{element.GetRawText()}' para o tipo Boolean.");
+            return parsed;
+        }
 
         if (targetType == typeof(string))
         {
@@ -683,7 +699,75 @@ public class ConfigurationService : IConfigurationService
         if (targetType.IsEnum)
             return Enum.Parse(targetType, element.GetRawText().Trim('"'), ignoreCase: true);
 
-        return element.GetRawText();
+        // Tipos numéricos e de valor: usar os getters tipados do JsonElement para números,
+        // e Convert.ChangeType (cultura invariante) quando vierem como string.
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            if (targetType == typeof(long)) return element.GetInt64();
+            if (targetType == typeof(int)) return element.GetInt32();
+            if (targetType == typeof(short)) return element.GetInt16();
+            if (targetType == typeof(byte)) return element.GetByte();
+            if (targetType == typeof(sbyte)) return element.GetSByte();
+            if (targetType == typeof(uint)) return element.GetUInt32();
+            if (targetType == typeof(ulong)) return element.GetUInt64();
+            if (targetType == typeof(double)) return element.GetDouble();
+            if (targetType == typeof(float)) return element.GetSingle();
+            if (targetType == typeof(decimal)) return element.GetDecimal();
+        }
+
+        if (targetType == typeof(Guid))
+        {
+            try
+            {
+                return element.ValueKind == JsonValueKind.String
+                    ? element.GetGuid()
+                    : Guid.Parse(element.GetRawText());
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+            {
+                throw new ArgumentException($"Não foi possível converter o valor JSON ({element.GetRawText()}) para o tipo Guid.", ex);
+            }
+        }
+
+        // Convert.ChangeType NÃO converte string para DateTimeOffset/TimeSpan
+        // (IConvertible não cobre esses tipos) — usar os parsers dedicados.
+        if (targetType == typeof(DateTime) || targetType == typeof(DateTimeOffset))
+        {
+            var text = element.ValueKind == JsonValueKind.String ? element.GetString()! : element.GetRawText();
+            var style = DateTimeStyles.RoundtripKind;
+            try
+            {
+                return targetType == typeof(DateTime)
+                    ? (object)DateTime.Parse(text, CultureInfo.InvariantCulture, style)
+                    : DateTimeOffset.Parse(text, CultureInfo.InvariantCulture, style);
+            }
+            catch (Exception ex) when (ex is FormatException or ArgumentException)
+            {
+                throw new ArgumentException($"Não foi possível converter o valor JSON '{text}' para o tipo {targetType.Name}.", ex);
+            }
+        }
+
+        if (targetType == typeof(TimeSpan))
+        {
+            var text = element.ValueKind == JsonValueKind.String ? element.GetString()! : element.GetRawText();
+            if (!TimeSpan.TryParse(text, CultureInfo.InvariantCulture, out var timeSpan))
+                throw new ArgumentException($"Não foi possível converter o valor JSON '{text}' para o tipo TimeSpan.");
+            return timeSpan;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                return Convert.ChangeType(element.GetString(), targetType, CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+            {
+                throw new ArgumentException($"Não foi possível converter o valor JSON '{element.GetString()}' para o tipo {targetType.Name}.", ex);
+            }
+        }
+
+        throw new ArgumentException($"Não foi possível converter o valor JSON ({element.GetRawText()}) para o tipo {targetType.Name}.");
     }
 
     private static bool IsNullableProperty(Type propertyType)
