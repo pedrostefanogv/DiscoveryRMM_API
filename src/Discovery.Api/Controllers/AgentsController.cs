@@ -731,7 +731,7 @@ public class AgentsController : ControllerBase
     {
         var result = await _mediator.Send(cmd with { AgentId = id });
         return result.Match<IActionResult>(
-            success: _ => Accepted(new { agentId = id, commandType = "restart" }),
+            success: commandId => Accepted(new { agentId = id, commandType = "restart", commandId }),
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 
@@ -741,7 +741,7 @@ public class AgentsController : ControllerBase
     {
         var result = await _mediator.Send(cmd with { AgentId = id });
         return result.Match<IActionResult>(
-            success: _ => Accepted(new { agentId = id, commandType = "shutdown" }),
+            success: commandId => Accepted(new { agentId = id, commandType = "shutdown", commandId }),
             failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
     }
 

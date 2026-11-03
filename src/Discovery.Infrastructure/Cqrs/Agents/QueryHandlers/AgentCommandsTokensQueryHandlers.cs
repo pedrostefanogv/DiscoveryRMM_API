@@ -13,7 +13,17 @@ public sealed class GetAgentCommandsQueryHandler(
     public async Task<Result<IReadOnlyList<AgentCommandDto>>> Handle(GetAgentCommandsQuery q, CancellationToken ct)
     {
         var commands = await commandRepo.GetByAgentIdAsync(q.AgentId, q.Limit);
-        var dtos = commands.Select(c => new AgentCommandDto(c.Id, c.CommandType.ToString(), c.Status.ToString(), c.CreatedAt)).ToList();
+        var dtos = commands
+            .Select(c => new AgentCommandDto(
+                c.Id,
+                c.CommandType.ToString(),
+                c.Status.ToString(),
+                c.CreatedAt,
+                c.Result,
+                c.ExitCode,
+                c.ErrorMessage,
+                c.CompletedAt))
+            .ToList();
         return Result<IReadOnlyList<AgentCommandDto>>.Success(dtos);
     }
 }

@@ -4,6 +4,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Repositories;
 
@@ -11,7 +12,14 @@ public class CommandRepository : ICommandRepository
 {
     private readonly DiscoveryDbContext _db;
 
-    public CommandRepository(DiscoveryDbContext db) => _db = db;
+    // Logger opcional: os testes constroem o repositório só com o DbContext.
+    private readonly ILogger<CommandRepository>? _logger;
+
+    public CommandRepository(DiscoveryDbContext db, ILogger<CommandRepository>? logger = null)
+    {
+        _db = db;
+        _logger = logger;
+    }
 
     public async Task<AgentCommand?> GetByIdAsync(Guid id)
     {
@@ -108,6 +116,26 @@ public class CommandRepository : ICommandRepository
     {
         var now = DateTime.UtcNow;
 
+        // O result do agente pode chegar mais de uma vez (ack antecipado do comando
+        // de energia + resultado final + reentrega atrasada). Sem esta guarda, um
+        // ack tardio reabre um comando terminal e uma falha vira "sucesso".
+        var current = await _db.AgentCommands
+            .AsNoTracking()
+            .Where(command => command.Id == id)
+            .Select(command => (CommandStatus?)command.Status)
+            .SingleOrDefaultAsync();
+
+        if (current is null)
+            return;
+
+        if (!CommandStatusTransitions.ShouldApply(current.Value, status))
+        {
+            _logger?.LogWarning(
+                "Transição de status recusada para o comando {CommandId}: {CurrentStatus} -> {NextStatus} (resultado tardio não pode reabrir/limpar o veredito).",
+                id, current.Value, status);
+            return;
+        }
+
         await _db.AgentCommands
             .Where(command => command.Id == id)
             .ExecuteUpdateAsync(setters => setters
@@ -122,6 +150,7 @@ public class CommandRepository : ICommandRepository
                         || status == CommandStatus.Failed
                         || status == CommandStatus.Timeout
                         || status == CommandStatus.Cancelled
+                        || status == CommandStatus.Deferred
                         ? now
                         : command.CompletedAt));
     }

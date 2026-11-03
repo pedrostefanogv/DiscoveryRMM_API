@@ -9,7 +9,7 @@ public sealed record RestartAgentCommand(
     [property: JsonPropertyName("force")] bool Force = false,
     // notifyUser=true faz o agent exibir o aviso Fluent com contador antes de reiniciar.
     [property: JsonPropertyName("notifyUser")] bool NotifyUser = true,
-    [property: JsonPropertyName("message")] string? Reason = null) : ICommand<Result<VoidResult>>;
+    [property: JsonPropertyName("message")] string? Reason = null) : ICommand<Result<Guid>>;
 
 public sealed record ShutdownAgentCommand(
     Guid AgentId,
@@ -17,5 +17,5 @@ public sealed record ShutdownAgentCommand(
     [property: JsonPropertyName("force")] bool Force = false,
     // notifyUser=true faz o agent exibir o aviso Fluent com contador antes de desligar.
     [property: JsonPropertyName("notifyUser")] bool NotifyUser = true,
-    [property: JsonPropertyName("message")] string? Reason = null) : ICommand<Result<VoidResult>>;
+    [property: JsonPropertyName("message")] string? Reason = null) : ICommand<Result<Guid>>;
 public sealed record WakeOnLanCommand(Guid AgentId) : ICommand<Result<VoidResult>>;

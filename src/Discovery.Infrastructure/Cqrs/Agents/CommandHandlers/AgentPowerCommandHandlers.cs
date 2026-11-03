@@ -13,12 +13,12 @@ namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 public sealed class RestartAgentCommandHandler(
     IAgentRepository agentRepo,
     IAgentCommandDispatcher dispatcher
-) : IRequestHandler<RestartAgentCommand, Result<VoidResult>>
+) : IRequestHandler<RestartAgentCommand, Result<Guid>>
 {
-    public async Task<Result<VoidResult>> Handle(RestartAgentCommand cmd, CancellationToken ct)
+    public async Task<Result<Guid>> Handle(RestartAgentCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
-        if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+        if (agent is null) return Result<Guid>.Failure(Error.NotFound("Agent not found."));
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -28,20 +28,22 @@ public sealed class RestartAgentCommandHandler(
             message = cmd.Reason
         });
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.Restart, Payload = payload };
-        await dispatcher.DispatchAsync(command, ct);
-        return Result<VoidResult>.Success(VoidResult.Value);
+        // O commandId volta para a UI acompanhar o desfecho real (executado, adiado,
+        // negado, falhou) pelo histórico do agente.
+        var dispatched = await dispatcher.DispatchAsync(command, ct);
+        return Result<Guid>.Success(dispatched.Id);
     }
 }
 
 public sealed class ShutdownAgentCommandHandler(
     IAgentRepository agentRepo,
     IAgentCommandDispatcher dispatcher
-) : IRequestHandler<ShutdownAgentCommand, Result<VoidResult>>
+) : IRequestHandler<ShutdownAgentCommand, Result<Guid>>
 {
-    public async Task<Result<VoidResult>> Handle(ShutdownAgentCommand cmd, CancellationToken ct)
+    public async Task<Result<Guid>> Handle(ShutdownAgentCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
-        if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+        if (agent is null) return Result<Guid>.Failure(Error.NotFound("Agent not found."));
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -51,8 +53,9 @@ public sealed class ShutdownAgentCommandHandler(
             message = cmd.Reason
         });
         var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.Shutdown, Payload = payload };
-        await dispatcher.DispatchAsync(command, ct);
-        return Result<VoidResult>.Success(VoidResult.Value);
+        // Mesmo contrato do restart: devolve o commandId para acompanhar o desfecho.
+        var dispatched = await dispatcher.DispatchAsync(command, ct);
+        return Result<Guid>.Success(dispatched.Id);
     }
 }
 

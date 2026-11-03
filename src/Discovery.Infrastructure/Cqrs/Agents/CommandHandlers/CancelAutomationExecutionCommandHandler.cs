@@ -49,7 +49,9 @@ public sealed class CancelAutomationExecutionCommandHandler(
                 && command.Status is not (CommandStatus.Completed
                     or CommandStatus.Failed
                     or CommandStatus.Cancelled
-                    or CommandStatus.Timeout))
+                    or CommandStatus.Timeout
+                    // Deferred é terminal: a execução não vai mais acontecer sozinha.
+                    or CommandStatus.Deferred))
             {
                 await commandRepo.UpdateStatusAsync(command.Id, CommandStatus.Cancelled, null, null, CancelReason);
             }

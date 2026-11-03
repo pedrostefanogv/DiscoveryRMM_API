@@ -95,7 +95,16 @@ public sealed class DataRetentionJob : IJob
 
         // 4. Completed/failed agent commands
         var cmdCutoff = now.AddDays(-settings.AgentCommandRetentionDays);
-        var completedStatuses = new[] { Discovery.Core.Enums.CommandStatus.Completed, Discovery.Core.Enums.CommandStatus.Failed, Discovery.Core.Enums.CommandStatus.Cancelled, Discovery.Core.Enums.CommandStatus.Timeout };
+        // Deferred entra no conjunto terminal: o comando foi aceito e não executado,
+        // também precisa sair do histórico por retenção (tem CompletedAt).
+        var completedStatuses = new[]
+        {
+            Discovery.Core.Enums.CommandStatus.Completed,
+            Discovery.Core.Enums.CommandStatus.Failed,
+            Discovery.Core.Enums.CommandStatus.Cancelled,
+            Discovery.Core.Enums.CommandStatus.Timeout,
+            Discovery.Core.Enums.CommandStatus.Deferred
+        };
         var cmdsDeleted = await db.AgentCommands
             .Where(c => c.CompletedAt.HasValue && c.CompletedAt < cmdCutoff && completedStatuses.Contains(c.Status))
             .ExecuteDeleteAsync(ct);

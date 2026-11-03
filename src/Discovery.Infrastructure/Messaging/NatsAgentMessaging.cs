@@ -487,7 +487,27 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                             continue;
                         }
 
-                        var status = result.ExitCode == 0 ? CommandStatus.Completed : CommandStatus.Failed;
+                        // O output é a fonte de verdade do desfecho: a confirmação
+                        // antecipada de comando de energia usa ExitCode=0 mesmo sem executar.
+                        // Classifica pelo "status" do contrato JSON e cai para o texto livre
+                        // dos agentes antigos ("deferred_to_window nextRunAt=...").
+                        var classification = PowerCommandResultClassifier.Classify(result.ExitCode, result.Output);
+                        var status = classification.Status;
+
+                        // Só loga quando o CONTRATO foi reconhecido no output (StatusCode != null):
+                        // falhas genéricas de qualquer comando (exit != 0) já ficam visíveis no
+                        // status persistido e poluiriam o warning a cada comando que falha.
+                        if (classification.StatusCode is not null && PowerCommandResultClassifier.IsNonExecution(status))
+                        {
+                            _logger.LogWarning(
+                                "Comando {CommandId} não executado no agente: status={StatusCode} nextRunAt={NextRunAt} exitCode={ExitCode} DispatchId={DispatchId}",
+                                result.CommandId,
+                                classification.StatusCode ?? "desconhecido",
+                                classification.NextRunAt ?? "-",
+                                result.ExitCode,
+                                result.DispatchId);
+                        }
+
                         await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
 
                         // Auditoria por execução (resolve por escopo para não criar
