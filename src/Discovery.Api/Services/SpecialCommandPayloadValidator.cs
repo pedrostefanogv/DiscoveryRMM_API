@@ -192,9 +192,60 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.TicketChatInvite => TryNormalizeTicketChatInvite(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.WindowsUpdate => TryNormalizeWindowsUpdate(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.SoftwareInstall => TryNormalizeSoftwareInstall(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.RunSensors => TryNormalizeRunSensors(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }
+    }
+
+    /// <summary>
+    /// Payload de "executar sensores agora": { sensorIds?: string[], forceSync?: bool }.
+    /// Normaliza guids ausentes/inválidos para lista vazia (= todos) e força o
+    /// formato canônico para o agent.
+    /// </summary>
+    private static bool TryNormalizeRunSensors(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        var sensorIds = new List<string>();
+        if (payload.TryGetProperty("sensorIds", out var ids) && ids.ValueKind != JsonValueKind.Null)
+        {
+            if (ids.ValueKind != JsonValueKind.Array)
+            {
+                validationError = "field 'sensorIds' must be an array of guids.";
+                return false;
+            }
+
+            foreach (var id in ids.EnumerateArray())
+            {
+                if (id.ValueKind != JsonValueKind.String || !Guid.TryParse(id.GetString(), out var parsed))
+                {
+                    validationError = "field 'sensorIds' must contain only valid guids.";
+                    return false;
+                }
+
+                sensorIds.Add(parsed.ToString());
+            }
+        }
+
+        var forceSync = false;
+        if (payload.TryGetProperty("forceSync", out var force) && force.ValueKind != JsonValueKind.Null)
+        {
+            if (force.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                validationError = "field 'forceSync' must be boolean.";
+                return false;
+            }
+
+            forceSync = force.GetBoolean();
+        }
+
+        normalizedPayload = JsonSerializer.Serialize(new { sensorIds, forceSync }, JsonOptions);
+        return true;
     }
 
     private static bool TryNormalizeRemoteSession(

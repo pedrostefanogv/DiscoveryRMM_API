@@ -7,5 +7,8 @@ public enum SyncResourceType
     AutomationPolicy = 2,
     Knowledge = 3,
     ZeroTouchApproved = 4,
-    AgentUpdate = 5
+    AgentUpdate = 5,
+
+    // Configuração de sensores de monitoramento (estado + métricas).
+    Sensors = 6
 }

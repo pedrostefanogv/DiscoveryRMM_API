@@ -34,6 +34,7 @@ public static class CommandTypeWireMapper
             CommandType.TicketChatInvite => "ticketchatinvite",
             CommandType.WindowsUpdate => "windowsupdate",
             CommandType.SoftwareInstall => "softwareinstall",
+            CommandType.RunSensors => "runsensors",
             _ => commandType.ToString().ToLowerInvariant()
         };
     }
@@ -60,6 +61,7 @@ public static class CommandTypeWireMapper
             or CommandType.DecommissionAgent
             or CommandType.TicketChatInvite
             or CommandType.WindowsUpdate
-            or CommandType.SoftwareInstall;
+            or CommandType.SoftwareInstall
+            or CommandType.RunSensors;
     }
 }

@@ -112,6 +112,13 @@ public class ConfigurationService : IConfigurationService
         // default sem nenhum aviso.
         EnsureServerAiSettingsJsonDeserializable(config);
 
+        // Um JSON de sensores inválido derrubaria o sync em silêncio (o parser de
+        // leitura cai nos defaults). Recusa o salvamento, como já se faz com IA.
+        if (!Discovery.Core.Configuration.SensorsSettings.TryParseStrict(config.SensorsSettingsJson, out _, out var sensorsSettingsError))
+        {
+            throw new ArgumentException(sensorsSettingsError);
+        }
+
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
         config.UpdatedBy = updatedBy;

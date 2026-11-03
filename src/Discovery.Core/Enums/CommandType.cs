@@ -48,5 +48,10 @@ public enum CommandType
     // Instalação de um aplicativo do catálogo da loja (winget/choco/custom) que
     // ainda não existe na máquina. Disparada pela aba Aplicativos do detalhe do
     // agent; o pacote é identificado pelo payload (não há inventário prévio).
-    SoftwareInstall = 25
+    SoftwareInstall = 25,
+
+    // Sensores: pede ao agent para executar agora um conjunto de sensores
+    // (payload { sensorIds?: string[], forceSync?: bool }). Disparado pela aba
+    // "Sensores" do detalhe do agente.
+    RunSensors = 26
 }

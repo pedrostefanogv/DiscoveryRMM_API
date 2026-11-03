@@ -142,6 +142,12 @@ public class ServerConfiguration
     public string RetentionSettingsJson { get; set; } = "{}";
 
     /// <summary>
+    /// Configuração global de sensores (JSON): kill switch, intervalo default,
+    /// auto-ticket e notificações. Ver <c>SensorsSettings</c>.
+    /// </summary>
+    public string SensorsSettingsJson { get; set; } = "{}";
+
+    /// <summary>
     /// Configurações globais de anexos de tickets (JSON).
     /// Exemplo: {"enabled":true,"maxFileSizeBytes":10485760,"allowedContentTypes":["image/jpeg","image/png","application/pdf"]}
     /// </summary>

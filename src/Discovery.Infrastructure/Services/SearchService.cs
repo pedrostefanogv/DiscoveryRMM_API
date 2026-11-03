@@ -837,7 +837,7 @@ public class SearchService : ISearchService
         new("Tarefas", "Automação", "Tarefas automatizadas.", "/automation/tasks", "tarefas jobs automacao", [ResourceType.Automation]),
         new("Operações", "Automação", "Execuções operacionais.", "/automation/operations", "operacoes runs execucoes", [ResourceType.Automation]),
         new("Auditoria", "Automação", "Auditoria das automações.", "/automation/audit", "auditoria automation", [ResourceType.Automation]),
-        new("Labels Automáticas", "Automação", "Gerenciamento de labels automáticas.", "/settings/agent-labels", "labels tags automaticas", [ResourceType.Automation]),
+        new("Labels Automáticas", "Configurações", "Gerenciamento de labels automáticas.", "/settings/agent-labels", "labels tags automaticas", [ResourceType.Automation]),
         new("Templates de Relatórios", "Relatórios", "Biblioteca de templates de relatório.", "/reports/templates", "relatorios relatorios templates", [ResourceType.Reports]),
         new("Execuções de Relatórios", "Relatórios", "Histórico e status de execuções.", "/reports/executions", "relatorios execucoes processamento", [ResourceType.Reports]),
         new("Perfil e Segurança", "Identidade", "Configurações de autenticação.", "/identity/authentication", "perfil seguranca autenticacao", []),

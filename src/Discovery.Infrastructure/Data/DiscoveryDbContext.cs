@@ -79,6 +79,13 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AlertCorrelationLock> AlertCorrelationLocks => Set<AlertCorrelationLock>();
     public DbSet<AgentMonitoringEvent> AgentMonitoringEvents => Set<AgentMonitoringEvent>();
 
+    // Sensores (monitoramento: estado + séries + eventos)
+    public DbSet<SensorDefinition> SensorDefinitions => Set<SensorDefinition>();
+    public DbSet<AgentSensorState> AgentSensorStates => Set<AgentSensorState>();
+    public DbSet<AgentSensorSample> AgentSensorSamples => Set<AgentSensorSample>();
+    public DbSet<AgentSensorRollup> AgentSensorRollups => Set<AgentSensorRollup>();
+    public DbSet<AgentSensorEvent> AgentSensorEvents => Set<AgentSensorEvent>();
+
     // Agent Alerts (PSADT)
     public DbSet<AgentAlertDefinition> AgentAlertDefinitions => Set<AgentAlertDefinition>();
     public DbSet<TicketAlertRule> TicketAlertRules => Set<TicketAlertRule>();
@@ -211,6 +218,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Gerenciador de patches do Windows (WUA)
         ConfigurePatches(modelBuilder);
 
+        // Sensores de monitoramento (estado + séries + eventos)
+        ConfigureSensors(modelBuilder);
+
         // Fallback convention: ensure any entity/column not explicitly mapped also uses snake_case.
         ApplySnakeCaseFallback(modelBuilder);
     }
@@ -239,6 +249,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureRemoteConsent(ModelBuilder modelBuilder);
     static partial void ConfigureTicketChat(ModelBuilder modelBuilder);
     static partial void ConfigurePatches(ModelBuilder modelBuilder);
+    static partial void ConfigureSensors(ModelBuilder modelBuilder);
 
     private static void ApplySnakeCaseFallback(ModelBuilder modelBuilder)
     {

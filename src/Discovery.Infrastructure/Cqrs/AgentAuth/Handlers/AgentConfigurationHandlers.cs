@@ -272,6 +272,15 @@ public sealed class GetAgentSyncManifestHandler(
             },
             new()
             {
+                // Configuração de sensores (estado + métricas). Endpoint próprio,
+                // com fingerprint próprio — NÃO compartilha a chave da automação.
+                Resource = Core.Enums.SyncResourceType.Sensors,
+                Revision = now.ToString("yyyyMMddHHmmss"),
+                RecommendedSyncInSeconds = 300, // 5 min
+                Endpoint = "/api/v1/agent-auth/me/sensors/sync"
+            },
+            new()
+            {
                 Resource = Core.Enums.SyncResourceType.ZeroTouchApproved,
                 Revision = now.ToString("yyyyMMddHHmmss"),
                 RecommendedSyncInSeconds = 300, // 5 min

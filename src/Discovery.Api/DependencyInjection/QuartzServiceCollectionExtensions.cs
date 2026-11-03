@@ -121,6 +121,12 @@ public static class QuartzServiceCollectionExtensions
                 .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromSeconds(60)).RepeatForever())
                 .WithDescription("Dispatch due scheduled report generations"));
 
+            // ── Sensor Rollup: a cada 5 minutos (fecha as últimas 3 horas) ──
+            q.ScheduleJob<SensorRollupJob>(trigger => trigger
+                .WithIdentity(SensorRollupJob.Key.Name, SensorRollupJob.Key.Group)
+                .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromMinutes(5)).RepeatForever())
+                .WithDescription("Aggregate sensor samples into hourly rollups for long-range charts"));
+
             // ── Data Retention: daily at 3:30 AM ──────────────────────
             q.ScheduleJob<DataRetentionJob>(trigger => trigger
                 .WithIdentity(DataRetentionJob.Key.Name, DataRetentionJob.Key.Group)

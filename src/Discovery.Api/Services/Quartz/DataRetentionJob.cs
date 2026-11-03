@@ -180,6 +180,32 @@ public sealed class DataRetentionJob : IJob
             logger.LogWarning(ex, "DataRetention: falha ao remover anexos soft-deletados antigos.");
         }
 
+        // 11. Sensores: amostras BRUTAS (série curta), eventos e agregados.
+        //     O estado corrente (agent_sensor_states) NUNCA é apagado.
+        var rawSampleCutoff = now.AddDays(-settings.SensorRawSampleRetentionDays);
+        var rawSamplesDeleted = await db.AgentSensorSamples
+            .Where(s => s.CapturedAt < rawSampleCutoff)
+            .ExecuteDeleteAsync(ct);
+        if (rawSamplesDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} sensor sample(s).", rawSamplesDeleted);
+        results["sensorSamples"] = rawSamplesDeleted;
+
+        var sensorEventCutoff = now.AddDays(-settings.SensorEventRetentionDays);
+        var sensorEventsDeleted = await db.AgentSensorEvents
+            .Where(e => e.OccurredAt < sensorEventCutoff)
+            .ExecuteDeleteAsync(ct);
+        if (sensorEventsDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} sensor event(s).", sensorEventsDeleted);
+        results["sensorEvents"] = sensorEventsDeleted;
+
+        var sensorRollupCutoff = now.AddDays(-settings.SensorRollupRetentionDays);
+        var sensorRollupsDeleted = await db.AgentSensorRollups
+            .Where(r => r.BucketStart < sensorRollupCutoff)
+            .ExecuteDeleteAsync(ct);
+        if (sensorRollupsDeleted > 0)
+            logger.LogInformation("DataRetention: deleted {Count} sensor rollup row(s).", sensorRollupsDeleted);
+        results["sensorRollups"] = sensorRollupsDeleted;
+
         var totalDeleted = results.Values.Sum();
         logger.LogInformation("DataRetention completed. Total purged: {Total} records across {Tables} tables.",
             totalDeleted, results.Count(r => r.Value > 0));

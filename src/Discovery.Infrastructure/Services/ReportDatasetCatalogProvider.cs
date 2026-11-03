@@ -439,6 +439,29 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
             ("lastSeenAt", "Último contato", "datetime", false),
             ("pendingReboot", "Reinício pendente", "boolean", false));
 
+        Add("agentSensors", 29, "Sensores (estado e métricas)",
+            "Estado corrente de cada sensor por agente/alvo: status, severidade, valor do canal primário, limites e última coleta.",
+            ["clientId", "clientName", "siteId", "siteName", "agentId", "agentHostname",
+             "sensorId", "sensorName", "sensorKey", "sensorType", "target", "targetKey",
+             "status", "severity", "primaryChannel", "primaryValue", "unit",
+             "message", "consecutiveFailures", "totalRuns", "totalFailures",
+             "warningThreshold", "criticalThreshold", "comparison", "lastRunAt", "lastStatusChangedAt"],
+            JoinAgentClientSite,
+            ["siteId", "agentId", "status", "severity", "sensorType", "from", "to"],
+            ("agentId", "Agente", "guid", true),
+            ("sensorId", "Sensor", "guid", false),
+            ("sensorName", "Sensor", "string", false),
+            ("sensorType", "Tipo", "string", false),
+            ("status", "Status", "string", false),
+            ("severity", "Severidade", "string", false),
+            ("primaryValue", "Valor", "number", false),
+            ("unit", "Unidade", "string", false),
+            ("message", "Mensagem", "string", false),
+            ("consecutiveFailures", "Falhas consecutivas", "number", false),
+            ("warningThreshold", "Limiar de atenção", "number", false),
+            ("criticalThreshold", "Limiar crítico", "number", false),
+            ("lastRunAt", "Última coleta", "datetime", false));
+
         return items.AsReadOnly();
     }
 
@@ -447,6 +470,7 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
         "softwareInventory" => "sw",
         "agentHardware" => "hw",
         "agentLabels" => "lbl",
+        "agentSensors" => "sns",
         "automaticLabelRules" => "rule",
         "logs" => "log",
         "tickets" => "tk",

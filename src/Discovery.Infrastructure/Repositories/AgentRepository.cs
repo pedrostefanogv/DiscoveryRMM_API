@@ -8,7 +8,7 @@ using Npgsql;
 
 namespace Discovery.Infrastructure.Repositories;
 
-public class AgentRepository : IAgentRepository
+public class AgentRepository : IAgentRepository, IAgentSensorSyncRepository
 {
     private readonly DiscoveryDbContext _db;
 
@@ -104,6 +104,8 @@ public class AgentRepository : IAgentRepository
         existingAgent.FingerprintHash = agent.FingerprintHash;
         existingAgent.LastPolicyFingerprint = agent.LastPolicyFingerprint;
         existingAgent.LastPolicySyncAt = agent.LastPolicySyncAt;
+        existingAgent.LastSensorFingerprint = agent.LastSensorFingerprint;
+        existingAgent.LastSensorSyncAt = agent.LastSensorSyncAt;
         existingAgent.DeletedAt = agent.DeletedAt;
         existingAgent.MaintenanceEnabled = agent.MaintenanceEnabled;
         existingAgent.MaintenanceReason = agent.MaintenanceReason;
@@ -126,6 +128,15 @@ public class AgentRepository : IAgentRepository
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(agent => agent.LastPolicyFingerprint, _ => fingerprint)
                 .SetProperty(agent => agent.LastPolicySyncAt, _ => syncedAt), ct);
+    }
+
+    public async Task SetSensorSyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default)
+    {
+        await _db.Agents
+            .Where(agent => agent.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.LastSensorFingerprint, _ => fingerprint)
+                .SetProperty(agent => agent.LastSensorSyncAt, _ => syncedAt), ct);
     }
 
     public async Task ApproveZeroTouchAsync(Guid agentId)

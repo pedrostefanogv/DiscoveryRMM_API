@@ -32,5 +32,7 @@ public enum ReportDatasetType
     PatchApprovals = 26,
     PatchApprovalAudit = 27,
     // Inventário/estado dos agentes (fonte que faltava para relatórios de frota).
-    Agents = 28
+    Agents = 28,
+    // Sensores de monitoramento: estado corrente por agente/sensor/alvo.
+    AgentSensors = 29
 }

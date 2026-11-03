@@ -23,6 +23,9 @@ public static class ConfigurationFieldCatalog
         // a allowlist dessas políticas (GetAgentConfigurationHandler).
         "AIIntegrationSettingsJson",
         "TicketAttachmentSettingsJson",
+        // Configuração global dos sensores de monitoramento (intervalo default,
+        // kill switch, auto-ticket e notificações).
+        "SensorsSettingsJson",
         "BackgroundProcessingSettingsJson",
         "AgentHeartbeatIntervalSeconds",
         "AgentOnlineGraceSeconds",

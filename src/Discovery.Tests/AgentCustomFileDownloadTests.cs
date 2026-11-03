@@ -106,6 +106,8 @@ public class AgentCustomFileDownloadTests
             attachmentRepository: null!,
             knowledgeArticleRepository: null!,
             notificationService: null!,
+            sensorSync: null!,
+            sensorIngestion: null!,
             logger: NullLogger<AgentAuthController>.Instance);
 
         var httpContext = new DefaultHttpContext();

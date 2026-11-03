@@ -46,6 +46,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.NatsWebSocketExternalUrl).HasColumnName("nats_web_socket_external_url");
             entity.Property(config => config.ReportingSettingsJson).HasColumnName("reporting_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.RetentionSettingsJson).HasColumnName("retention_settings_json").HasColumnType("jsonb");
+            entity.Property(config => config.SensorsSettingsJson).HasColumnName("sensors_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.TicketAttachmentSettingsJson).HasColumnName("ticket_attachment_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
             entity.Property(config => config.ObjectStorageBucketName).HasColumnName("object_storage_bucket_name");

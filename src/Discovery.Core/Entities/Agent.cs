@@ -46,6 +46,16 @@ public class Agent
     /// <summary>Quando a policy vigente (LastPolicyFingerprint) foi entregue/confirmada.</summary>
     public DateTime? LastPolicySyncAt { get; set; }
 
+    // ── Sync de sensores (aba "Sensores") ─────────────────────────────────
+    /// <summary>
+    /// Fingerprint da configuração de sensores entregue ao agent no último
+    /// sensor-sync. Mesmo papel de LastPolicyFingerprint, mas em endpoint próprio
+    /// (não compartilha a chave da automação).
+    /// </summary>
+    public string? LastSensorFingerprint { get; set; }
+    /// <summary>Quando a configuração de sensores vigente foi entregue.</summary>
+    public DateTime? LastSensorSyncAt { get; set; }
+
     // ── Reinício pendente (Windows Update, CBS, renomeação, arquivos em uso) ──
     /// <summary>Há reinício pendente reportado pela sonda do agente.</summary>
     public bool PendingReboot { get; set; }

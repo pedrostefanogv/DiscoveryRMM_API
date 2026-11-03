@@ -47,6 +47,8 @@ public class AgentAuthController : ControllerBase
     private readonly IAttachmentRepository _attachmentRepository;
     private readonly IKnowledgeArticleRepository _knowledgeArticleRepository;
     private readonly INotificationService _notificationService;
+    private readonly ISensorSyncService _sensorSync;
+    private readonly ISensorIngestionService _sensorIngestion;
     private readonly ILogger<AgentAuthController> _logger;
 
     public AgentAuthController(
@@ -64,6 +66,8 @@ public class AgentAuthController : ControllerBase
         IAttachmentRepository attachmentRepository,
         IKnowledgeArticleRepository knowledgeArticleRepository,
         INotificationService notificationService,
+        ISensorSyncService sensorSync,
+        ISensorIngestionService sensorIngestion,
         ILogger<AgentAuthController> logger)
     {
         _mediator = mediator;
@@ -80,6 +84,8 @@ public class AgentAuthController : ControllerBase
         _attachmentRepository = attachmentRepository;
         _knowledgeArticleRepository = knowledgeArticleRepository;
         _notificationService = notificationService;
+        _sensorSync = sensorSync;
+        _sensorIngestion = sensorIngestion;
         _logger = logger;
     }
 
@@ -265,6 +271,41 @@ public class AgentAuthController : ControllerBase
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
         return MapResult(await _mediator.Send(cmd with { AgentId = id, CommandId = commandId }), _ => Ok(new { completed = true, commandId }));
+    }
+
+    // ── Sensores ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Configuração de sensores aplicável ao agente. Fingerprint próprio (não
+    /// compartilha a chave do policy-sync de automação); o payload contém apenas
+    /// o necessário para COLETAR — limiares e alertas ficam no servidor.
+    /// </summary>
+    [HttpPost("me/sensors/sync")]
+    public async Task<IActionResult> SyncSensors([FromBody] AgentSensorSyncRequest request, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        var response = await _sensorSync.SyncAsync(id, request, ct);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// Ingestão de amostras de sensores (evidência crua + canais já extraídos).
+    /// O servidor revalida status/severidade e descarta canais não declarados.
+    /// </summary>
+    [HttpPost("me/sensors/samples")]
+    public async Task<IActionResult> ReportSensorSamples([FromBody] AgentSensorResultBatch batch, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (_, blocked) = await GetAgentOrBlockAsync(id, false);
+        if (blocked is not null) return blocked;
+
+        // O AgentId confiável é o do token, nunca o do corpo.
+        batch.AgentId = id;
+        var result = await _sensorIngestion.IngestAsync(batch, ct);
+        return Ok(new { accepted = result.Accepted, rejected = result.Rejected });
     }
 
     // ── Configuration ─────────────────────────────────────────────────────

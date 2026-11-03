@@ -25,5 +25,8 @@ public enum ResourceType
     Sla,
     Departments,
     // Gerenciador de patches do Windows (inventário WUA, aprovações, instalação).
-    Patches
+    Patches,
+    // Sensores de monitoramento (estado + métricas + gráficos). Recurso próprio
+    // para não misturar com Automation (execução) nem Logs (leitura de eventos).
+    Sensors
 }

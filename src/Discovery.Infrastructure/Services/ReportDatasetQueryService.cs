@@ -54,6 +54,7 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
             ReportDatasetType.AutomationExecutions => await QueryAutomationExecutionsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentMonitoringEvents => await QueryAgentMonitoringEventsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentAlerts => await QueryAgentAlertsAsync(clientId, filters, cancellationToken),
+            ReportDatasetType.AgentSensors => await QueryAgentSensorsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.P2pTelemetry => await QueryP2pTelemetryAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentDisks => await QueryAgentDisksAsync(clientId, filters, cancellationToken),
             ReportDatasetType.NetworkAdapters => await QueryNetworkAdaptersAsync(clientId, filters, cancellationToken),
@@ -1120,6 +1121,114 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
         return new ReportQueryResult
         {
             Columns = ["id", "clientId", "name", "severity", "enabled", "metricKey", "threshold", "scopeType", "createdAt", "updatedAt"],
+            Rows = rows
+        };
+    }
+
+    /// <summary>
+    /// Estado corrente dos sensores (uma linha por agente/sensor/alvo). Serve
+    /// para relatórios de conformidade/frota: "quais dispositivos estão com
+    /// disco crítico", "quais sensores estão sem coletar" etc.
+    /// </summary>
+    private async Task<ReportQueryResult> QueryAgentSensorsAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
+    {
+        var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
+        var agentId = GetGuid(filters, "agentId");
+        var statusFilter = GetString(filters, "status");
+        var severityFilter = GetString(filters, "severity");
+        var sensorTypeFilter = GetString(filters, "sensorType");
+        var from = GetDateTime(filters, "from");
+        var to = GetDateTime(filters, "to");
+
+        var query =
+            from state in _db.AgentSensorStates.AsNoTracking()
+            join agent in _db.Agents.AsNoTracking() on state.AgentId equals agent.Id
+            join site in _db.Sites.AsNoTracking() on agent.SiteId equals site.Id
+            join client in _db.Clients.AsNoTracking() on site.ClientId equals client.Id
+            join definition in _db.SensorDefinitions.AsNoTracking() on state.SensorId equals definition.Id
+            where agent.DeletedAt == null
+            select new { state, agent, site, client, definition };
+
+        if (clientId.HasValue) query = query.Where(x => x.client.Id == clientId.Value);
+        if (siteId.HasValue) query = query.Where(x => x.site.Id == siteId.Value);
+        if (agentId.HasValue) query = query.Where(x => x.agent.Id == agentId.Value);
+
+        if (!string.IsNullOrWhiteSpace(statusFilter)
+            && Enum.TryParse<Discovery.Core.Enums.SensorStatus>(statusFilter, ignoreCase: true, out var parsedStatus))
+        {
+            query = query.Where(x => x.state.Status == parsedStatus);
+        }
+
+        if (!string.IsNullOrWhiteSpace(severityFilter)
+            && Enum.TryParse<Discovery.Core.Enums.SensorSeverity>(severityFilter, ignoreCase: true, out var parsedSeverity))
+        {
+            query = query.Where(x => x.state.Severity == parsedSeverity);
+        }
+
+        if (!string.IsNullOrWhiteSpace(sensorTypeFilter)
+            && Enum.TryParse<Discovery.Core.Enums.SensorType>(sensorTypeFilter, ignoreCase: true, out var parsedType))
+        {
+            query = query.Where(x => x.definition.SensorType == parsedType);
+        }
+
+        if (from.HasValue) query = query.Where(x => x.state.LastRunAt >= from.Value);
+        if (to.HasValue) query = query.Where(x => x.state.LastRunAt <= to.Value);
+
+        // Pior primeiro: falha > atenção > sem dados > ok. É a ordem que um
+        // relatório de exceção precisa.
+        query = query
+            .OrderByDescending(x => x.state.Status == Discovery.Core.Enums.SensorStatus.Failing)
+            .ThenByDescending(x => x.state.Status == Discovery.Core.Enums.SensorStatus.Warning)
+            .ThenByDescending(x => x.state.LastRunAt);
+
+        var rowsRaw = await query.Take(limit).ToListAsync(cancellationToken);
+
+        var rows = rowsRaw.Select(x =>
+        {
+            var channels = SensorChannelCatalog.Resolve(x.definition);
+            var unit = channels.FirstOrDefault(channel =>
+                string.Equals(channel.Key, x.state.PrimaryChannel, StringComparison.OrdinalIgnoreCase))?.Unit.ToString()
+                ?? x.definition.ThresholdUnit.ToString();
+
+            return (IReadOnlyDictionary<string, object?>)new Dictionary<string, object?>
+            {
+                ["clientId"] = x.client.Id,
+                ["clientName"] = x.client.Name,
+                ["siteId"] = x.site.Id,
+                ["siteName"] = x.site.Name,
+                ["agentId"] = x.agent.Id,
+                ["agentHostname"] = x.agent.DisplayName ?? x.agent.Hostname,
+                ["sensorId"] = x.state.SensorId,
+                ["sensorName"] = x.definition.Name,
+                ["sensorKey"] = x.definition.Key,
+                ["sensorType"] = x.definition.SensorType.ToString(),
+                ["target"] = x.definition.Target,
+                ["targetKey"] = x.state.TargetKey,
+                ["status"] = x.state.Status.ToString(),
+                ["severity"] = x.state.Severity?.ToString(),
+                ["primaryChannel"] = x.state.PrimaryChannel,
+                ["primaryValue"] = x.state.PrimaryValue,
+                ["unit"] = unit,
+                ["message"] = x.state.Message,
+                ["consecutiveFailures"] = x.state.ConsecutiveFailures,
+                ["totalRuns"] = x.state.TotalRuns,
+                ["totalFailures"] = x.state.TotalFailures,
+                ["warningThreshold"] = x.definition.WarningThreshold,
+                ["criticalThreshold"] = x.definition.CriticalThreshold,
+                ["comparison"] = x.definition.Comparison.ToString(),
+                ["lastRunAt"] = x.state.LastRunAt,
+                ["lastStatusChangedAt"] = x.state.LastStatusChangedAt
+            };
+        }).ToList();
+
+        return new ReportQueryResult
+        {
+            Columns = ["clientId", "clientName", "siteId", "siteName", "agentId", "agentHostname",
+                       "sensorId", "sensorName", "sensorKey", "sensorType", "target", "targetKey",
+                       "status", "severity", "primaryChannel", "primaryValue", "unit",
+                       "message", "consecutiveFailures", "totalRuns", "totalFailures",
+                       "warningThreshold", "criticalThreshold", "comparison", "lastRunAt", "lastStatusChangedAt"],
             Rows = rows
         };
     }

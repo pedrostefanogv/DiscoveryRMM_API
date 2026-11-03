@@ -66,6 +66,13 @@ public class AgentPurgeService : IAgentPurgeService
         "p2p_agent_telemetry",
         "p2p_artifact_presence",
         "agent_monitoring_events",
+        // Sensores: filhos antes da definição (FK em cascata); definições com
+        // agent_id pertencem ao agente e não devem sobreviver à purga.
+        "agent_sensor_samples",
+        "agent_sensor_rollups",
+        "agent_sensor_events",
+        "agent_sensor_states",
+        "sensor_definitions",
         // Antes de remote_sessions: a gravação de terminal referencia a sessão.
         "remote_terminal_recordings",
         "remote_sessions",

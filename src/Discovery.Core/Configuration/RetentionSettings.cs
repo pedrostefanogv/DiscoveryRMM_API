@@ -55,6 +55,19 @@ public class RetentionSettings
     /// </summary>
     public int AgentLabelChangeLogRetentionDays { get; set; } = 90;
 
+    /// <summary>
+    /// Dias de retenção das amostras BRUTAS de sensores (fonte dos gráficos de
+    /// curto prazo). Default: 7. Os agregados horários (AgentSensorRollup)
+    /// cobrem o longo prazo e têm retenção própria.
+    /// </summary>
+    public int SensorRawSampleRetentionDays { get; set; } = 7;
+
+    /// <summary>Dias de retenção dos agregados horários de sensores. Default: 400.</summary>
+    public int SensorRollupRetentionDays { get; set; } = 400;
+
+    /// <summary>Dias de retenção da timeline (eventos/transições) de sensores. Default: 90.</summary>
+    public int SensorEventRetentionDays { get; set; } = 90;
+
     // ── AI Chat (kept in sync with AiChatRetentionJob) ──
 
     /// <summary>Days before soft-deleting AI chat sessions. Default: 180.</summary>

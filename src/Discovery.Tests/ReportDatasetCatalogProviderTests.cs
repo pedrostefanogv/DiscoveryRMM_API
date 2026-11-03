@@ -12,8 +12,13 @@ public class ReportDatasetCatalogProviderTests
         var catalog = _provider.GetAll();
 
         Assert.That(catalog, Is.Not.Null);
-        // 23 datasets originais + ticketAnswers + 5 novos (patches/agentes).
-        Assert.That(catalog.Count, Is.EqualTo(29));
+        // Um item de catálogo por valor de ReportDatasetType. A asserção pelo
+        // enum (e não por número mágico) evita este teste quebrar a cada
+        // dataset novo e continua pegando dataset esquecido no catálogo.
+        var expected = Enum.GetValues<Discovery.Core.Enums.ReportDatasetType>().Length;
+        Assert.That(catalog.Select(i => i.Type).Distinct().Count(), Is.EqualTo(expected),
+            "todo ReportDatasetType precisa ter entrada no catálogo");
+        Assert.That(catalog.Count, Is.EqualTo(expected));
     }
 
     [Test]
