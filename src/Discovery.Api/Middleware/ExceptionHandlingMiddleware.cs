@@ -58,10 +58,16 @@ public class ExceptionHandlingMiddleware
     {
         var loggingOptions = options.CurrentValue;
 
+        // O status HTTP deve ser calculado ANTES de qualquer ramo de logging:
+        // sem isso, com AutomaticLogging:Enabled=false toda exceção (404/400/401)
+        // virava 500 genérico porque este ramo respondia fixo 500 e retornava
+        // antes de DetermineStatusCode.
+        var statusCode = DetermineStatusCode(exception);
+
         if (!loggingOptions.Enabled || !loggingOptions.LogExceptions)
         {
-            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-            await context.Response.WriteAsJsonAsync(new { error = "Internal server error" });
+            context.Response.StatusCode = statusCode;
+            await context.Response.WriteAsJsonAsync(new { error = GenericErrorLabel(statusCode) });
             return;
         }
 
@@ -70,7 +76,6 @@ public class ExceptionHandlingMiddleware
 
         // Determina o nível de log baseado no tipo de exceção
         var logLevel = DetermineLogLevel(exception);
-        var statusCode = DetermineStatusCode(exception);
         var message = $"Exceção não tratada: {exception.GetType().Name}";
 
         // Registra a exceção
@@ -136,16 +141,7 @@ public class ExceptionHandlingMiddleware
 
         var response = new
         {
-            error = statusCode switch
-            {
-                StatusCodes.Status400BadRequest => "Requisição inválida",
-                StatusCodes.Status401Unauthorized => "Não autorizado",
-                StatusCodes.Status403Forbidden => "Acesso proibido",
-                StatusCodes.Status404NotFound => "Recurso não encontrado",
-                StatusCodes.Status409Conflict => "Conflito com recurso existente",
-                StatusCodes.Status503ServiceUnavailable => "Serviço indisponível",
-                _ => "Erro interno do servidor"
-            },
+            error = GenericErrorLabel(statusCode),
             message = detail,
             timestamp = DateTime.UtcNow,
             traceId = context.TraceIdentifier
@@ -290,6 +286,20 @@ public class ExceptionHandlingMiddleware
     /// <summary>
     /// Determina o código HTTP baseado no tipo de exceção
     /// </summary>
+    private static string GenericErrorLabel(int statusCode)
+    {
+        return statusCode switch
+        {
+            StatusCodes.Status400BadRequest => "Requisição inválida",
+            StatusCodes.Status401Unauthorized => "Não autorizado",
+            StatusCodes.Status403Forbidden => "Acesso proibido",
+            StatusCodes.Status404NotFound => "Recurso não encontrado",
+            StatusCodes.Status409Conflict => "Conflito com recurso existente",
+            StatusCodes.Status503ServiceUnavailable => "Serviço indisponível",
+            _ => "Erro interno do servidor"
+        };
+    }
+
     private static int DetermineStatusCode(Exception exception)
     {
         return exception switch

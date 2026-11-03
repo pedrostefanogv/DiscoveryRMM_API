@@ -27,7 +27,9 @@ public static class CqrsServiceCollectionExtensions
             cfg.RegisterServicesFromAssembly(typeof(Program).Assembly);
         });
 
-        // Register pipeline behaviors in order (first registered = outermost)
+        // Register pipeline behaviors in order (first registered = outermost).
+        // Validacao ANTES de transacao: command invalido nao abre/commita
+        // transacao nem paga rollback de erro (a validacao e pura memoria).
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(PerformanceBehavior<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));

@@ -99,21 +99,33 @@ public class NatsFanoutStreamBootstrapService : BackgroundService
             {
                 if (options.MaxRetryAttempts > 0 && attempts >= options.MaxRetryAttempts)
                 {
+                    // Não desiste: um comando de fan-out emitido sem stream NÃO é
+                    // persistido em lugar nenhum (perda silenciosa). Em vez de
+                    // abandonar, continua tentando em backoff crescente (até 5x o
+                    // delay base), registrando o erro crítico uma única vez para
+                    // não poluir o log.
                     _logger.LogError(
                         ex,
-                        "Unable to ensure JetStream fan-out stream {StreamName} after {Attempts} attempts. Service will continue without stopping API startup.",
+                        "Unable to ensure JetStream fan-out stream {StreamName} after {Attempts} attempts. Commands dispatched while the stream is absent are LOST. Continuing to retry in the background.",
                         streamName,
                         attempts);
-                    return;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to ensure JetStream fan-out stream {StreamName} (attempt {Attempt}). Retrying...",
+                        streamName,
+                        attempts);
                 }
 
-                var retryDelaySeconds = Math.Max(1, options.RetryDelaySeconds);
-                _logger.LogWarning(
-                    ex,
-                    "Failed to ensure JetStream fan-out stream {StreamName} (attempt {Attempt}). Retrying in {DelaySeconds}s...",
-                    streamName,
-                    attempts,
-                    retryDelaySeconds);
+                // Backoff crescente: attempt 1..N usa o delay configurado; depois
+                // do limite, cresce até 5x (teto) para não martelar o servidor NATS.
+                var baseDelay = Math.Max(1, options.RetryDelaySeconds);
+                var multiplier = options.MaxRetryAttempts > 0 && attempts >= options.MaxRetryAttempts
+                    ? Math.Min(5, 1 + ((attempts - options.MaxRetryAttempts) / 10))
+                    : 1;
+                var retryDelaySeconds = baseDelay * multiplier;
 
                 await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), stoppingToken);
             }
