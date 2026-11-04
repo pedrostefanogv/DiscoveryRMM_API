@@ -275,13 +275,17 @@ public static class SensorChannelCatalog
             [
                 Channel("free_percent", "Livre", SensorChannelUnit.Percent, primary: true),
                 Channel("free_bytes", "Livre (bytes)", SensorChannelUnit.Bytes),
-                Channel("used_percent", "Usado", SensorChannelUnit.Percent)
+                Channel("used_percent", "Usado", SensorChannelUnit.Percent),
+                // O extrator já emitia total_bytes; sem entrada aqui o gráfico ficava sem rótulo.
+                Channel("total_bytes", "Total (bytes)", SensorChannelUnit.Bytes)
             ],
             [SensorType.Cpu] = [Channel("used_percent", "Uso de CPU", SensorChannelUnit.Percent, primary: true)],
             [SensorType.Memory] =
             [
                 Channel("used_percent", "Uso de memória", SensorChannelUnit.Percent, primary: true),
-                Channel("available_bytes", "Disponível", SensorChannelUnit.Bytes)
+                Channel("available_bytes", "Disponível", SensorChannelUnit.Bytes),
+                // Idem DiskSpace: emitido pelo extrator, faltava o rótulo.
+                Channel("total_bytes", "Total (bytes)", SensorChannelUnit.Bytes)
             ],
             [SensorType.Uptime] = [Channel("uptime_seconds", "Tempo ligado", SensorChannelUnit.Seconds, primary: true)],
             [SensorType.Service] = [Channel("running", "Em execução", SensorChannelUnit.Boolean, primary: true)],
