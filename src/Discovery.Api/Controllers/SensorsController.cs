@@ -42,10 +42,19 @@ public class SensorsController(
         [FromQuery] Guid? siteId = null,
         [FromQuery] Guid? agentId = null,
         [FromQuery] bool includeInactive = false,
+        [FromQuery] string? search = null,
+        [FromQuery] SensorType? sensorType = null,
+        [FromQuery] bool? isActive = null,
+        [FromQuery] int? page = null,
+        [FromQuery] int? pageSize = null,
         CancellationToken cancellationToken = default)
     {
-        var items = await definitions.ListAsync(scopeType, clientId, siteId, agentId, includeInactive, cancellationToken);
-        return Ok(new { items, count = items.Count });
+        // Resposta aditiva: items/count continuam iguais; total/page/pageSize
+        // entram para o cliente paginar de verdade (antes cortava em 500).
+        var result = await definitions.ListAsync(
+            scopeType, clientId, siteId, agentId, includeInactive,
+            search, sensorType, isActive, page, pageSize, cancellationToken);
+        return Ok(result);
     }
 
     [HttpGet("{id:guid}")]

@@ -16,8 +16,16 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public sealed class SensorDefinitionService(
     DiscoveryDbContext db,
-    IAgentLabelRepository labelRepository) : ISensorDefinitionService
+    IAgentLabelRepository labelRepository,
+    IAgentRepository agentRepository,
+    ISiteRepository siteRepository) : ISensorDefinitionService
 {
+    /// <summary>Teto de itens por página na listagem (protege a resposta).</summary>
+    public const int MaxPageSize = 500;
+
+    /// <summary>Tamanho de página usado quando o cliente não informa.</summary>
+    public const int DefaultPageSize = 100;
+
     private static readonly HashSet<SensorType> ThresholdRequiredTypes =
     [
         SensorType.DiskSpace, SensorType.Cpu, SensorType.Memory, SensorType.Uptime,
@@ -27,12 +35,17 @@ public sealed class SensorDefinitionService(
         SensorType.EventLogRate, SensorType.CertificateExpiry
     ];
 
-    public async Task<IReadOnlyList<SensorDefinitionDto>> ListAsync(
+    public async Task<SensorDefinitionPageDto> ListAsync(
         AppApprovalScopeType? scopeType,
         Guid? clientId,
         Guid? siteId,
         Guid? agentId,
         bool includeInactive,
+        string? search = null,
+        SensorType? sensorType = null,
+        bool? isActive = null,
+        int? page = null,
+        int? pageSize = null,
         CancellationToken cancellationToken = default)
     {
         var query = db.SensorDefinitions.AsNoTracking().Where(s => s.DeletedAt == null);
@@ -41,15 +54,52 @@ public sealed class SensorDefinitionService(
         if (clientId is not null) query = query.Where(s => s.ClientId == clientId);
         if (siteId is not null) query = query.Where(s => s.SiteId == siteId);
         if (agentId is not null) query = query.Where(s => s.AgentId == agentId);
+        if (sensorType is not null) query = query.Where(s => s.SensorType == sensorType);
+        // Filtro explícito de ativo/inativo: só faz sentido junto de includeInactive,
+        // senão o filtro base já restringiu a ativos.
+        if (isActive is not null) query = query.Where(s => s.IsActive == isActive);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            // Busca case-insensitive em nome/chave/descrição/alvo. Usa ToLower()
+            // (traduz para lower() no Postgres) em vez de ILike: o ILike do
+            // provider Npgsql não é traduzível quando o provedor é outro (ex.:
+            // InMemory nos testes) e a query cai para avaliação em cliente.
+            var term = search.Trim().ToLowerInvariant();
+            query = query.Where(s =>
+                s.Name.ToLower().Contains(term)
+                || (s.Key != null && s.Key.ToLower().Contains(term))
+                || (s.Description != null && s.Description.ToLower().Contains(term))
+                || (s.Target != null && s.Target.ToLower().Contains(term)));
+        }
+
+        // Total ANTES do recorte: o cliente precisa saber que existe mais coisa
+        // (antes a listagem cortava em 500 itens silenciosamente).
+        var total = await query.CountAsync(cancellationToken);
+
+        var size = pageSize is > 0 ? Math.Min(pageSize.Value, MaxPageSize) : DefaultPageSize;
+        var currentPage = page is > 0 ? page.Value : 1;
 
         var items = await query
             .OrderBy(s => s.DisplayOrder)
             .ThenBy(s => s.Name)
-            .Take(500)
+            .ThenBy(s => s.Id)
+            .Skip((currentPage - 1) * size)
+            .Take(size)
             .ToListAsync(cancellationToken);
 
         var scriptNames = await LoadScriptNamesAsync(items, cancellationToken);
-        return items.Select(s => ToDto(s, scriptNames)).ToList();
+        var scopeNames = await LoadScopeNamesAsync(items, cancellationToken);
+        var dtos = items.Select(s => ToDto(s, scriptNames, scopeNames: scopeNames)).ToList();
+
+        return new SensorDefinitionPageDto
+        {
+            Items = dtos,
+            Count = dtos.Count,
+            Total = total,
+            Page = currentPage,
+            PageSize = size
+        };
     }
 
     public async Task<SensorDefinitionDto?> GetAsync(Guid id, CancellationToken cancellationToken = default)
@@ -59,7 +109,8 @@ public sealed class SensorDefinitionService(
         if (definition is null) return null;
 
         var scriptNames = await LoadScriptNamesAsync([definition], cancellationToken);
-        return ToDto(definition, scriptNames);
+        var scopeNames = await LoadScopeNamesAsync([definition], cancellationToken);
+        return ToDto(definition, scriptNames, scopeNames: scopeNames);
     }
 
     public async Task<SensorDefinitionDto> CreateAsync(SensorUpsertRequest request, string? actor, CancellationToken cancellationToken = default)
@@ -78,7 +129,8 @@ public sealed class SensorDefinitionService(
         await db.SaveChangesAsync(cancellationToken);
 
         var scriptNames = await LoadScriptNamesAsync([definition], cancellationToken);
-        return ToDto(definition, scriptNames);
+        var scopeNames = await LoadScopeNamesAsync([definition], cancellationToken);
+        return ToDto(definition, scriptNames, scopeNames: scopeNames);
     }
 
     public async Task<SensorDefinitionDto?> UpdateAsync(Guid id, SensorUpsertRequest request, string? actor, CancellationToken cancellationToken = default)
@@ -98,7 +150,8 @@ public sealed class SensorDefinitionService(
         await db.SaveChangesAsync(cancellationToken);
 
         var scriptNames = await LoadScriptNamesAsync([definition], cancellationToken);
-        return ToDto(definition, scriptNames);
+        var scopeNames = await LoadScopeNamesAsync([definition], cancellationToken);
+        return ToDto(definition, scriptNames, scopeNames: scopeNames);
     }
 
     public async Task<bool> DeleteAsync(Guid id, string? actor, CancellationToken cancellationToken = default)
@@ -495,11 +548,87 @@ public sealed class SensorDefinitionService(
             .ToDictionaryAsync(s => s.Id, s => $"{s.Name} v{s.Version}", cancellationToken);
     }
 
+    /// <summary>
+    /// Nomes de cliente/site/agente do escopo, resolvidos em lote (uma consulta
+    /// por tipo) para a listagem não cair em N+1.
+    /// </summary>
+    public sealed record SensorScopeNames(
+        IReadOnlyDictionary<Guid, string> Clients,
+        IReadOnlyDictionary<Guid, string> Sites,
+        IReadOnlyDictionary<Guid, string> Agents)
+    {
+        public static readonly SensorScopeNames Empty = new(
+            new Dictionary<Guid, string>(),
+            new Dictionary<Guid, string>(),
+            new Dictionary<Guid, string>());
+    }
+
+    private async Task<SensorScopeNames> LoadScopeNamesAsync(
+        IReadOnlyList<SensorDefinition> definitions,
+        CancellationToken cancellationToken)
+    {
+        var clientIds = new HashSet<Guid>();
+        var siteIds = new HashSet<Guid>();
+        var agentIds = new HashSet<Guid>();
+
+        foreach (var definition in definitions)
+        {
+            if (definition.ClientId is { } clientId) clientIds.Add(clientId);
+            if (definition.SiteId is { } siteId) siteIds.Add(siteId);
+            if (definition.AgentId is { } agentId) agentIds.Add(agentId);
+        }
+
+        if (clientIds.Count == 0 && siteIds.Count == 0 && agentIds.Count == 0)
+            return SensorScopeNames.Empty;
+
+        // IMPORTANTE: nada de Task.WhenAll aqui. O DbContext é scoped e NÃO é
+        // thread-safe — consultas em paralelo no mesmo contexto estouram
+        // "A second operation was started on this context". Consulta em SEQUÊNCIA.
+        var agents = new Dictionary<Guid, string>();
+        if (agentIds.Count > 0)
+        {
+            foreach (var agent in await agentRepository.GetByIdsAsync(agentIds.ToList(), cancellationToken))
+            {
+                agents[agent.Id] = agent.DisplayName ?? agent.Hostname;
+                // O agente também revela o site (e o cliente do site) do escopo.
+                siteIds.Add(agent.SiteId);
+            }
+        }
+
+        var sites = new Dictionary<Guid, string>();
+        if (siteIds.Count > 0)
+        {
+            // includeInactive: o nome precisa aparecer mesmo se o site foi desativado.
+            foreach (var site in await siteRepository.GetByIdsAsync(siteIds, includeInactive: true))
+            {
+                sites[site.Id] = site.Name;
+                clientIds.Add(site.ClientId);
+            }
+        }
+
+        var clients = new Dictionary<Guid, string>();
+        if (clientIds.Count > 0)
+        {
+            // IClientRepository não tem lookup em lote (só GetByIdAsync), então
+            // consulta em sequência — o conjunto é pequeno (escopos da página).
+            foreach (var clientId in clientIds)
+            {
+                var client = await db.Clients.AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.Id == clientId, cancellationToken);
+                if (client is not null)
+                    clients[clientId] = client.Name;
+            }
+        }
+
+        return new SensorScopeNames(clients, sites, agents);
+    }
+
     public static SensorDefinitionDto ToDto(
         SensorDefinition definition,
         IReadOnlyDictionary<Guid, string>? scriptNames = null,
         bool isInherited = false,
-        AppApprovalScopeType? sourceScope = null)
+        AppApprovalScopeType? sourceScope = null,
+        SensorScopeNames? scopeNames = null)
         => new()
         {
             Id = definition.Id,
@@ -511,6 +640,9 @@ public sealed class SensorDefinitionService(
             ClientId = definition.ClientId,
             SiteId = definition.SiteId,
             AgentId = definition.AgentId,
+            ClientName = definition.ClientId is Guid clientKey && scopeNames is not null && scopeNames.Clients.TryGetValue(clientKey, out var clientName) ? clientName : null,
+            SiteName = definition.SiteId is Guid siteKey && scopeNames is not null && scopeNames.Sites.TryGetValue(siteKey, out var siteName) ? siteName : null,
+            AgentName = definition.AgentId is Guid agentKey && scopeNames is not null && scopeNames.Agents.TryGetValue(agentKey, out var agentName) ? agentName : null,
             IncludeTags = SensorJson.ParseTags(definition.IncludeTagsJson),
             ExcludeTags = SensorJson.ParseTags(definition.ExcludeTagsJson),
             Target = definition.Target,

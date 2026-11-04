@@ -700,6 +700,19 @@ public class ConfigurationService : IConfigurationService
             if (element.ValueKind == JsonValueKind.Object || element.ValueKind == JsonValueKind.Array)
                 return element.GetRawText();
 
+            // Booleano/número para uma propriedade string: devolvemos o literal JSON ("true"/"false"/"300").
+            // Sem isto, GetString() lança a exceção crua do JsonElement
+            // ("The requested operation requires an element of type 'String', but the target element has type 'True'."),
+            // que vazava como 400 sem contexto para o usuário (ex.: PATCH {"SensorsSettingsJson":true}).
+            if (element.ValueKind == JsonValueKind.True)
+                return "true";
+
+            if (element.ValueKind == JsonValueKind.False)
+                return "false";
+
+            if (element.ValueKind == JsonValueKind.Number)
+                return element.GetRawText();
+
             return element.GetString();
         }
 

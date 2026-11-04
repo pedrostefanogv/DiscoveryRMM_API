@@ -31,6 +31,22 @@ public class SensorDefinitionDto
     public Guid? ClientId { get; set; }
     public Guid? SiteId { get; set; }
     public Guid? AgentId { get; set; }
+
+    /// <summary>
+    /// Nome do cliente do escopo, resolvido em lote na listagem (evita N+1 no
+    /// front). Null quando o escopo não tem cliente ou o registro não existe mais.
+    /// </summary>
+    public string? ClientName { get; set; }
+
+    /// <summary>Nome do site do escopo, resolvido em lote na listagem.</summary>
+    public string? SiteName { get; set; }
+
+    /// <summary>
+    /// Nome de exibição do agente do escopo (DisplayName com fallback para o
+    /// hostname), resolvido em lote na listagem.
+    /// </summary>
+    public string? AgentName { get; set; }
+
     public IReadOnlyList<string> IncludeTags { get; set; } = [];
     public IReadOnlyList<string> ExcludeTags { get; set; } = [];
 
@@ -68,6 +84,27 @@ public class SensorDefinitionDto
     /// <summary>True quando o sensor vem de um escopo superior (não é do próprio agente).</summary>
     public bool IsInherited { get; set; }
     public AppApprovalScopeType? SourceScope { get; set; }
+}
+
+/// <summary>
+/// Página de definições de sensor. Mantém <c>items</c>/<c>count</c> (contrato
+/// antigo) e acrescenta o total real, para o cliente paginar sem truncar.
+/// </summary>
+public class SensorDefinitionPageDto
+{
+    public IReadOnlyList<SensorDefinitionDto> Items { get; set; } = [];
+
+    /// <summary>Quantidade de itens nesta página (mesmo valor de <c>items.length</c>).</summary>
+    public int Count { get; set; }
+
+    /// <summary>Total de definições que casam com os filtros, antes do recorte de página.</summary>
+    public int Total { get; set; }
+
+    /// <summary>Página retornada (1-based).</summary>
+    public int Page { get; set; }
+
+    /// <summary>Tamanho de página efetivamente aplicado.</summary>
+    public int PageSize { get; set; }
 }
 
 /// <summary>Criação/edição de sensor. Campos não informados mantêm o valor atual no update.</summary>

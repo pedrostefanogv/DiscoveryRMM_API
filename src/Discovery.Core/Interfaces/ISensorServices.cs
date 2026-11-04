@@ -7,12 +7,23 @@ namespace Discovery.Core.Interfaces;
 /// <summary>CRUD + resolução de escopo das definições de sensor.</summary>
 public interface ISensorDefinitionService
 {
-    Task<IReadOnlyList<SensorDefinitionDto>> ListAsync(
+    /// <summary>
+    /// Lista paginada das definições. <paramref name="search"/> casa com nome,
+    /// chave, descrição e alvo; <paramref name="sensorType"/> e
+    /// <paramref name="isActive"/> são filtros opcionais. O retorno traz o total
+    /// real (antes do recorte) para o cliente paginar sem truncar.
+    /// </summary>
+    Task<SensorDefinitionPageDto> ListAsync(
         AppApprovalScopeType? scopeType,
         Guid? clientId,
         Guid? siteId,
         Guid? agentId,
         bool includeInactive,
+        string? search = null,
+        SensorType? sensorType = null,
+        bool? isActive = null,
+        int? page = null,
+        int? pageSize = null,
         CancellationToken cancellationToken = default);
 
     Task<SensorDefinitionDto?> GetAsync(Guid id, CancellationToken cancellationToken = default);

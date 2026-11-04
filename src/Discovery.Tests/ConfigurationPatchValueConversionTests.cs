@@ -80,6 +80,46 @@ public class ConfigurationPatchValueConversionTests
         Assert.That(result, Is.EqualTo("{\"a\":1}"));
     }
 
+    // Regressão do bug de produção em /settings/server: o switch "Sensores de Monitoramento"
+    // enviava PATCH {"SensorsSettingsJson":true} e o alvo é uma propriedade string. O ramo de
+    // string só tratava Object/Array e caía em GetString(), que lança a exceção crua do
+    // JsonElement ("The requested operation requires an element of type 'String', but the
+    // target element has type 'True'.") e vazava como HTTP 400 sem contexto.
+    [Test]
+    public void JsonTrue_ShouldConvertToString()
+    {
+        var result = Convert(Json("true"), typeof(string));
+        Assert.That(result, Is.EqualTo("true"));
+    }
+
+    [Test]
+    public void JsonFalse_ShouldConvertToString()
+    {
+        var result = Convert(Json("false"), typeof(string));
+        Assert.That(result, Is.EqualTo("false"));
+    }
+
+    [Test]
+    public void JsonNumber_ShouldConvertToString()
+    {
+        var result = Convert(Json("300"), typeof(string));
+        Assert.That(result, Is.EqualTo("300"));
+    }
+
+    /// <summary>
+    /// Payload exato que o console enviava ao alternar o switch de sensores. Antes da correção
+    /// lançava ArgumentException/InvalidOperationException e a API respondia 400.
+    /// </summary>
+    [Test]
+    public void SensorsSettingsJsonPatch_WithRawBoolean_ShouldNotThrow()
+    {
+        var payload = Json("{\"SensorsSettingsJson\":true}");
+        var value = payload.GetProperty("SensorsSettingsJson");
+
+        Assert.DoesNotThrow(() => Convert(value, typeof(string)));
+        Assert.That(Convert(value, typeof(string)), Is.EqualTo("true"));
+    }
+
     [Test]
     public void Null_ShouldBeNullForNullableLong()
     {
