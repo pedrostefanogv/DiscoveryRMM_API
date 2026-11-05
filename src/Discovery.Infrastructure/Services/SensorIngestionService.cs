@@ -20,6 +20,7 @@ public sealed class SensorIngestionService(
     DiscoveryDbContext db,
     ISensorDefinitionService definitionService,
     IAutoTicketOrchestratorService autoTicket,
+    IAutoTicketResolutionService autoTicketResolution,
     INotificationChannelDispatcher notificationChannels,
     INotificationService notifications,
     IAgentMessaging messaging,
@@ -278,13 +279,25 @@ public sealed class SensorIngestionService(
     {
         foreach (var emission in emissions)
         {
-            // 1) Auto-ticket só na abertura/escala (resolução fecha por si via ticket
-            //    quando a regra existir; não deve criar ticket novo).
-            if (settings.AutoTicketEnabled && emission.Transition != "resolved")
+            // 1) Auto-ticket.
+            //    ABERTURA/ESCALA -> avalia e (se a política permitir) cria chamado.
+            //    RESOLUÇÃO      -> NÃO cria chamado novo: FECHA o correlacionado.
+            //    Este segundo ramo corrige o ticket órfão documentado no Zabbix
+            //    ("recovery notifications are not sent if the problem started
+            //    during maintenance"): sem ele, um alerta que nasce na janela de
+            //    manutenção nunca seria fechado.
+            if (settings.AutoTicketEnabled)
             {
                 try
                 {
-                    await autoTicket.EvaluateAsync(emission.Event, cancellationToken);
+                    if (emission.Transition == "resolved")
+                    {
+                        await autoTicketResolution.CloseCorrelatedTicketAsync(emission.Event, cancellationToken);
+                    }
+                    else
+                    {
+                        await autoTicket.EvaluateAsync(emission.Event, cancellationToken);
+                    }
                 }
                 catch (Exception ex)
                 {

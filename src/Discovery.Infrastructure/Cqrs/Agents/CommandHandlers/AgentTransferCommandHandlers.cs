@@ -13,7 +13,9 @@ public sealed class TransferAgentCommandHandler(
     {
         try
         {
-            var result = await transferService.TransferAsync(cmd.AgentId, cmd.TargetSiteId, cmd.UserId, null, ct);
+            // Reason vinha sempre null: o "Motivo (opcional)" da UI nunca chegava ao
+            // serviço nem ao evento AgentTransferred (auditoria perdida).
+            var result = await transferService.TransferAsync(cmd.AgentId, cmd.TargetSiteId, cmd.UserId, cmd.Reason, ct);
             return Result<AgentTransferDto>.Success(new AgentTransferDto(true, null, result.Agent.SiteId));
         }
         catch (InvalidOperationException ex)
@@ -33,7 +35,7 @@ public sealed class BulkTransferAgentsCommandHandler(
 {
     public async Task<Result<AgentTransferDto>> Handle(BulkTransferAgentsCommand cmd, CancellationToken ct)
     {
-        var result = await transferService.BulkTransferAsync(cmd.AgentIds, cmd.TargetSiteId, cmd.UserId, null, ct);
+        var result = await transferService.BulkTransferAsync(cmd.AgentIds, cmd.TargetSiteId, cmd.UserId, cmd.Reason, ct);
         return Result<AgentTransferDto>.Success(new AgentTransferDto(
             result.ErrorCount == 0,
             result.ErrorCount > 0 ? $"{result.SuccessCount} succeeded, {result.ErrorCount} failed" : null,

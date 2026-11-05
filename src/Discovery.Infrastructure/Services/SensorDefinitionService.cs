@@ -203,6 +203,10 @@ public sealed class SensorDefinitionService(
         if (request.StoreSamples is not null) definition.StoreSamples = request.StoreSamples.Value;
         if (request.FailsBeforeAlert is not null) definition.FailsBeforeAlert = request.FailsBeforeAlert.Value;
         if (request.SustainSamples is not null) definition.SustainSamples = request.SustainSamples.Value;
+        // Vínculo do sensor com o auto-ticket.
+        if (request.AutoTicketPolicy is not null) definition.AutoTicketPolicy = request.AutoTicketPolicy.Value;
+        if (request.AutoTicketMinDurationSeconds is not null) definition.AutoTicketMinDurationSeconds = request.AutoTicketMinDurationSeconds.Value;
+        if (request.AutoTicketImpact is not null) definition.AutoTicketImpact = request.AutoTicketImpact.Value;
         if (request.MinSeverityToAlert is not null) definition.MinSeverityToAlert = request.MinSeverityToAlert.Value;
         if (request.SeverityWhenFailing is not null) definition.SeverityWhenFailing = request.SeverityWhenFailing.Value;
         if (request.AlertOnSensorError is not null) definition.AlertOnSensorError = request.AlertOnSensorError.Value;
@@ -661,6 +665,9 @@ public sealed class SensorDefinitionService(
             TimeoutSeconds = definition.TimeoutSeconds,
             StoreSamples = definition.StoreSamples,
             FailsBeforeAlert = definition.FailsBeforeAlert,
+            AutoTicketPolicy = definition.AutoTicketPolicy,
+            AutoTicketMinDurationSeconds = definition.AutoTicketMinDurationSeconds,
+            AutoTicketImpact = definition.AutoTicketImpact,
             SustainSamples = definition.SustainSamples,
             MinSeverityToAlert = definition.MinSeverityToAlert,
             SeverityWhenFailing = definition.SeverityWhenFailing,

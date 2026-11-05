@@ -167,6 +167,37 @@ public partial class DiscoveryDbContext
             entity.Property(execution => execution.PayloadSnapshotJson).HasColumnName("payload_snapshot_json").HasColumnType("jsonb");
         });
 
+        // Livro auditável das sugestões da IA no auto-ticket (M269). Mesmo padrão
+        // de ticket_assignment_decisions, usado pela triagem de atribuição.
+        modelBuilder.Entity<AutoTicketSuggestion>(entity =>
+        {
+            entity.ToTable("auto_ticket_suggestions");
+            entity.HasKey(suggestion => suggestion.Id);
+            entity.HasIndex(suggestion => suggestion.MonitoringEventId)
+                .HasDatabaseName("ix_auto_ticket_suggestions_event_id");
+            entity.HasIndex(suggestion => new { suggestion.Field, suggestion.CreatedAt })
+                .HasDatabaseName("ix_auto_ticket_suggestions_field_created");
+            entity.Property(suggestion => suggestion.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(suggestion => suggestion.RuleExecutionId).HasColumnName("rule_execution_id");
+            entity.Property(suggestion => suggestion.MonitoringEventId).HasColumnName("monitoring_event_id");
+            entity.Property(suggestion => suggestion.TicketId).HasColumnName("ticket_id");
+            entity.Property(suggestion => suggestion.AgentId).HasColumnName("agent_id");
+            entity.Property(suggestion => suggestion.Field).HasColumnName("field").HasConversion<int>();
+            entity.Property(suggestion => suggestion.SuggestedValue).HasColumnName("suggested_value").HasMaxLength(500);
+            entity.Property(suggestion => suggestion.AppliedValue).HasColumnName("applied_value").HasMaxLength(500);
+            entity.Property(suggestion => suggestion.Confidence).HasColumnName("confidence");
+            entity.Property(suggestion => suggestion.Mode).HasColumnName("mode");
+            entity.Property(suggestion => suggestion.StrategySource).HasColumnName("strategy_source").HasMaxLength(50);
+            entity.Property(suggestion => suggestion.Rationale).HasColumnName("rationale").HasMaxLength(1000);
+            entity.Property(suggestion => suggestion.Model).HasColumnName("model").HasMaxLength(200);
+            entity.Property(suggestion => suggestion.TokensUsed).HasColumnName("tokens_used");
+            entity.Property(suggestion => suggestion.Applied).HasColumnName("applied");
+            entity.Property(suggestion => suggestion.NotAppliedReason).HasColumnName("not_applied_reason").HasMaxLength(500);
+            entity.Property(suggestion => suggestion.OverriddenAt).HasColumnName("overridden_at").HasColumnType("timestamptz");
+            entity.Property(suggestion => suggestion.OverriddenByUserId).HasColumnName("overridden_by_user_id");
+            entity.Property(suggestion => suggestion.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        });
+
         modelBuilder.Entity<AgentMonitoringEvent>(entity =>
         {
             entity.ToTable("agent_monitoring_events");

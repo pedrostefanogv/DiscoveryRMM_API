@@ -73,6 +73,14 @@ public class SensorDefinitionDto
     public SensorSeverity SeverityWhenFailing { get; set; }
     public bool AlertOnSensorError { get; set; }
 
+    // ── Vínculo com o auto-ticket ─────────────────────────────────────────
+    /// <summary>Never / OnEscalation (default) / Always.</summary>
+    public SensorAutoTicketPolicy AutoTicketPolicy { get; set; } = SensorAutoTicketPolicy.OnEscalation;
+    /// <summary>Duração mínima própria (segundos). 0 = herda a política.</summary>
+    public int AutoTicketMinDurationSeconds { get; set; }
+    /// <summary>Low / Medium (default) / High / Critical.</summary>
+    public AutoTicketImpact AutoTicketImpact { get; set; } = AutoTicketImpact.Medium;
+
     public int DisplayOrder { get; set; }
     public bool IsPinned { get; set; }
     public bool IsActive { get; set; }
@@ -143,6 +151,13 @@ public class SensorUpsertRequest
     public SensorSeverity? MinSeverityToAlert { get; set; }
     public SensorSeverity? SeverityWhenFailing { get; set; }
     public bool? AlertOnSensorError { get; set; }
+
+    /// <summary>Never / OnEscalation / Always.</summary>
+    public SensorAutoTicketPolicy? AutoTicketPolicy { get; set; }
+    /// <summary>Duração mínima própria (segundos). 0 = herda.</summary>
+    public int? AutoTicketMinDurationSeconds { get; set; }
+    /// <summary>Low / Medium / High / Critical.</summary>
+    public AutoTicketImpact? AutoTicketImpact { get; set; }
 
     public int? DisplayOrder { get; set; }
     public bool? IsPinned { get; set; }

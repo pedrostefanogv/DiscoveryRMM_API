@@ -272,12 +272,34 @@ sessÃ£o pertence ao agent autenticado (404 caso contrÃ¡rio).
 
 ### Auto Ticket Rules
 
-| Endpoint                             | PermissÃ£o        | Scope |
-| ------------------------------------ | ---------------- | ----- |
-| `GET /api/v1/auto-ticket-rules`      | `Tickets.View`   | G     |
-| `GET /api/v1/auto-ticket-rules/{id}` | `Tickets.View`   | G     |
-| `POST /api/v1/auto-ticket-rules`     | `Tickets.Create` | G     |
-| `PUT /api/v1/auto-ticket-rules/{id}` | `Tickets.Edit`   | G     |
+| Endpoint                                          | PermissÃ£o        | Scope |
+| ------------------------------------------------- | ---------------- | ----- |
+| `GET /api/v1/auto-ticket-rules`                   | `Tickets.View`   | G     |
+| `GET /api/v1/auto-ticket-rules/{id}`              | `Tickets.View`   | G     |
+| `POST /api/v1/auto-ticket-rules`                  | `Tickets.Edit`   | G     |
+| `PUT /api/v1/auto-ticket-rules/{id}`              | `Tickets.Edit`   | G     |
+| `DELETE /api/v1/auto-ticket-rules/{id}`           | `Tickets.Edit`   | G     |
+| `PATCH /api/v1/auto-ticket-rules/{id}/enable`     | `Tickets.Edit`   | G     |
+| `PATCH /api/v1/auto-ticket-rules/{id}/disable`    | `Tickets.Edit`   | G     |
+| `POST /api/v1/auto-ticket-rules/simulate`         | `Tickets.View`   | G     |
+| `POST /api/v1/auto-ticket-rules/{id}/dry-run`     | `Tickets.View`   | G     |
+| `GET /api/v1/auto-ticket-rules/{id}/stats`        | `Tickets.View`   | G     |
+| `POST /api/v1/auto-ticket-rules/seed-defaults`    | `Tickets.Edit`   | G     |
+
+> Corrigido: `POST /api/v1/auto-ticket-rules` exige `Tickets.Edit` (o controller
+> usa `ActionType.Edit`), e nÃ£o `Tickets.Create` como constava antes.
+
+### Auto Ticket Policy
+
+PolÃtica hierÃ¡rquica (Server -> Client -> Site) que decide SE o auto-ticket
+opera em cada escopo. NÃ£o Ã© uma regra: Ã© a configuraÃ§Ã£o de ativaÃ§Ã£o.
+
+| Endpoint                                              | PermissÃ£o        | Scope |
+| ----------------------------------------------------- | ---------------- | ----- |
+| `GET /api/v1/auto-ticket-policy`                      | `Tickets.View`   | G     |
+| `PUT /api/v1/auto-ticket-policy`                      | `Tickets.Edit`   | G     |
+| `PUT /api/v1/auto-ticket-policy/client/{clientId}`    | `Tickets.Edit`   | G     |
+| `PUT /api/v1/auto-ticket-policy/site/{siteId}`        | `Tickets.Edit`   | G     |
 
 ### Agent Labels
 

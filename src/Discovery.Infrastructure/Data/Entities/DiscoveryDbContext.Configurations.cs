@@ -64,6 +64,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ObjectStorageUsePathStyle).HasColumnName("object_storage_use_path_style");
             entity.Property(config => config.ObjectStorageSslVerify).HasColumnName("object_storage_ssl_verify");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
+            entity.Property(config => config.AutoTicketPolicyJson).HasColumnName("auto_ticket_policy_json").HasColumnType("jsonb");
             entity.Property(config => config.RemoteConsentMode).HasColumnName("remote_consent_mode").HasConversion<int>();
             entity.Property(config => config.RemoteConsentTimeoutSeconds).HasColumnName("remote_consent_timeout_seconds");
             entity.Property(config => config.RemoteConsentTimeoutAction).HasColumnName("remote_consent_timeout_action").HasConversion<int>();
@@ -105,6 +106,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.AgentHeartbeatIntervalSeconds).HasColumnName("agent_heartbeat_interval_seconds");
             entity.Property(config => config.AgentOnlineGraceSeconds).HasColumnName("agent_online_grace_seconds");
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
+            entity.Property(config => config.AutoTicketPolicyJson).HasColumnName("auto_ticket_policy_json").HasColumnType("jsonb");
             entity.Property(config => config.RemoteConsentMode).HasColumnName("remote_consent_mode").HasConversion<int?>();
             entity.Property(config => config.RemoteConsentTimeoutSeconds).HasColumnName("remote_consent_timeout_seconds");
             entity.Property(config => config.RemoteConsentTimeoutAction).HasColumnName("remote_consent_timeout_action").HasConversion<int?>();
@@ -149,6 +151,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ContactPerson).HasColumnName("contact_person").HasMaxLength(256);
             entity.Property(config => config.ContactEmail).HasColumnName("contact_email").HasMaxLength(256);
             entity.Property(config => config.LockedFieldsJson).HasColumnName("locked_fields_json");
+            entity.Property(config => config.AutoTicketPolicyJson).HasColumnName("auto_ticket_policy_json").HasColumnType("jsonb");
             entity.Property(config => config.RemoteConsentMode).HasColumnName("remote_consent_mode").HasConversion<int?>();
             entity.Property(config => config.RemoteConsentTimeoutSeconds).HasColumnName("remote_consent_timeout_seconds");
             entity.Property(config => config.RemoteConsentTimeoutAction).HasColumnName("remote_consent_timeout_action").HasConversion<int?>();

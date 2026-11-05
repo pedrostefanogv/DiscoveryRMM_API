@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Data;
@@ -55,6 +56,10 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.MinSeverityToAlert).HasColumnName("min_severity_to_alert").HasConversion<int>();
             entity.Property(s => s.SeverityWhenFailing).HasColumnName("severity_when_failing").HasConversion<int>();
             entity.Property(s => s.AlertOnSensorError).HasColumnName("alert_on_sensor_error").HasDefaultValue(true);
+            // Vínculo do sensor com o auto-ticket (M268).
+            entity.Property(s => s.AutoTicketPolicy).HasColumnName("auto_ticket_policy").HasConversion<int>().HasDefaultValue(SensorAutoTicketPolicy.OnEscalation);
+            entity.Property(s => s.AutoTicketMinDurationSeconds).HasColumnName("auto_ticket_min_duration_seconds").HasDefaultValue(0);
+            entity.Property(s => s.AutoTicketImpact).HasColumnName("auto_ticket_impact").HasConversion<int>().HasDefaultValue(AutoTicketImpact.Medium);
             entity.Property(s => s.DisplayOrder).HasColumnName("display_order").HasDefaultValue(50);
             entity.Property(s => s.IsPinned).HasColumnName("is_pinned").HasDefaultValue(false);
             entity.Property(s => s.IsActive).HasColumnName("is_active").HasDefaultValue(true);

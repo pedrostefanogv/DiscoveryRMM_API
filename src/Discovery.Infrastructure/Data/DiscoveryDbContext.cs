@@ -78,6 +78,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AutoTicketRuleExecution> AutoTicketRuleExecutions => Set<AutoTicketRuleExecution>();
     public DbSet<AlertCorrelationLock> AlertCorrelationLocks => Set<AlertCorrelationLock>();
     public DbSet<AgentMonitoringEvent> AgentMonitoringEvents => Set<AgentMonitoringEvent>();
+    public DbSet<AutoTicketSuggestion> AutoTicketSuggestions => Set<AutoTicketSuggestion>();
 
     // Sensores (monitoramento: estado + séries + eventos)
     public DbSet<SensorDefinition> SensorDefinitions => Set<SensorDefinition>();

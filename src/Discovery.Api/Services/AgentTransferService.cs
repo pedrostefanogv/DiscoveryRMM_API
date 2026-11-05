@@ -52,6 +52,11 @@ public sealed class AgentTransferService : IAgentTransferService
         string? reason,
         CancellationToken cancellationToken = default)
     {
+        // Usuário vazio nunca tem atribuição de role: a checagem de permissão negaria
+        // qualquer transferência por um motivo enganoso. Falha explícita em vez disso.
+        if (userId == Guid.Empty)
+            throw new UnauthorizedAccessException("User not authenticated.");
+
         // 1. Buscar agent e site destino
         var agent = await _agentRepo.GetByIdAsync(agentId)
             ?? throw new InvalidOperationException($"Agent {agentId} not found.");
@@ -59,8 +64,11 @@ public sealed class AgentTransferService : IAgentTransferService
         if (agent.DeletedAt is not null)
             throw new InvalidOperationException($"Agent {agentId} is deleted and cannot be transferred.");
 
+        // Já está no destino: retorno idempotente. Antes lançava InvalidOperationException,
+        // então uma transferência que persistiu mas falhou ao notificar aparecia como erro
+        // no front e a retentativa reclamava de "already belongs to the target site".
         if (agent.SiteId == targetSiteId)
-            throw new InvalidOperationException($"Agent {agentId} already belongs to the target site {targetSiteId}.");
+            return await BuildIdempotentResultAsync(agent, targetSiteId, reason, cancellationToken);
 
         var previousSite = await _siteRepo.GetByIdAsync(agent.SiteId)
             ?? throw new InvalidOperationException($"Source site {agent.SiteId} not found.");
@@ -85,15 +93,37 @@ public sealed class AgentTransferService : IAgentTransferService
         // 3. Persistir a transferência
         await _agentRepo.TransferSiteAsync(agentId, targetSiteId);
 
-        // 5. Invalidar caches Redis
-        await InvalidateCachesAsync(agentId, agent.SiteId, targetSiteId);
+        // 4. Invalidar caches Redis. Falha aqui não pode desfazer a transferência já
+        //    persistida; fica registrada para investigação (dados ficam corretos no banco).
+        try
+        {
+            await InvalidateCachesAsync(agentId, agent.SiteId, targetSiteId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Falha ao invalidar caches após transferência do agent {AgentId} ({PreviousSiteId} -> {TargetSiteId}).",
+                agentId, agent.SiteId, targetSiteId);
+        }
 
-        // 6. Notificar o agent — dual-publish + comando de reconnect (Fase 1/2 do plano
+        // 5. Notificar o agent — dual-publish + comando de reconnect (Fase 1/2 do plano
         //    AGENT_TRANSFER_SYNC_FIX_PLAN).
         //    O agent ainda está subscrito (JWT/ACL NATS) nos subjects do site ANTIGO;
         //    publicar apenas no novo faria a notificação se perder silenciosamente.
-        var notified = await NotifyAgentAfterTransferAsync(
-            agentId, previousSite, targetSite, reason, cancellationToken);
+        //    Isolado: se a notificação falhar, a transferência já está persistida e o
+        //    agent se recupera pelo polling de configuração.
+        var notified = false;
+        try
+        {
+            notified = await NotifyAgentAfterTransferAsync(
+                agentId, previousSite, targetSite, reason, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Falha ao notificar o agent {AgentId} após transferência; recuperação via polling de config.",
+                agentId);
+        }
 
         // 7. Publicar evento de dashboard
         try
@@ -189,6 +219,17 @@ public sealed class AgentTransferService : IAgentTransferService
     {
         var messages = new List<string>();
 
+        // Sem usuário não há permissão a avaliar: devolve erro claro em vez do enganoso
+        // "User does not have Edit permission on the source site.".
+        if (userId == Guid.Empty)
+        {
+            return new AgentTransferValidation
+            {
+                IsValid = false,
+                Messages = ["User not authenticated."],
+            };
+        }
+
         var agent = await _agentRepo.GetByIdAsync(agentId);
         if (agent is null)
         {
@@ -278,6 +319,35 @@ public sealed class AgentTransferService : IAgentTransferService
     }
 
     // ── Private Helpers ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Resultado devolvido quando o agent já está no site de destino. Sem evento novo nem
+    /// notificação: a transferência já aconteceu (ex.: persistiu e falhou ao notificar),
+    /// então a retentativa deve ser um no-op bem-sucedido para o operador/UI.
+    /// </summary>
+    private async Task<AgentTransferResult> BuildIdempotentResultAsync(
+        Agent agent,
+        Guid targetSiteId,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        var targetSite = await _siteRepo.GetByIdAsync(targetSiteId);
+        var targetClientId = targetSite?.ClientId ?? Guid.Empty;
+
+        _logger.LogInformation(
+            "Transferência do agent {AgentId} para {TargetSiteId} ignorada: já está no destino.",
+            agent.Id, targetSiteId);
+
+        return new AgentTransferResult
+        {
+            Agent = agent,
+            PreviousSiteId = agent.SiteId,
+            PreviousClientId = targetClientId,
+            TargetClientId = targetClientId,
+            Reason = reason,
+            AgentNotified = false,
+        };
+    }
 
     /// <summary>
     /// Valida que o usuário tem permissão de edição no site de origem E no site de destino.

@@ -117,6 +117,14 @@ public class ClientConfiguration
     /// </summary>
     public string LockedFieldsJson { get; set; } = "[]";
 
+    /// <summary>
+    /// Política de auto-ticket deste nível (JSON, ver AutoTicketPolicy).
+    /// Null/vazio = HERDA integralmente do nível superior (Server -> Client -> Site).
+    /// Preenchido = sobrescreve apenas os campos presentes no blob.
+    /// </summary>
+    public string? AutoTicketPolicyJson { get; set; } = string.Empty;
+
+
     // ============ Auditoria ============
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -230,6 +230,14 @@ public class ServerConfiguration
     /// </summary>
     public string LockedFieldsJson { get; set; } = "[]";
 
+    /// <summary>
+    /// Política de auto-ticket deste nível (JSON, ver AutoTicketPolicy).
+    /// Null/vazio = HERDA integralmente do nível superior (Server -> Client -> Site).
+    /// Preenchido = sobrescreve apenas os campos presentes no blob.
+    /// </summary>
+    public string? AutoTicketPolicyJson { get; set; } = string.Empty;
+
+
     // ============ Gerenciador de Patches (Windows Update) ============
 
     /// <summary>

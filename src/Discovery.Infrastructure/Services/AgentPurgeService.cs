@@ -95,6 +95,9 @@ public class AgentPurgeService : IAgentPurgeService
         "tickets",
         "logs",
         "auto_ticket_rule_executions",
+        // Livro de sugestões da IA: é auditoria histórica ("a IA acertou?").
+        // Sobrevive à exclusão do agente, apenas desvinculada.
+        "auto_ticket_suggestions",
         "ticket_remote_sessions",
         "app_approval_audits",
         // Histórico do chat de suporte: sobrevive à exclusão do agente; a

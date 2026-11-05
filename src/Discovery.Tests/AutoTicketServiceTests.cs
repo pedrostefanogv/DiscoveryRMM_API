@@ -59,6 +59,25 @@ public class AutoTicketServiceTests
             new DedupFingerprintService(normalizationService),
             db,
             Options.Create(new AutoTicketOptions { Enabled = true, ShadowMode = false, ReopenWindowMinutes = 30 }),
+            // A janela de reabertura agora vem da POLÍTICA resolvida (permite
+            // override por cliente/site); o appsettings virou apenas o default.
+            new FakeAutoTicketPolicyResolver(
+                new ResolvedAutoTicketPolicy
+                {
+                    Enabled = true,
+                    Mode = AutoTicketScopeMode.Active,
+                    ReopenWindowMinutes = 30,
+                    SuppressWhenHostNotReachable = false,
+                    RespectAgentMaintenance = false,
+                    RespectMaintenanceWindow = false,
+                    MinConsecutiveFailures = 0,
+                    MinDurationSeconds = 0,
+                    FlapWindowMinutes = 0,
+                    FlapTransitionsThreshold = 0
+                }),
+            new FakeAutoTicketSignalEvaluator(),
+            new FakeAutoTicketEnrichmentService(),
+            new FakeAutoTicketSuggestionApplier(),
             NullLogger<AutoTicketOrchestratorService>.Instance);
 
         var result = await orchestrator.EvaluateAsync(monitoringEvent);
@@ -106,6 +125,10 @@ public class AutoTicketServiceTests
             new DedupFingerprintService(normalizationService),
             db,
             Options.Create(new AutoTicketOptions { Enabled = true, ShadowMode = false }),
+            new FakeAutoTicketPolicyResolver(),
+            new FakeAutoTicketSignalEvaluator(),
+            new FakeAutoTicketEnrichmentService(),
+            new FakeAutoTicketSuggestionApplier(),
             NullLogger<AutoTicketOrchestratorService>.Instance);
 
         var result = await orchestrator.EvaluateAsync(monitoringEvent);
@@ -161,6 +184,10 @@ public class AutoTicketServiceTests
             new DedupFingerprintService(normalizationService),
             db,
             Options.Create(new AutoTicketOptions { Enabled = true, ShadowMode = false }),
+            new FakeAutoTicketPolicyResolver(),
+            new FakeAutoTicketSignalEvaluator(),
+            new FakeAutoTicketEnrichmentService(),
+            new FakeAutoTicketSuggestionApplier(),
             NullLogger<AutoTicketOrchestratorService>.Instance);
 
         var result = await orchestrator.EvaluateAsync(monitoringEvent);
@@ -210,6 +237,24 @@ public class AutoTicketServiceTests
                 ShadowMode = false,
                 MaxCreatedTicketsPerHourPerAlertCode = 3
             }),
+            // O teto agora vem da POLÍTICA resolvida; o appsettings é só o default.
+            new FakeAutoTicketPolicyResolver(
+                new ResolvedAutoTicketPolicy
+                {
+                    Enabled = true,
+                    Mode = AutoTicketScopeMode.Active,
+                    MaxCreatedTicketsPerHourPerAlertCode = 3,
+                    SuppressWhenHostNotReachable = false,
+                    RespectAgentMaintenance = false,
+                    RespectMaintenanceWindow = false,
+                    MinConsecutiveFailures = 0,
+                    MinDurationSeconds = 0,
+                    FlapWindowMinutes = 0,
+                    FlapTransitionsThreshold = 0
+                }),
+            new FakeAutoTicketSignalEvaluator(),
+            new FakeAutoTicketEnrichmentService(),
+            new FakeAutoTicketSuggestionApplier(),
             NullLogger<AutoTicketOrchestratorService>.Instance);
 
         var result = await orchestrator.EvaluateAsync(monitoringEvent);
@@ -340,6 +385,304 @@ public class AutoTicketServiceTests
             Assert.That(result.ExistingTicketId, Is.EqualTo(existingTicketId));
             Assert.That(result.DedupKey, Is.EqualTo("client:agent:disk.full:hash:1"));
         });
+    }
+
+    // ── GATE DE CONFIGURAÇÃO ──────────────────────────────────────────────
+    // Antes, os testes só exercitavam Enabled=true + ShadowMode=false; o
+    // estado em que a PRODUÇÃO roda (desligado / shadow) não tinha cobertura.
+
+    [Test]
+    public async Task EvaluateAsync_ShouldRecordDisabledReason_WhenDisabledAtServerLevel()
+    {
+        await using var db = CreateOrchestratorDb();
+        var (orchestrator, executions) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(FakeAutoTicketPolicyResolver.DisabledAt(AutoTicketPolicyLevel.Server)));
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.MatchedNoAction));
+            Assert.That(result.Reason, Does.Contain("disabled"));
+            Assert.That(result.Reason, Does.Contain(AutoTicketPolicyLevel.Server));
+            Assert.That(result.CreatedTicketId, Is.Null);
+            Assert.That(executions.CreatedExecutions, Has.Count.EqualTo(1), "A decisão precisa ficar auditada.");
+        });
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldNameSiteLevel_WhenDisabledAtSiteLevel()
+    {
+        await using var db = CreateOrchestratorDb();
+        var (orchestrator, _) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(FakeAutoTicketPolicyResolver.DisabledAt(AutoTicketPolicyLevel.Site)));
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.MatchedNoAction));
+            Assert.That(result.Reason, Does.Contain(AutoTicketPolicyLevel.Site),
+                "O motivo deve citar QUAL nível desligou — é o que torna o override auditável.");
+            Assert.That(result.CreatedTicketId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldNotCreateTicket_WhenShadowModeIsActive()
+    {
+        await using var db = CreateOrchestratorDb();
+        var (orchestrator, _) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(FakeAutoTicketPolicyResolver.ShadowPolicy()));
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.MatchedNoAction));
+            Assert.That(result.Reason, Does.Contain("shadow"));
+            Assert.That(result.CreatedTicketId, Is.Null, "Shadow NUNCA cria chamado.");
+        });
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldCreateTicket_WhenCanaryScopeIncludesClient()
+    {
+        await using var db = CreateOrchestratorDb();
+        var evt = BuildMonitoringEvent();
+        var policy = new ResolvedAutoTicketPolicy
+        {
+            Enabled = true,
+            Mode = AutoTicketScopeMode.Canary,
+            CanaryClientIds = [evt.ClientId.ToString()],
+            SuppressWhenHostNotReachable = false,
+            RespectAgentMaintenance = false,
+            RespectMaintenanceWindow = false,
+            MinConsecutiveFailures = 0,
+            MinDurationSeconds = 0,
+            FlapWindowMinutes = 0,
+            FlapTransitionsThreshold = 0
+        };
+        var (orchestrator, _) = BuildGateOrchestrator(db, new FakeAutoTicketPolicyResolver(policy));
+
+        var result = await orchestrator.EvaluateAsync(evt);
+
+        Assert.That(result.CreatedTicketId, Is.Not.Null,
+            "Cliente dentro do canário deve criar chamado — prova que o canário não é bloqueio cego.");
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldNotCreateTicket_WhenOutsideCanaryScope()
+    {
+        await using var db = CreateOrchestratorDb();
+        var policy = new ResolvedAutoTicketPolicy
+        {
+            Enabled = true,
+            Mode = AutoTicketScopeMode.Canary,
+            CanaryClientIds = [Guid.NewGuid().ToString()],
+            SuppressWhenHostNotReachable = false,
+            RespectAgentMaintenance = false,
+            RespectMaintenanceWindow = false,
+            MinConsecutiveFailures = 0,
+            MinDurationSeconds = 0,
+            FlapWindowMinutes = 0,
+            FlapTransitionsThreshold = 0
+        };
+        var (orchestrator, _) = BuildGateOrchestrator(db, new FakeAutoTicketPolicyResolver(policy));
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.MatchedNoAction));
+            Assert.That(result.Reason, Does.Contain("canary"));
+            Assert.That(result.CreatedTicketId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldNeverCreateTicket_WhenSignalIsSuppressed()
+    {
+        await using var db = CreateOrchestratorDb();
+        var (orchestrator, _) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(),
+            FakeAutoTicketSignalEvaluator.Suppressing(AutoTicketSuppressionSource.Maintenance));
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.Suppressed));
+            Assert.That(result.Reason, Does.Contain("Maintenance"));
+            Assert.That(result.CreatedTicketId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldHoldWithoutTicket_WhenSignalIsNotPersistent()
+    {
+        await using var db = CreateOrchestratorDb();
+        var (orchestrator, _) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(), FakeAutoTicketSignalEvaluator.Holding());
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.MatchedNoAction));
+            Assert.That(result.Reason, Does.Contain("persistent"));
+            Assert.That(result.CreatedTicketId, Is.Null);
+        });
+    }
+
+    // ── Teto por hora vindo da POLÍTICA (não do appsettings) ─────────────
+
+    [Test]
+    public async Task EvaluateAsync_ShouldRateLimit_UsingPolicyLimit()
+    {
+        await using var db = CreateOrchestratorDb();
+        var policy = ScopedPolicy(maxPerHour: 2);
+        var (orchestrator, _) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(policy), rateLimitedCount: 5);
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.RateLimited));
+            Assert.That(result.Reason, Does.Contain("2 tickets/hour"),
+                "O motivo deve citar o limite da POLITICA, nao o do appsettings.");
+            Assert.That(result.CreatedTicketId, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task EvaluateAsync_ShouldNotRateLimit_WhenPolicyLimitIsZero()
+    {
+        await using var db = CreateOrchestratorDb();
+        var policy = ScopedPolicy(maxPerHour: 0);
+        var (orchestrator, _) = BuildGateOrchestrator(
+            db, new FakeAutoTicketPolicyResolver(policy), rateLimitedCount: 999);
+
+        var result = await orchestrator.EvaluateAsync(BuildMonitoringEvent());
+
+        Assert.That(result.Decision, Is.EqualTo(AutoTicketDecision.Created),
+            "Sem teto na politica, cria mesmo com muitas criacoes recentes.");
+    }
+
+    // ── Chave do sensor e transição ───────────────────────────────────────
+
+    [TestCase("sensor:disk_space", "disk_space")]
+    [TestCase("SENSOR:Disk_Space", "Disk_Space")]
+    [TestCase("disk.full", null)]
+    [TestCase("", null)]
+    [TestCase(null, null)]
+    public void ExtractSensorKey_ShouldParseAlertCode(string? alertCode, string? expected)
+    {
+        Assert.That(AutoTicketOrchestratorService.ExtractSensorKey(alertCode), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ReadTransition_ShouldReadFromPayload_UsingTheRealIngestionFormat()
+    {
+        // Formato exato de SensorIngestionService.BuildMonitoringEvent.
+        var payload = "{\"sensorId\":\"b3f1\",\"transition\":\"resolved\",\"status\":\"Passing\"}";
+        Assert.That(AutoTicketSignalEvaluator.ReadTransition(payload), Is.EqualTo("resolved"));
+    }
+
+    [Test]
+    public void ReadTransition_ShouldReturnNull_WhenNoTransitionOrMalformed()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AutoTicketSignalEvaluator.ReadTransition("{\"disk\":\"C\"}"), Is.Null);
+            Assert.That(AutoTicketSignalEvaluator.ReadTransition("{ nao e json"), Is.Null);
+            Assert.That(AutoTicketSignalEvaluator.ReadTransition(null), Is.Null);
+        });
+    }
+
+    /// <summary>Teste PONTA A PONTA pela avaliador: resolução precisa ser suprimida.</summary>
+    [Test]
+    public async Task EvaluateSignal_ShouldSuppress_WhenPayloadSaysResolved()
+    {
+        await using var db = CreateOrchestratorDb();
+        var evaluator = new AutoTicketSignalEvaluator(db, NullLogger<AutoTicketSignalEvaluator>.Instance);
+
+        var evt = BuildMonitoringEvent();
+        evt.PayloadJson = "{\"sensorId\":\"x\",\"transition\":\"resolved\",\"status\":\"Passing\"}";
+
+        var verdict = await evaluator.EvaluateAsync(evt, ScopedPolicy(maxPerHour: 0), "disk_space");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(verdict.Decision, Is.EqualTo(AutoTicketSignalDecision.Suppress));
+            Assert.That(verdict.SuppressionSource, Is.EqualTo(AutoTicketSuppressionSource.Resolved));
+        });
+    }
+
+    [Test]
+    public async Task EvaluateSignal_ShouldNotSuppressAsResolved_WhenTransitionIsOpened()
+    {
+        await using var db = CreateOrchestratorDb();
+        var evaluator = new AutoTicketSignalEvaluator(db, NullLogger<AutoTicketSignalEvaluator>.Instance);
+
+        var evt = BuildMonitoringEvent();
+        evt.PayloadJson = "{\"sensorId\":\"x\",\"transition\":\"opened\",\"status\":\"Failing\"}";
+
+        var verdict = await evaluator.EvaluateAsync(evt, ScopedPolicy(maxPerHour: 0), "disk_space");
+
+        Assert.That(verdict.SuppressionSource, Is.Not.EqualTo(AutoTicketSuppressionSource.Resolved));
+    }
+
+    // ── Helpers do gate ───────────────────────────────────────────────────
+
+    private static ResolvedAutoTicketPolicy ScopedPolicy(int maxPerHour) => new()
+    {
+        Enabled = true,
+        Mode = AutoTicketScopeMode.Active,
+        MaxCreatedTicketsPerHourPerAlertCode = maxPerHour,
+        SuppressWhenHostNotReachable = false,
+        RespectAgentMaintenance = false,
+        RespectMaintenanceWindow = false,
+        MinConsecutiveFailures = 0,
+        MinDurationSeconds = 0,
+        FlapWindowMinutes = 0,
+        FlapTransitionsThreshold = 0
+    };
+
+    private static (AutoTicketOrchestratorService Orchestrator, FakeAutoTicketRuleExecutionRepository Executions)
+        BuildGateOrchestrator(
+            DiscoveryDbContext db,
+            IAutoTicketPolicyResolver policyResolver,
+            IAutoTicketSignalEvaluator? signalEvaluator = null,
+            int rateLimitedCount = 0)
+    {
+        var decision = BuildCreateDecision();
+        var normalizationService = new MonitoringEventNormalizationService();
+        var executionRepository = new FakeAutoTicketRuleExecutionRepository
+        {
+            CreatedCountForClientAlert = rateLimitedCount
+        };
+
+        var orchestrator = new AutoTicketOrchestratorService(
+            new FakeAutoTicketRuleEngineService(decision),
+            new FakeAutoTicketDedupService(),
+            executionRepository,
+            new FakeAlertToTicketService(),
+            new FakeTicketRepository(),
+            new FakeWorkflowRepository(),
+            new FakeActivityLogService(),
+            normalizationService,
+            new DedupFingerprintService(normalizationService),
+            db,
+            Options.Create(new AutoTicketOptions { Enabled = true, ShadowMode = false }),
+            policyResolver,
+            signalEvaluator ?? new FakeAutoTicketSignalEvaluator(),
+            new FakeAutoTicketEnrichmentService(),
+            new FakeAutoTicketSuggestionApplier(),
+            NullLogger<AutoTicketOrchestratorService>.Instance);
+
+        return (orchestrator, executionRepository);
     }
 
     private static DiscoveryDbContext CreateOrchestratorDb()
@@ -866,7 +1209,14 @@ public class AutoTicketServiceTests
             {
                 typeof(Ticket),
                 typeof(AgentMonitoringEvent),
-                typeof(AutoTicketRuleExecution)
+                typeof(AutoTicketRuleExecution),
+                // O avaliador de sinal consulta o agente (manutenção e status)
+                // e a definição do sensor (política por sensor).
+                typeof(Agent),
+                typeof(SensorDefinition),
+                typeof(AgentSensorState),
+                typeof(ClientConfiguration),
+                typeof(SiteConfiguration)
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -892,6 +1242,12 @@ public class AutoTicketServiceTests
             {
                 entity.HasKey(item => item.Id);
             });
+
+            modelBuilder.Entity<Agent>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<SensorDefinition>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<AgentSensorState>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<ClientConfiguration>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<SiteConfiguration>(entity => entity.HasKey(item => item.Id));
         }
     }
 }

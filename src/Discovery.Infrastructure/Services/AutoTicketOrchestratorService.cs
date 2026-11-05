@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text;
+using System.Text.Json;
 using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -22,6 +23,11 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
     private static readonly Counter<long> FailedCounter = Meter.CreateCounter<long>("auto_ticket_failed_total");
     private static readonly Counter<long> RateLimitedCounter = Meter.CreateCounter<long>("auto_ticket_rate_limited_total");
     private static readonly Histogram<double> EvalDurationMs = Meter.CreateHistogram<double>("auto_ticket_eval_duration_ms");
+    private static readonly Counter<long> SignalSuppressedCounter = Meter.CreateCounter<long>("auto_ticket_signal_suppressed_total");
+    private static readonly Counter<long> SignalHeldCounter = Meter.CreateCounter<long>("auto_ticket_held_total");
+    private static readonly Counter<long> DisabledByLevelCounter = Meter.CreateCounter<long>("auto_ticket_disabled_by_level_total");
+    private static readonly Counter<long> AiSuggestionAppliedCounter = Meter.CreateCounter<long>("auto_ticket_ai_suggestion_applied_total");
+    private static readonly Counter<long> AiSuggestionRejectedCounter = Meter.CreateCounter<long>("auto_ticket_ai_suggestion_rejected_total");
 
     private readonly IAutoTicketRuleEngineService _ruleEngineService;
     private readonly IAutoTicketDedupService _dedupService;
@@ -34,6 +40,10 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
     private readonly IDedupFingerprintService _dedupFingerprintService;
     private readonly DiscoveryDbContext _db;
     private readonly AutoTicketOptions _options;
+    private readonly IAutoTicketPolicyResolver _policyResolver;
+    private readonly IAutoTicketSignalEvaluator _signalEvaluator;
+    private readonly IAutoTicketEnrichmentService _enrichmentService;
+    private readonly IAutoTicketSuggestionApplier _suggestionApplier;
     private readonly ILogger<AutoTicketOrchestratorService> _logger;
 
     public AutoTicketOrchestratorService(
@@ -48,6 +58,10 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         IDedupFingerprintService dedupFingerprintService,
         DiscoveryDbContext db,
         IOptions<AutoTicketOptions> options,
+        IAutoTicketPolicyResolver policyResolver,
+        IAutoTicketSignalEvaluator signalEvaluator,
+        IAutoTicketEnrichmentService enrichmentService,
+        IAutoTicketSuggestionApplier suggestionApplier,
         ILogger<AutoTicketOrchestratorService> logger)
     {
         _ruleEngineService = ruleEngineService;
@@ -61,6 +75,10 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         _dedupFingerprintService = dedupFingerprintService;
         _db = db;
         _options = options.Value;
+        _policyResolver = policyResolver;
+        _signalEvaluator = signalEvaluator;
+        _enrichmentService = enrichmentService;
+        _suggestionApplier = suggestionApplier;
         _logger = logger;
     }
 
@@ -80,13 +98,29 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             var (handled, earlyResult) = await HandleNonCreateDecisionsAsync(monitoringEvent, decision, cancellationToken);
             if (handled) return earlyResult!;
 
-            // Step 2: Check if enabled and in scope
-            var (disabled, disabledResult) = await HandleConfigAndScopeCheckAsync(monitoringEvent, decision);
+            // Step 2: Resolve a política hierárquica (Server -> Client -> Site).
+            // A partir daqui a decisão vem da política resolvida, e não mais do
+            // IOptions lido direto — o appsettings passa a ser apenas o default
+            // de bootstrap do nível global.
+            var policy = await _policyResolver.ResolveAsync(
+                monitoringEvent.ClientId, monitoringEvent.SiteId, cancellationToken);
+
+            var (disabled, disabledResult) = await HandleConfigAndScopeCheckAsync(monitoringEvent, decision, policy);
             if (disabled) return disabledResult!;
 
-            // Step 3: Dedup + Reopen + Rate limit + Create
+            // Step 3: Avaliação de SINAL (determinística). Decide se o evento
+            // merece um chamado: vínculo de sensor, resolução, manutenção, host
+            // não alcançável, flapping e persistência (magnitude × duração).
+            var sensorKey = ExtractSensorKey(monitoringEvent.AlertCode);
+            var verdict = await _signalEvaluator.EvaluateAsync(monitoringEvent, policy, sensorKey, cancellationToken);
+
+            var (signalHandled, signalResult) = await HandleSignalVerdictAsync(monitoringEvent, decision, verdict);
+            if (signalHandled) return signalResult!;
+
+            // Step 4: Dedup + Reopen + Rate limit + Enriquecimento + Create
             var dedupKey = _dedupFingerprintService.BuildDedupKey(monitoringEvent, decision.Rule!);
-            execution = await ExecuteCreatePipelineAsync(monitoringEvent, decision, labels, dedupKey, cancellationToken);
+            execution = await ExecuteCreatePipelineAsync(
+                monitoringEvent, decision, labels, dedupKey, policy, verdict, cancellationToken);
             return execution;
         }
         catch (Exception ex)
@@ -129,22 +163,80 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         return (false, null);
     }
 
-    private async Task<(bool Disabled, AutoTicketRuleExecution? Result)> HandleConfigAndScopeCheckAsync(
+    /// <summary>
+    /// Traduz o veredito do sinal para as decisões JÁ existentes de
+    /// AutoTicketDecision (nenhum valor novo de enum) e persiste a evidência.
+    /// </summary>
+    private async Task<(bool Handled, AutoTicketRuleExecution? Result)> HandleSignalVerdictAsync(
         AgentMonitoringEvent monitoringEvent,
-        AutoTicketRuleDecision decision)
+        AutoTicketRuleDecision decision,
+        AutoTicketSignalVerdict verdict)
     {
-        if (!_options.Enabled)
+        if (verdict.Decision == AutoTicketSignalDecision.Suppress)
         {
-            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
-                "AutoTicket is disabled by configuration.", null, null, false);
+            SignalSuppressedCounter.Add(1,
+                new KeyValuePair<string, object?>("suppression_source", verdict.SuppressionSource.ToString()));
+
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Suppressed,
+                verdict.Reason, null, null, false, verdict);
             return (true, ex);
         }
 
-        if (!CanCreateTicketsFor(monitoringEvent.ClientId, monitoringEvent.SiteId))
+        if (verdict.Decision == AutoTicketSignalDecision.Hold)
+        {
+            SignalHeldCounter.Add(1);
+
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+                verdict.Reason, null, null, false, verdict);
+            return (true, ex);
+        }
+
+        return (false, null);
+    }
+
+    /// <summary>
+    /// Extrai a chave do sensor de um AlertCode "sensor:&lt;key&gt;".
+    /// Retorna null para eventos que não vieram de sensor.
+    /// </summary>
+    internal static string? ExtractSensorKey(string? alertCode)
+    {
+        const string prefix = "sensor:";
+        if (string.IsNullOrWhiteSpace(alertCode)) return null;
+        if (!alertCode.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return null;
+
+        var key = alertCode[prefix.Length..].Trim();
+        return string.IsNullOrEmpty(key) ? null : key;
+    }
+
+    private async Task<(bool Disabled, AutoTicketRuleExecution? Result)> HandleConfigAndScopeCheckAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleDecision decision,
+        ResolvedAutoTicketPolicy policy)
+    {
+        if (!policy.Enabled)
+        {
+            DisabledByLevelCounter.Add(1, new KeyValuePair<string, object?>("level", policy.DisabledByLevel ?? "Server"));
+
+            var reason = policy.DisabledByLevel is null
+                ? "AutoTicket is disabled by configuration."
+                : $"AutoTicket is disabled at {policy.DisabledByLevel} level.";
+
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+                reason, null, null, false);
+            return (true, ex);
+        }
+
+        if (policy.Mode == AutoTicketScopeMode.Shadow)
         {
             var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
-                _options.ShadowMode ? "AutoTicket shadow mode is active." : "Monitoring event is outside of the configured canary scope.",
-                null, null, false);
+                "AutoTicket shadow mode is active.", null, null, false);
+            return (true, ex);
+        }
+
+        if (!policy.IsInCanaryScope(monitoringEvent.ClientId, monitoringEvent.SiteId))
+        {
+            var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.MatchedNoAction,
+                "Monitoring event is outside of the configured canary scope.", null, null, false);
             return (true, ex);
         }
 
@@ -156,13 +248,21 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         AutoTicketRuleDecision decision,
         IReadOnlyCollection<string> labels,
         string dedupKey,
+        ResolvedAutoTicketPolicy policy,
+        AutoTicketSignalVerdict verdict,
         CancellationToken ct)
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
-        // Dedup via correlation lock
+        // Dedup via correlation lock. A janela vem da política quando ela define
+        // explicitamente (herdada do global, sobrescrita por cliente/site);
+        // caso contrário, vale a janela da própria regra.
+        var dedupWindowMinutes = policy.DedupWindowMinutes > 0
+            ? policy.DedupWindowMinutes
+            : decision.Rule!.DedupWindowMinutes;
+
         var dedupResult = await _dedupService.TryAcquireOrGetAsync(
-            dedupKey, TimeSpan.FromMinutes(Math.Max(1, decision.Rule!.DedupWindowMinutes)), ct);
+            dedupKey, TimeSpan.FromMinutes(Math.Max(1, dedupWindowMinutes)), ct);
 
         if (!dedupResult.Acquired)
         {
@@ -183,7 +283,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         }
 
         // Check reopenable closed ticket
-        var (reopened, reopenResult) = await TryReopenClosedTicketAsync(monitoringEvent, decision, ticketRequest, dedupKey, ct);
+        var (reopened, reopenResult) = await TryReopenClosedTicketAsync(
+            monitoringEvent, decision, ticketRequest, dedupKey, policy, ct);
         if (reopened)
         {
             await transaction.CommitAsync(ct);
@@ -191,11 +292,67 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         }
 
         // Rate limit check
-        var (rateLimited, rateLimitResult) = await CheckRateLimitAsync(monitoringEvent, decision, dedupKey, ct);
+        var (rateLimited, rateLimitResult) = await CheckRateLimitAsync(monitoringEvent, decision, dedupKey, policy, ct);
         if (rateLimited)
         {
             await transaction.CommitAsync(ct);
             return rateLimitResult!;
+        }
+
+        // Enriquecimento por IA (Fase 5). A IA NÃO decide abrir — isso já foi
+        // decidido pelo avaliador de sinal. Aqui ela apenas redige o conteúdo e
+        // SUGERE prioridade/departamento/categoria. Qualquer falha degrada para
+        // o texto determinístico e o chamado é criado do mesmo jeito.
+        AutoTicketEnrichment? enrichment = null;
+        try
+        {
+            enrichment = await _enrichmentService.EnrichAsync(monitoringEvent, policy, ct);
+        }
+        catch (Exception ex)
+        {
+            // Defesa em profundidade: o serviço já não deve lançar, mas a criação
+            // do chamado jamais pode depender da IA.
+            _logger.LogWarning(ex,
+                "Enriquecimento por IA falhou para o evento {MonitoringEventId}; seguindo com o texto determinístico.",
+                monitoringEvent.Id);
+        }
+
+        // Aplicação por política (Suggest vs AutoApply), com piso de prioridade.
+        AutoTicketAppliedSuggestion? applied = null;
+        if (enrichment is not null && !enrichment.UsedFallback)
+        {
+            applied = await _suggestionApplier.ApplyAsync(
+                monitoringEvent, policy, enrichment, ticketRequest.Priority, verdict.ShouldEscalate, ct);
+
+            // AutoTicketCreateTicketRequest é classe (não record), então os
+            // valores finais são compostos explicitamente.
+            //
+            // PRECEDÊNCIA (do mais específico para o mais genérico):
+            //   1. sugestão que a IA efetivamente APLICOU
+            //   2. valor definido pela REGRA (mais específico que o default)
+            //   3. default da POLÍTICA hierárquica
+            //
+            // applied.DepartmentId/Category vêm nulos quando a IA não aplicou —
+            // justamente para não mascarar o valor da regra.
+            ticketRequest = new AutoTicketCreateTicketRequest
+            {
+                ClientId = ticketRequest.ClientId,
+                SiteId = ticketRequest.SiteId,
+                AgentId = ticketRequest.AgentId,
+                DepartmentId = applied.DepartmentId
+                    ?? ticketRequest.DepartmentId
+                    ?? policy.DefaultDepartmentId,
+                WorkflowProfileId = ticketRequest.WorkflowProfileId,
+                Title = !string.IsNullOrWhiteSpace(applied.Title) ? applied.Title! : ticketRequest.Title,
+                Description = !string.IsNullOrWhiteSpace(applied.Description) ? applied.Description! : ticketRequest.Description,
+                Category = !string.IsNullOrWhiteSpace(applied.Category)
+                    ? applied.Category
+                    : !string.IsNullOrWhiteSpace(ticketRequest.Category)
+                        ? ticketRequest.Category
+                        : policy.DefaultCategory,
+                Priority = applied.Priority,
+                ActivityMessage = ticketRequest.ActivityMessage
+            };
         }
 
         // Create ticket
@@ -203,7 +360,14 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         await _dedupService.RegisterCreatedTicketAsync(dedupKey, ticket.Id, ct);
 
         var execution = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Created,
-            decision.Reason, ticket.Id, dedupKey, false);
+            decision.Reason, ticket.Id, dedupKey, false, verdict);
+
+        // Auditoria das sugestões: guarda aplicadas E não aplicadas. É o insumo
+        // para medir a taxa de override antes de dar mais autonomia à IA.
+        if (enrichment is not null)
+        {
+            await PersistSuggestionsAsync(monitoringEvent, execution, ticket.Id, policy, enrichment, applied, ct);
+        }
 
         await transaction.CommitAsync(ct);
 
@@ -212,6 +376,55 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             ticket.Id, monitoringEvent.Id, decision.Rule.Id, LogSanitizer.Sanitize(dedupKey));
 
         return execution;
+    }
+
+    /// <summary>
+    /// Grava o livro de sugestões. Guardar também as NÃO aplicadas é o que
+    /// permite avaliar se a IA acerta — insumo para decidir se vale ir de
+    /// Suggest para AutoApply.
+    /// </summary>
+    private async Task PersistSuggestionsAsync(
+        AgentMonitoringEvent monitoringEvent,
+        AutoTicketRuleExecution execution,
+        Guid ticketId,
+        ResolvedAutoTicketPolicy policy,
+        AutoTicketEnrichment enrichment,
+        AutoTicketAppliedSuggestion? applied,
+        CancellationToken ct)
+    {
+        var items = applied?.Suggestions ?? enrichment.Suggestions;
+        if (items.Count == 0) return;
+
+        var source = enrichment.UsedFallback ? AutoTicketSuggestionSource.Fallback : AutoTicketSuggestionSource.Ai;
+
+        foreach (var item in items)
+        {
+            _db.AutoTicketSuggestions.Add(new AutoTicketSuggestion
+            {
+                Id = Guid.NewGuid(),
+                RuleExecutionId = execution.Id,
+                MonitoringEventId = monitoringEvent.Id,
+                TicketId = ticketId,
+                AgentId = monitoringEvent.AgentId,
+                Field = item.Field,
+                SuggestedValue = item.SuggestedValue,
+                AppliedValue = item.AppliedValue,
+                Confidence = item.Confidence,
+                Mode = (int)policy.AiMode,
+                StrategySource = source,
+                Rationale = item.Rationale,
+                Model = enrichment.Model,
+                TokensUsed = enrichment.TokensUsed,
+                Applied = item.Applied,
+                NotAppliedReason = item.NotAppliedReason,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        AiSuggestionAppliedCounter.Add(items.Count(i => i.Applied));
+        AiSuggestionRejectedCounter.Add(items.Count(i => !i.Applied));
+
+        await _db.SaveChangesAsync(ct);
     }
 
     private async Task<(bool Reused, AutoTicketRuleExecution? Result)> TryReuseOpenTicketAsync(
@@ -246,14 +459,18 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         AutoTicketRuleDecision decision,
         AutoTicketCreateTicketRequest ticketRequest,
         string dedupKey,
+        ResolvedAutoTicketPolicy policy,
         CancellationToken ct)
     {
-        if (_options.ReopenWindowMinutes <= 0)
+        // Janela vem da política resolvida (permite override por cliente/site).
+        var reopenWindowMinutes = policy.ReopenWindowMinutes;
+
+        if (reopenWindowMinutes <= 0)
             return (false, null);
 
         var reopenableClosedTicketId = await _executionRepository.GetReopenableClosedTicketIdAsync(
             monitoringEvent.ClientId, monitoringEvent.AgentId, monitoringEvent.AlertCode,
-            DateTime.UtcNow.AddMinutes(-_options.ReopenWindowMinutes),
+            DateTime.UtcNow.AddMinutes(-reopenWindowMinutes),
             ticketRequest.DepartmentId, ticketRequest.WorkflowProfileId, ticketRequest.Category);
 
         if (!reopenableClosedTicketId.HasValue)
@@ -289,7 +506,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         await _dedupService.RegisterCreatedTicketAsync(dedupKey, reopenableTicket.Id, ct);
 
         var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Deduped,
-            $"Closed AutoTicket was reopened inside the configured reopen window ({_options.ReopenWindowMinutes} min).",
+            $"Closed AutoTicket was reopened inside the configured reopen window ({reopenWindowMinutes} min).",
             reopenableTicket.Id, dedupKey, true);
 
         _logger.LogInformation(
@@ -303,25 +520,31 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         AgentMonitoringEvent monitoringEvent,
         AutoTicketRuleDecision decision,
         string dedupKey,
+        ResolvedAutoTicketPolicy policy,
         CancellationToken ct)
     {
-        if (_options.MaxCreatedTicketsPerHourPerAlertCode <= 0)
+        // O limite vem da POLÍTICA RESOLVIDA, não do appsettings: é o que faz o
+        // override por cliente/site valer. Um cliente pode ter teto maior, outro
+        // menor, e o global continua sendo o default.
+        var limitPerHour = policy.MaxCreatedTicketsPerHourPerAlertCode;
+
+        if (limitPerHour <= 0)
             return (false, null);
 
         var createdInLastHour = await _executionRepository.GetCreatedCountForClientAlertAsync(
             monitoringEvent.ClientId, monitoringEvent.AlertCode, DateTime.UtcNow.AddHours(-1));
 
-        if (createdInLastHour < _options.MaxCreatedTicketsPerHourPerAlertCode)
+        if (createdInLastHour < limitPerHour)
             return (false, null);
 
         var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.RateLimited,
-            $"Client alert rate limit reached for '{monitoringEvent.AlertCode}' ({_options.MaxCreatedTicketsPerHourPerAlertCode} tickets/hour).",
+            $"Client alert rate limit reached for '{monitoringEvent.AlertCode}' ({limitPerHour} tickets/hour).",
             null, dedupKey, false);
 
         _logger.LogWarning(
             "AutoTicket rate limit reached for client {ClientId}, alertCode {AlertCode}. Limit={LimitPerHour}, monitoringEventId={MonitoringEventId}.",
             monitoringEvent.ClientId, LogSanitizer.Sanitize(monitoringEvent.AlertCode),
-            _options.MaxCreatedTicketsPerHourPerAlertCode, monitoringEvent.Id);
+            limitPerHour, monitoringEvent.Id);
 
         return (true, ex);
     }
@@ -353,7 +576,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         string reason,
         Guid? createdTicketId,
         string? dedupKey,
-        bool dedupHit)
+        bool dedupHit,
+        AutoTicketSignalVerdict? verdict = null)
     {
         return await _executionRepository.CreateAsync(new AutoTicketRuleExecution
         {
@@ -366,8 +590,36 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             CreatedTicketId = createdTicketId,
             DedupKey = dedupKey,
             DedupHit = dedupHit,
-            PayloadSnapshotJson = monitoringEvent.PayloadJson
+            // O snapshots carrega o payload do evento e, quando houve avaliação
+            // de sinal, o veredito + evidências. A coluna é jsonb livre — não
+            // exige migration.
+            PayloadSnapshotJson = BuildPayloadSnapshot(monitoringEvent.PayloadJson, verdict)
         });
+    }
+
+    /// <summary>
+    /// Monta o snapshot gravado na execução: envelope com o payload original e o
+    /// veredito do sinal (decisão, score, origem da supressão e evidências).
+    /// </summary>
+    private static string? BuildPayloadSnapshot(string? payloadJson, AutoTicketSignalVerdict? verdict)
+    {
+        if (verdict is null) return payloadJson;
+
+        var envelope = new Dictionary<string, object?>
+        {
+            ["payload"] = payloadJson,
+            ["signal"] = new Dictionary<string, object?>
+            {
+                ["decision"] = verdict.Decision.ToString(),
+                ["score"] = verdict.Score,
+                ["impact"] = verdict.Impact.ToString(),
+                ["suppressionSource"] = verdict.SuppressionSource.ToString(),
+                ["reason"] = verdict.Reason,
+                ["evidence"] = verdict.Evidence
+            }
+        };
+
+        return JsonSerializer.Serialize(envelope);
     }
 
     private AutoTicketCreateTicketRequest BuildTicketRequest(AgentMonitoringEvent monitoringEvent, AutoTicketRule rule, IReadOnlyCollection<string> labels)
@@ -430,33 +682,9 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         return builder.ToString().Trim();
     }
 
-    private bool CanCreateTicketsFor(Guid clientId, Guid? siteId)
-    {
-        if (_options.ShadowMode)
-            return false;
-
-        var canaryClientIds = ParseGuidSet(_options.CanaryClientIds);
-        var canarySiteIds = ParseGuidSet(_options.CanarySiteIds);
-
-        if (canaryClientIds.Count == 0 && canarySiteIds.Count == 0)
-            return true;
-
-        return canaryClientIds.Contains(clientId)
-            || (siteId.HasValue && canarySiteIds.Contains(siteId.Value));
-    }
-
-    private static HashSet<Guid> ParseGuidSet(IEnumerable<string>? values)
-    {
-        var result = new HashSet<Guid>();
-        if (values is null)
-            return result;
-
-        foreach (var value in values)
-        {
-            if (Guid.TryParse(value, out var guid))
-                result.Add(guid);
-        }
-
-        return result;
-    }
+    // Nota: CanCreateTicketsFor/ParseGuidSet foram REMOVIDOS. Eles liam o
+    // appsettings diretamente (ShadowMode/canary) e ficaram sem chamador quando
+    // a decisão passou a vir da política resolvida (ResolvedAutoTicketPolicy),
+    // que já aplica shadow, canário e override por cliente/site. Manter código
+    // morto lendo configuração antiga é uma armadilha para quem for mexer depois.
 }

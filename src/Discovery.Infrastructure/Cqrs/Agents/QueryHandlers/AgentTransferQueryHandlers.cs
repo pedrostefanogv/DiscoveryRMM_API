@@ -11,7 +11,14 @@ public sealed class ValidateAgentTransferQueryHandler(
 {
     public async Task<Result<ValidateTransferResponseDto>> Handle(ValidateAgentTransferQuery q, CancellationToken ct)
     {
-        var validation = await transferService.ValidateAsync(q.AgentId, q.TargetSiteId, Guid.Empty, ct);
+        // A regra de permissão tem de ser avaliada para o usuário autenticado. Passar
+        // Guid.Empty (bug anterior) fazia HasPermissionAsync consultar um usuário sem
+        // nenhuma atribuição e negar sempre — qualquer usuário via "User does not have
+        // Edit permission on the source site.", em qualquer escopo.
+        if (q.UserId == Guid.Empty)
+            return Result<ValidateTransferResponseDto>.Failure(Error.Unauthorized("User not authenticated."));
+
+        var validation = await transferService.ValidateAsync(q.AgentId, q.TargetSiteId, q.UserId, ct);
 
         var dto = new ValidateTransferResponseDto(
             IsValid: validation.IsValid,

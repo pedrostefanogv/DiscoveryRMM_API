@@ -834,7 +834,13 @@ public class AgentsController : ControllerBase
     public async Task<IActionResult> TransferAgent(Guid agentId, [FromBody] TransferAgentCommand cmd, CancellationToken ct = default)
     {
         if (HttpContext.Items["UserId"] is Guid userId)
+        {
             cmd = cmd with { AgentId = agentId, UserId = userId };
+            // Motivo opcional vem do corpo; mantém só texto útil e dentro do limite da UI.
+            var reason = string.IsNullOrWhiteSpace(cmd.Reason) ? null : cmd.Reason.Trim();
+            if (reason is { Length: > 500 }) reason = reason[..500];
+            cmd = cmd with { Reason = reason };
+        }
         else
             return Unauthorized(new { error = "User not authenticated." });
 
@@ -850,7 +856,12 @@ public class AgentsController : ControllerBase
     public async Task<IActionResult> BulkTransferAgents([FromBody] BulkTransferAgentsCommand cmd, CancellationToken ct = default)
     {
         if (HttpContext.Items["UserId"] is Guid userId)
+        {
             cmd = cmd with { UserId = userId };
+            var bulkReason = string.IsNullOrWhiteSpace(cmd.Reason) ? null : cmd.Reason.Trim();
+            if (bulkReason is { Length: > 500 }) bulkReason = bulkReason[..500];
+            cmd = cmd with { Reason = bulkReason };
+        }
         else
             return Unauthorized(new { error = "User not authenticated." });
 
@@ -867,8 +878,17 @@ public class AgentsController : ControllerBase
     [RequirePermission(ResourceType.Agents, ActionType.View)]
     public async Task<IActionResult> ValidateTransfer(Guid agentId, [FromQuery] Guid targetSiteId, CancellationToken ct = default)
     {
-        var result = await _mediator.Send(new ValidateAgentTransferQuery(agentId, targetSiteId), ct);
-        return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
+        // A validação de permissão depende de QUEM está pedindo; sem o UserId do token o
+        // handler negaria sempre (era o bug: Guid.Empty).
+        if (HttpContext.Items["UserId"] is not Guid userId)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var result = await _mediator.Send(new ValidateAgentTransferQuery(agentId, targetSiteId, userId), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "Unauthorized"
+                ? Unauthorized(new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
     }
 
     [HttpGet("{id:guid}/notes/page")]

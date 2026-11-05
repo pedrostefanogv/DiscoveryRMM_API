@@ -1,4 +1,4 @@
-﻿using Discovery.Core.Cqrs;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AutoTicketRules.Commands;
 using Discovery.Core.Cqrs.AutoTicketRules.Queries;
 using Discovery.Core.Entities;
@@ -34,7 +34,16 @@ public sealed class CreateAutoTicketRuleCommandHandler(IAutoTicketRuleRepository
 {
     public async Task<Result<AutoTicketRuleDto>> Handle(CreateAutoTicketRuleCommand cmd, CancellationToken ct)
     {
-        var r = new AutoTicketRule { Name = cmd.Name, IsEnabled = cmd.IsEnabled, ScopeLevel = Enum.TryParse<AutoTicketScopeLevel>(cmd.ScopeLevel, true, out var sl) ? sl : AutoTicketScopeLevel.Global, ScopeId = cmd.ScopeId, AlertCodeFilter = cmd.AlertCodeFilter, SourceFilter = null, TargetDepartmentId = Guid.TryParse(cmd.TargetDepartmentId, out var did) ? did : null, TargetWorkflowProfileId = Guid.TryParse(cmd.TargetWorkflowProfileId, out var pid) ? pid : null, TargetCategory = cmd.TargetCategory, TargetPriority = Enum.TryParse<TicketPriority>(cmd.TargetPriority, true, out var tp) ? tp : TicketPriority.Medium, DedupWindowMinutes = cmd.DedupWindowMinutes, CooldownMinutes = cmd.CooldownMinutes, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        // Escopo: nível e id são UM par, validados pelo MESMO código que o update
+        // usa (AutoTicketRuleScopeValidator). Antes cada handler tinha sua própria
+        // cópia, e elas divergiram — este tratava nível inválido como Global,
+        // fazendo uma regra de cliente valer para todos.
+        var scope = AutoTicketRuleScopeValidator.Resolve(cmd.ScopeLevel, cmd.ScopeId);
+        if (scope.IsFailure) return Result<AutoTicketRuleDto>.Failure(scope.Errors.ToArray());
+
+        var sl = scope.Value.Level;
+
+        var r = new AutoTicketRule { Name = cmd.Name, IsEnabled = cmd.IsEnabled, ScopeLevel = sl, ScopeId = scope.Value.ScopeId, AlertCodeFilter = cmd.AlertCodeFilter, SourceFilter = null, TargetDepartmentId = Guid.TryParse(cmd.TargetDepartmentId, out var did) ? did : null, TargetWorkflowProfileId = Guid.TryParse(cmd.TargetWorkflowProfileId, out var pid) ? pid : null, TargetCategory = cmd.TargetCategory, TargetPriority = Enum.TryParse<TicketPriority>(cmd.TargetPriority, true, out var tp) ? tp : TicketPriority.Medium, DedupWindowMinutes = cmd.DedupWindowMinutes, CooldownMinutes = cmd.CooldownMinutes, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         var created = await repo.CreateAsync(r);
         return Result<AutoTicketRuleDto>.Success(new AutoTicketRuleDto(created.Id, created.Name, created.IsEnabled, created.ScopeLevel.ToString(), created.ScopeId, created.AlertCodeFilter, null, created.TargetDepartmentId?.ToString(), created.TargetWorkflowProfileId?.ToString(), created.TargetCategory, created.TargetPriority.ToString(), created.DedupWindowMinutes, created.CooldownMinutes, created.CreatedAt, created.UpdatedAt));
     }
@@ -48,7 +57,17 @@ public sealed class UpdateAutoTicketRuleCommandHandler(IAutoTicketRuleRepository
         if (r is null) return Result<AutoTicketRuleDto>.Failure(Error.NotFound($"Rule {cmd.Id} not found"));
         if (cmd.Name is not null) r.Name = cmd.Name;
         if (cmd.IsEnabled.HasValue) r.IsEnabled = cmd.IsEnabled.Value;
-        if (cmd.ScopeLevel is not null && Enum.TryParse<AutoTicketScopeLevel>(cmd.ScopeLevel, true, out var sl)) r.ScopeLevel = sl;
+        // Escopo: MESMO validador do create — nível e id são um par indivisível.
+        //
+        // VALIDA ANTES DE MUTAR: o par é resolvido e validado primeiro, e só
+        // aplicado depois. Se a validação falhar, a entidade em memória fica
+        // intacta (o chamador pode reusar o repositório).
+        var scope = AutoTicketRuleScopeValidator.Resolve(
+            cmd.ScopeLevel, cmd.ScopeId, r.ScopeLevel, r.ScopeId);
+        if (scope.IsFailure) return Result<AutoTicketRuleDto>.Failure(scope.Errors.ToArray());
+
+        // Só agora aplica — o par já foi validado como um todo.
+        r.ScopeLevel = scope.Value.Level;
         if (cmd.ScopeId is not null) r.ScopeId = cmd.ScopeId;
         if (cmd.AlertCodeFilter is not null) r.AlertCodeFilter = cmd.AlertCodeFilter;
         if (cmd.TargetDepartmentId is not null && Guid.TryParse(cmd.TargetDepartmentId, out var did)) r.TargetDepartmentId = did;

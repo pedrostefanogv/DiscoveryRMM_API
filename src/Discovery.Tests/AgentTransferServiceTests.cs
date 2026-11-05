@@ -134,6 +134,113 @@ public class AgentTransferServiceTests
         Assert.That(result.AgentNotified, Is.False);
     }
 
+    // ── Regressão: a validação deve usar o usuário autenticado (bug do Guid.Empty) ──
+
+    [Test]
+    public async Task Validate_UsesAuthenticatedUser_NotEmptyGuid()
+    {
+        SetupSuccessfulScenario();
+        var svc = CreateService();
+
+        var validation = await svc.ValidateAsync(AgentId, SiteBId, UserId, CancellationToken.None);
+
+        Assert.That(validation.IsValid, Is.True, "usuário com permissão deve poder transferir");
+        Assert.That(_permission.QueriedUserIds, Is.Not.Empty);
+        Assert.That(_permission.QueriedUserIds, Has.None.EqualTo(Guid.Empty),
+            "a regra não pode ser avaliada com Guid.Empty (usuário sem atribuições)");
+        Assert.That(_permission.QueriedUserIds, Has.All.EqualTo(UserId));
+    }
+
+    [Test]
+    public async Task Validate_WhenUserCannotEditSourceSite_ReportsSourceSiteMessage()
+    {
+        SetupSuccessfulScenario();
+        _permission.Granted = false;
+        var svc = CreateService();
+
+        var validation = await svc.ValidateAsync(AgentId, SiteBId, UserId, CancellationToken.None);
+
+        Assert.That(validation.IsValid, Is.False);
+        Assert.That(validation.Messages,
+            Has.Some.EqualTo("User does not have Edit permission on the source site."));
+    }
+
+    [Test]
+    public async Task Validate_WithEmptyUserId_FailsWithAuthenticationMessage_NotPermissionMessage()
+    {
+        SetupSuccessfulScenario();
+        var svc = CreateService();
+
+        var validation = await svc.ValidateAsync(AgentId, SiteBId, Guid.Empty, CancellationToken.None);
+
+        Assert.That(validation.IsValid, Is.False);
+        Assert.That(validation.Messages, Has.Some.EqualTo("User not authenticated."));
+        Assert.That(validation.Messages,
+            Has.None.EqualTo("User does not have Edit permission on the source site."),
+            "erro de autenticação não deve ser mascarado como falta de permissão");
+    }
+
+    [Test]
+    public async Task Transfer_WithEmptyUserId_ThrowsUnauthorized_WithoutTouchingData()
+    {
+        SetupSuccessfulScenario();
+        var svc = CreateService();
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            svc.TransferAsync(AgentId, SiteBId, Guid.Empty, null, CancellationToken.None));
+
+        Assert.That(_agentRepo.Agent!.SiteId, Is.EqualTo(SiteAId), "agent não pode ser movido");
+    }
+
+    // ── Regressão: motivo (reason) e idempotência ──
+
+    [Test]
+    public async Task Transfer_KeepsProvidedReason_InResult()
+    {
+        SetupSuccessfulScenario();
+        var svc = CreateService();
+
+        var result = await svc.TransferAsync(AgentId, SiteBId, UserId, "Cliente solicitou realocação", CancellationToken.None);
+
+        Assert.That(result.Reason, Is.EqualTo("Cliente solicitou realocação"));
+    }
+
+    [Test]
+    public async Task Transfer_WhenAlreadyOnTargetSite_IsIdempotentSuccess_WithoutSideEffects()
+    {
+        SetupSuccessfulScenario();
+        // agent já está no destino (ex.: persistiu e falhou ao notificar numa tentativa anterior)
+        _agentRepo.Agent!.SiteId = SiteBId;
+        var svc = CreateService();
+
+        var result = await svc.TransferAsync(AgentId, SiteBId, UserId, null, CancellationToken.None);
+
+        Assert.That(result.Agent.SiteId, Is.EqualTo(SiteBId));
+        Assert.That(_messaging.SyncPingSubjects, Is.Empty, "não deve republicar notificação");
+        Assert.That(_messaging.CommandSubjects, Is.Empty, "não deve reenviar nats.reconnect");
+        Assert.That(_deliveryRepo.SentDeliveries, Is.Empty, "não deve registrar novo delivery");
+    }
+
+    [Test]
+    public async Task Transfer_WhenCacheInvalidationFails_StillCompletesTransfer()
+    {
+        SetupSuccessfulScenario();
+        var svc = new AgentTransferService(
+            _agentRepo,
+            _siteRepo,
+            _clientRepo,
+            _permission,
+            _messaging,
+            new ThrowingRedisService(),
+            _deliveryRepo,
+            NullLogger<AgentTransferService>.Instance);
+
+        var result = await svc.TransferAsync(AgentId, SiteBId, UserId, null, CancellationToken.None);
+
+        Assert.That(_agentRepo.Agent!.SiteId, Is.EqualTo(SiteBId), "transferência persiste mesmo com Redis fora");
+        Assert.That(result.AgentNotified, Is.True, "notificação segue sendo tentada");
+    }
+
     // ── Fakes ──
 
     private sealed class FakeAgentTransferRepo : IAgentRepository
@@ -201,8 +308,17 @@ public class AgentTransferServiceTests
 
     private sealed class FakePermissionService : IPermissionService
     {
+        /// <summary>Usuários consultados pela regra de permissão (para provar que foi o usuário real).</summary>
+        public List<Guid> QueriedUserIds { get; } = [];
+
+        /// <summary>Quando false, simula usuário sem Agents/Edit em nenhum escopo.</summary>
+        public bool Granted { get; set; } = true;
+
         public Task<bool> HasPermissionAsync(Guid userId, ResourceType resource, ActionType action, ScopeLevel scopeLevel = ScopeLevel.Global, Guid? scopeId = null, Guid? parentScopeId = null)
-            => Task.FromResult(true);
+        {
+            QueriedUserIds.Add(userId);
+            return Task.FromResult(Granted);
+        }
         public Task<UserScopeAccess> GetScopeAccessAsync(Guid userId, ResourceType resource, ActionType action)
             => Task.FromResult(new UserScopeAccess());
         public Task InvalidateUserCacheAsync(Guid userId) => Task.CompletedTask;
@@ -242,6 +358,25 @@ public class AgentTransferServiceTests
         public Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000)
             => Task.FromResult<IReadOnlyList<string>>([]);
         public Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds) => Task.FromResult(true);
+    }
+
+    /// <summary>Redis fora do ar: qualquer operação lança (cenário do try/catch da invalidação).</summary>
+    private sealed class ThrowingRedisService : IRedisService
+    {
+        public bool IsConnected => false;
+        public Task<string?> GetAsync(string key) => throw new InvalidOperationException("Redis down");
+        public Task<long> IncrementAsync(string key) => throw new InvalidOperationException("Redis down");
+        public Task<long> IncrementByAsync(string key, long amount) => throw new InvalidOperationException("Redis down");
+        public Task SetAsync(string key, string value, int expirySeconds = 3600) => throw new InvalidOperationException("Redis down");
+        public Task<bool> SetExpiryAsync(string key, int expirySeconds) => throw new InvalidOperationException("Redis down");
+        public Task<int> GetTtlSecondsAsync(string key) => throw new InvalidOperationException("Redis down");
+        public Task DeleteAsync(string key) => throw new InvalidOperationException("Redis down");
+        public Task DeleteByPrefixAsync(string prefix) => throw new InvalidOperationException("Redis down");
+        public Task PublishAsync(string channel, string message) => throw new InvalidOperationException("Redis down");
+        public Task SubscribeAsync(string channel, Action<string, string> handler) => throw new InvalidOperationException("Redis down");
+        public Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000)
+            => throw new InvalidOperationException("Redis down");
+        public Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds) => throw new InvalidOperationException("Redis down");
     }
 
     private sealed class FakeTransferMessaging : IAgentMessaging

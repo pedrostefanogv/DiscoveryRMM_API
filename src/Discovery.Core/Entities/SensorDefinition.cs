@@ -83,6 +83,26 @@ public class SensorDefinition
     /// <summary>Alerta também quando o próprio sensor falha em coletar ("sensor quebrado").</summary>
     public bool AlertOnSensorError { get; set; } = true;
 
+    // ── Auto-ticket por sensor (M268) ─────────────────────────────────────
+    /// <summary>
+    /// Vínculo do sensor com o auto-ticket. Never vence as allowlists da
+    /// política hierárquica. Default OnEscalation preserva o comportamento
+    /// anterior (só abre na abertura/escala).
+    /// </summary>
+    public SensorAutoTicketPolicy AutoTicketPolicy { get; set; } = SensorAutoTicketPolicy.OnEscalation;
+
+    /// <summary>
+    /// Duração mínima (segundos) em falha antes de abrir chamado para ESTE
+    /// sensor. 0 = herda o valor da política hierárquica.
+    /// </summary>
+    public int AutoTicketMinDurationSeconds { get; set; }
+
+    /// <summary>
+    /// Impacto do sensor. Alimenta a escada de decisão (magnitude) e serve de
+    /// piso para a prioridade sugerida pela IA.
+    /// </summary>
+    public AutoTicketImpact AutoTicketImpact { get; set; } = AutoTicketImpact.Medium;
+
     public int DisplayOrder { get; set; } = 50;
     public bool IsPinned { get; set; }
 
