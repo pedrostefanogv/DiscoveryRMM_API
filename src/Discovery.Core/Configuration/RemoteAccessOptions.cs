@@ -119,6 +119,107 @@ public class RemoteAccessQualityOptions
     public int MaxFps { get; set; } = 30;
     public string DefaultCodec { get; set; } = "auto";
     public AdaptiveThresholds Thresholds { get; set; } = new();
+
+    /// <summary>
+    /// Política de TETO DE BANDA do stream de tela. Controla o gate que PAUSA a
+    /// captura quando o link não escoa (separado da qualidade, que apenas reduz
+    /// a compressão). Ver RemoteAccessBandwidthOptions.
+    /// </summary>
+    public RemoteAccessBandwidthOptions Bandwidth { get; set; } = new();
+}
+
+/// <summary>
+/// Política de teto de banda do stream de tela, por MODO de operação.
+///
+/// Por que o teto é separado da qualidade: a escada adaptativa REDUZ a
+/// compressão quando a rede piora, mas continua produzindo frames no mesmo
+/// ritmo. Num link que não escoa, isso só enche a fila — o frame entregue fica
+/// cada vez mais velho (o operador clica onde a tela já não está). O teto de
+/// banda é um SEGUNDO controle, que freia a PRODUÇÃO de frames.
+///
+/// Modos (espelham a UI de sessão remota):
+///   - Auto:   teto ajustado automaticamente pelo agente a partir do bitrate
+///             que o viewer efetivamente recebe. Parte de AutoStartKbps e varia
+///             entre AutoMinKbps e AutoMaxKbps. 0 = desligado.
+///   - Hd:     sem limite (0). Prioriza fluidez; a banda é responsabilidade da
+///             rede e da escada de qualidade.
+///   - Manual: teto fixo escolhido pelo operador, a partir de um preset.
+///
+/// O agente é a fonte da verdade da aplicação: ele recebe a política no start
+/// e pode recebê-la de novo em runtime pelo canal .control.
+/// </summary>
+public class RemoteAccessBandwidthOptions
+{
+    /// <summary>
+    /// Modo padrão do teto quando o operador não escolhe.
+    /// "auto" | "hd" | "manual".
+    /// </summary>
+    public string DefaultMode { get; set; } = "auto";
+
+    /// <summary>
+    /// Teto padrão (kbps) para o modo manual quando nenhum preset é escolhido.
+    /// 0 = sem teto.
+    /// </summary>
+    public int ManualDefaultKbps { get; set; } = 8000;
+
+    /// <summary>
+    /// Presets do modo manual, exibidos na UI como opções pré-definidas.
+    /// A ordem aqui é a ordem exibida. Ver <see cref="BandwidthPreset"/>.
+    /// </summary>
+    public BandwidthPreset[] ManualPresets { get; set; } =
+    [
+        new() { Id = "low",    Label = "Baixa (1 Mbps)",   Kbps = 1000 },
+        new() { Id = "medium", Label = "Média (4 Mbps)",   Kbps = 4000 },
+        new() { Id = "high",   Label = "Alta (8 Mbps)",    Kbps = 8000 },
+        new() { Id = "max",    Label = "Máxima (20 Mbps)", Kbps = 20000 },
+        new() { Id = "unlimited", Label = "Sem limite",    Kbps = 0 }
+    ];
+
+    // ── Modo AUTO: o agente ajusta o teto sozinho ──
+
+    /// <summary>Teto inicial do modo auto (kbps). 0 desliga o controle automático.</summary>
+    public int AutoStartKbps { get; set; } = 8000;
+
+    /// <summary>Piso do teto automático (kbps). Nunca desce abaixo disso.</summary>
+    public int AutoMinKbps { get; set; } = 1000;
+
+    /// <summary>Teto máximo do teto automático (kbps).</summary>
+    public int AutoMaxKbps { get; set; } = 30000;
+
+    /// <summary>
+    /// Fração do teto que o viewer precisa receber para o agente considerar que
+    /// há folga e SUBIR o teto. Ex.: 0.75 = se recebe &gt;75% do teto, sobe.
+    /// </summary>
+    public double AutoRaiseFactor { get; set; } = 0.75;
+
+    /// <summary>
+    /// Fração do teto abaixo da qual o agente considera aperto e DESCE o teto.
+    /// Deve ser menor que <see cref="AutoRaiseFactor"/> para haver histerese.
+    /// </summary>
+    public double AutoLowerFactor { get; set; } = 0.6;
+
+    /// <summary>Passo de ajuste do teto automático (kbps).</summary>
+    public int AutoStepKbps { get; set; } = 2000;
+
+    /// <summary>
+    /// Teto absoluto imposto pelo servidor (kbps), aplicável a QUALQUER modo —
+    /// inclusive HD. 0 = sem restrição do servidor. Útil para proteger a rede
+    /// corporativa de um operador que escolha "sem limite".
+    /// </summary>
+    public int ServerMaxKbps { get; set; } = 0;
+}
+
+/// <summary>Opção pré-definida de teto de banda exibida na UI.</summary>
+public class BandwidthPreset
+{
+    /// <summary>Identificador estável enviado no wire (ex.: "low").</summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>Rótulo exibido ao operador.</summary>
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>Teto em kbps. 0 = sem limite.</summary>
+    public int Kbps { get; set; }
 }
 
 public class AdaptiveThresholds

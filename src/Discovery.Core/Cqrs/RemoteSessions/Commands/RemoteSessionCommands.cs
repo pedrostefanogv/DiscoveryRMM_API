@@ -67,6 +67,32 @@ public sealed record ChangeRemoteSessionQualityCommand(
     bool Auto = false
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
+
+/// <summary>
+/// Troca a POLITICA DE TETO DE BANDA de uma sessao de tela ativa.
+///
+/// Separado da qualidade: a qualidade reduz a COMPRESSAO (escada adaptativa),
+/// o teto de banda freia a PRODUCAO de frames quando o link nao escoa. Sem
+/// esse segundo controle, baixar a qualidade nao impede a fila de crescer e o
+/// frame entregue fica cada vez mais velho.
+///</summary>
+public sealed record ChangeRemoteSessionBandwidthCommand(
+    Guid AgentId = default,
+    Guid SessionId = default,
+    Guid UserId = default,
+    // Modo: "auto" | "hd" | "manual".
+    string Mode = "auto",
+    // Teto em kbps (modo manual). 0 = sem limite. Null = preserva o corrente.
+    int? CeilingKbps = null,
+    // Piso do teto automatico (kbps). Null = preserva.
+    int? AutoMinKbps = null,
+    // Teto maximo do automatico (kbps). Null = preserva.
+    int? AutoMaxKbps = null,
+    // Passo do ajuste automatico (kbps). Null = preserva.
+    int? AutoStepKbps = null,
+    // Teto absoluto do servidor (kbps), aplicavel a QUALQUER modo. Null = preserva.
+    int? ServerMaxKbps = null
+) : ICommand<Result<VoidResult>>;
 // ── Terminal Multi-Tab Commands ──
 
 /// <summary>Cria uma nova aba de terminal na sessão (notifica o agent via NATS).</summary>

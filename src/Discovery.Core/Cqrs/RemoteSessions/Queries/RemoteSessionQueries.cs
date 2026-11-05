@@ -40,3 +40,20 @@ public sealed record RecordingDownloadDto(
     int DurationSec,
     DateTime? ExpiresAt
 );
+
+/// <summary>
+/// Politica de teto de banda exposta para a UI montar o seletor sem hardcode
+/// de valores (os presets vem da configuracao do servidor).
+/// </summary>
+public sealed record BandwidthPolicyDto(
+    string DefaultMode,
+    int ManualDefaultKbps,
+    IReadOnlyList<BandwidthPresetDto> ManualPresets,
+    int AutoMinKbps,
+    int AutoMaxKbps,
+    int AutoStepKbps,
+    int ServerMaxKbps
+);
+
+/// <summary>Preset de teto de banda exibido na UI. Kbps = 0 significa sem limite.</summary>
+public sealed record BandwidthPresetDto(string Id, string Label, int Kbps);

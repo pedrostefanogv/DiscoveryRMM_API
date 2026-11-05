@@ -42,6 +42,29 @@ public class RemoteSessionsController : ControllerBase
         _logger = logger;
     }
 
+    /// <summary>
+    /// Politica de TETO DE BANDA configurada no servidor (presets e limites).
+    ///
+    /// A UI usa isto para montar o seletor sem hardcode de valores. Endpoint
+    /// leve e sem estado: nao consulta sessao nem banco.
+    /// </summary>
+    [HttpGet("bandwidth-policy")]
+    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    public IActionResult GetBandwidthPolicy()
+    {
+        var bw = _options.Quality.Bandwidth;
+        return Ok(new BandwidthPolicyDto(
+            DefaultMode: bw.DefaultMode,
+            ManualDefaultKbps: bw.ManualDefaultKbps,
+            ManualPresets: bw.ManualPresets
+                .Select(p => new BandwidthPresetDto(p.Id, p.Label, p.Kbps))
+                .ToList(),
+            AutoMinKbps: bw.AutoMinKbps,
+            AutoMaxKbps: bw.AutoMaxKbps,
+            AutoStepKbps: bw.AutoStepKbps,
+            ServerMaxKbps: bw.ServerMaxKbps));
+    }
+
     /// <summary>Inicia uma nova sessão de acesso remoto.</summary>
     [HttpPost("{agentId:guid}")]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
@@ -309,6 +332,26 @@ public class RemoteSessionsController : ControllerBase
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
     [RequirePermission(ResourceType.Agents, ActionType.Execute)]
     public async Task<IActionResult> ChangeQuality(Guid agentId, Guid sessionId, [FromBody] ChangeRemoteSessionQualityCommand cmd, CancellationToken ct = default)
+    {
+        var userId = GetUserId();
+        var result = await _mediator.Send(cmd with { AgentId = agentId, SessionId = sessionId, UserId = userId }, ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+    }
+
+
+    /// <summary>
+    /// Altera a POLITICA DE TETO DE BANDA de uma sessao de tela ativa.
+    ///
+    /// Modos: auto (o agent ajusta o teto pelo bitrate recebido), hd (sem teto)
+    /// e manual (teto fixo por preset). O teto e um controle SEPARADO da
+    /// qualidade: ela reduz a compressao, ele freia a producao de frames.
+    /// </summary>
+    [HttpPut("{agentId:guid}/{sessionId:guid}/bandwidth")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    public async Task<IActionResult> ChangeBandwidth(Guid agentId, Guid sessionId, [FromBody] ChangeRemoteSessionBandwidthCommand cmd, CancellationToken ct = default)
     {
         var userId = GetUserId();
         var result = await _mediator.Send(cmd with { AgentId = agentId, SessionId = sessionId, UserId = userId }, ct);

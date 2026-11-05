@@ -362,9 +362,62 @@ public sealed class SpecialCommandPayloadValidator
             }
         }
 
+        // Política de TETO DE BANDA do stream de tela (opcional, aditivo):
+        // { mode: "auto"|"hd"|"manual", ceilingKbps, autoMinKbps, autoMaxKbps,
+        //   autoStepKbps, serverMaxKbps }. O agent valida de novo (defesa em
+        // profundidade); aqui rejeitamos cedo para o operador receber erro claro
+        // em vez de a sessão subir com uma política silenciosamente ignorada.
+        if (payload.TryGetProperty("bandwidth", out var bandwidth) && bandwidth.ValueKind != JsonValueKind.Null)
+        {
+            if (bandwidth.ValueKind != JsonValueKind.Object)
+            {
+                validationError = "field 'bandwidth' must be an object or null.";
+                return false;
+            }
+
+            if (bandwidth.TryGetProperty("mode", out var bwMode))
+            {
+                if (bwMode.ValueKind != JsonValueKind.String
+                    || !TryReadString(bwMode, out var bwModeText)
+                    || !BandwidthModes.Contains(bwModeText))
+                {
+                    validationError = "field 'bandwidth.mode' must be one of: auto, hd, manual.";
+                    return false;
+                }
+            }
+
+            // kbps: inteiro >= 0. 0 = sem limite (válido apenas em hd/manual).
+            foreach (var field in BandwidthKbpsFields)
+            {
+                if (!bandwidth.TryGetProperty(field, out var value) || value.ValueKind == JsonValueKind.Null)
+                {
+                    continue;
+                }
+                if (value.ValueKind != JsonValueKind.Number
+                    || !value.TryGetInt32(out var kbps)
+                    || kbps < 0)
+                {
+                    validationError = $"field 'bandwidth.{field}' must be a non-negative integer (kbps).";
+                    return false;
+                }
+            }
+        }
+
         normalizedPayload = payload.GetRawText();
         return true;
     }
+
+    /// <summary>Modos aceitos da política de teto de banda.</summary>
+    private static readonly HashSet<string> BandwidthModes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "auto", "hd", "manual"
+    };
+
+    /// <summary>Campos numéricos (kbps) da política de teto de banda.</summary>
+    private static readonly string[] BandwidthKbpsFields =
+    [
+        "ceilingKbps", "autoMinKbps", "autoMaxKbps", "autoStepKbps", "serverMaxKbps"
+    ];
 
     private static bool TryNormalizeP2pPreload(
         JsonElement payload,

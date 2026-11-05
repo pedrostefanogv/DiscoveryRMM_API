@@ -661,6 +661,73 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
     }
 }
 
+// ── Politica de teto de banda ──
+
+/// <summary>
+/// Aplica a politica de TETO DE BANDA a uma sessao de tela ativa.
+///
+/// Publica a acao 'bandwidth' no canal de comando do agent. O agent valida de
+/// novo (defesa em profundidade) e aplica no gate de captura. Campos nulos sao
+/// omitidos logicamente: o agent preserva o valor corrente do que nao vier, o
+/// que permite ao viewer trocar so o modo sem reenviar a politica inteira.
+/// </summary>
+public sealed class ChangeRemoteSessionBandwidthCommandHandler(
+    IRemoteSessionManager sessionManager,
+    IAgentCommandDispatcher dispatcher,
+    ILogger<ChangeRemoteSessionBandwidthCommandHandler> logger
+) : IRequestHandler<ChangeRemoteSessionBandwidthCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(ChangeRemoteSessionBandwidthCommand cmd, CancellationToken ct)
+    {
+        var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
+        if (session is null)
+            return Result<VoidResult>.Failure(Error.NotFound("Remote session not found or not active."));
+
+        var normalized = (cmd.Mode ?? string.Empty).Trim().ToLowerInvariant();
+        if (normalized is not ("auto" or "hd" or "manual"))
+            return Result<VoidResult>.Failure(Error.Validation("mode", "mode must be one of: auto, hd, manual."));
+
+        // O teto de banda so faz sentido para o stream de TELA. Em
+        // terminal/arquivos aceitamos mas nao publicamos (o viewer pode enviar
+        // antes de a tela subir; recusar viraria erro espurio na UI).
+        if (session.Kind is not (RemoteSessionKind.Screen or RemoteSessionKind.All))
+            return Result<VoidResult>.Success(VoidResult.Value);
+
+        if (cmd.CeilingKbps is < 0 || cmd.AutoMinKbps is < 0 || cmd.AutoMaxKbps is < 0
+            || cmd.AutoStepKbps is < 0 || cmd.ServerMaxKbps is < 0)
+            return Result<VoidResult>.Failure(Error.Validation("ceilingKbps", "kbps values must be non-negative."));
+
+        if (cmd.AutoMinKbps is { } lo && cmd.AutoMaxKbps is { } hi && hi < lo)
+            return Result<VoidResult>.Failure(Error.Validation("autoMaxKbps", "autoMaxKbps must be >= autoMinKbps."));
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "bandwidth",
+            sessionId = cmd.SessionId,
+            mode = normalized,
+            ceilingKbps = cmd.CeilingKbps,
+            autoMinKbps = cmd.AutoMinKbps,
+            autoMaxKbps = cmd.AutoMaxKbps,
+            autoStepKbps = cmd.AutoStepKbps,
+            serverMaxKbps = cmd.ServerMaxKbps
+        });
+
+        var command = new AgentCommand
+        {
+            AgentId = cmd.AgentId,
+            CommandType = CommandType.RemoteSessionStart,
+            Payload = payload
+        };
+        await dispatcher.DispatchAsync(command, ct);
+
+        logger.LogInformation(
+            "Remote session {SessionId} bandwidth policy -> mode={Mode} ceiling={Ceiling} kbps",
+            cmd.SessionId, normalized, cmd.CeilingKbps);
+
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
 // ── Terminal Multi-Tab Handlers ──
 
 public sealed class CreateTerminalTabCommandHandler(

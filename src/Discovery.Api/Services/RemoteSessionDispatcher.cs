@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
@@ -40,8 +41,23 @@ public class RemoteSessionDispatcher
         int durationMinutes,
         DateTime expiresAtUtc,
         string natsSubject,
+        RemoteAccessBandwidthOptions? bandwidth = null,
         CancellationToken ct = default)
     {
+        // Política de TETO DE BANDA (kbps) aplicada no start. Vem da
+        // configuração do servidor; o viewer pode sobrepor em runtime pelo
+        // canal .control (ação "bandwidth"). Sem bloco, o agent usa o default
+        // dele (sem teto), preservando o comportamento anterior.
+        object? bandwidthBlock = bandwidth is null ? null : new
+        {
+            mode = bandwidth.DefaultMode,
+            ceilingKbps = bandwidth.ManualDefaultKbps,
+            autoMinKbps = bandwidth.AutoMinKbps,
+            autoMaxKbps = bandwidth.AutoMaxKbps,
+            autoStepKbps = bandwidth.AutoStepKbps,
+            serverMaxKbps = bandwidth.ServerMaxKbps
+        };
+
         var payload = JsonSerializer.Serialize(new
         {
             action = "start",
@@ -52,7 +68,8 @@ public class RemoteSessionDispatcher
             codec = codec.ToString().ToLowerInvariant(),
             durationMinutes,
             expiresAtUtc,
-            natsSubject
+            natsSubject,
+            bandwidth = bandwidthBlock
         });
 
         await DispatchToAgentAsync(agentId, CommandType.RemoteSessionStart, payload, ct);
