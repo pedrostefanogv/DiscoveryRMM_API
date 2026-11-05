@@ -105,6 +105,16 @@ public class ReportLayoutDataSourceDefinition
     public string? Alias { get; init; }
     public JsonElement? Filters { get; init; }
     public ReportLayoutDataSourceJoinDefinition? Join { get; init; }
+
+    /// <summary>
+    /// Marca esta fonte como a PRINCIPAL (a base) do layout multi-source.
+    ///
+    /// Aditivo: layouts antigos nao trazem a marca e continuam validos — nesse
+    /// caso a base segue sendo <c>dataSources[0]</c>, exatamente como antes.
+    /// A marca existe porque, sem ela, reordenar as fontes na UI mudava o
+    /// significado do relatorio em silencio.
+    /// </summary>
+    public bool? Base { get; init; }
 }
 
 public class ReportLayoutDataSourceJoinDefinition
@@ -113,6 +123,13 @@ public class ReportLayoutDataSourceJoinDefinition
     public string? SourceKey { get; init; }
     public string? TargetKey { get; init; }
     public string? JoinType { get; init; }
+
+    /// <summary>
+    /// Chaves adicionais do join (opcional, aditivo). Layouts antigos nao
+    /// trazem o campo e continuam validos: a chave principal segue em
+    /// <see cref="SourceKey"/>/<see cref="TargetKey"/>.
+    /// </summary>
+    public List<string>? Keys { get; init; }
 }
 
 public class ReportLayoutCoverPageDefinition

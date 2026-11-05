@@ -28,20 +28,24 @@ public sealed class GetReportLayoutSchemaQueryHandler(IReportDatasetCatalogProvi
             .ToList();
 
         // Converte as sugestoes em regras source/target para a UI.
+        // So entram as sugestoes cujos DOIS lados existem no catalogo: antes o
+        // filtro era "!= 0 || != 0", que mantinha regras com um lado zerado
+        // (datasetType 0 e um valor valido do enum) e a UI descartava a regra.
         var joinRules = suggestions
             .Select(s =>
             {
                 var source = items.FirstOrDefault(i => string.Equals(i.Key, s.SourceA, StringComparison.OrdinalIgnoreCase));
                 var target = items.FirstOrDefault(i => string.Equals(i.Key, s.SourceB, StringComparison.OrdinalIgnoreCase));
-                return new ReportLayoutJoinRuleDto(
-                    source?.DatasetType ?? 0,
-                    target?.DatasetType ?? 0,
-                    s.PreferredKey,
-                    s.PreferredKey,
-                    s.RecommendedJoinType,
-                    null);
+                return (Source: source, Target: target, Suggestion: s);
             })
-            .Where(r => r.SourceDatasetType != 0 || r.TargetDatasetType != 0)
+            .Where(x => x.Source is not null && x.Target is not null)
+            .Select(x => new ReportLayoutJoinRuleDto(
+                x.Source!.DatasetType,
+                x.Target!.DatasetType,
+                x.Suggestion.PreferredKey,
+                x.Suggestion.PreferredKey,
+                x.Suggestion.RecommendedJoinType,
+                null))
             .ToList();
 
         var dto = new ReportLayoutSchemaDto(

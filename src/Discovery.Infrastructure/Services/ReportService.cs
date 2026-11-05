@@ -18,6 +18,7 @@ public class ReportService : IReportService
     private readonly IServerConfigurationRepository _serverConfigurationRepository;
     private readonly IReportTemplateRepository _templateRepository;
     private readonly IReportDatasetQueryService _datasetQueryService;
+    private readonly IReportDatasetCatalogProvider? _datasetCatalog;
     private readonly IReportHtmlComposer _htmlComposer;
     private readonly Dictionary<ReportFormat, IReportRenderer> _renderers;
     private readonly INotificationService _notificationService;
@@ -42,12 +43,14 @@ public class ReportService : IReportService
         IEnumerable<IReportRenderer> renderers,
         IMemoryCache cache,
         IOptions<ReportingOptions> options,
-        ILogger<ReportService> logger)
+        ILogger<ReportService> logger,
+        IReportDatasetCatalogProvider? datasetCatalog = null)
     {
         _executionRepository = executionRepository;
         _serverConfigurationRepository = serverConfigurationRepository;
         _templateRepository = templateRepository;
         _datasetQueryService = datasetQueryService;
+        _datasetCatalog = datasetCatalog;
         _htmlComposer = htmlComposer;
         _notificationService = notificationService;
         _storageProviderFactory = storageProviderFactory;
@@ -56,6 +59,37 @@ public class ReportService : IReportService
         _logger = logger;
 
         _renderers = renderers.ToDictionary(renderer => renderer.Format);
+    }
+
+    /// <summary>
+    /// Valida o layout ANTES de consultar os dados na execucao.
+    ///
+    /// Leva em conta as mesmas regras da gravacao e do preview:
+    ///  - <see cref="ReportLayoutValidator.ValidateJson"/> cobre forma, limites e
+    ///    o grafo de joins;
+    ///  - <see cref="ReportLayoutFieldResolver.Resolve"/> cobre as referencias de
+    ///    campo e as chaves de join contra o catalogo real.
+    ///
+    /// Sem o catalogo injetado, roda apenas a validacao de forma (o resolver
+    /// precisa do catalogo para saber quais campos existem).
+    /// </summary>
+    private void ValidateLayoutForExecution(ReportTemplate template)
+    {
+        var errors = ReportLayoutValidator.ValidateJson(template.LayoutJson).ToList();
+
+        if (_datasetCatalog is not null)
+        {
+            errors.AddRange(ReportLayoutFieldResolver.Resolve(
+                ReportLayoutDefinitionParser.ParseOrDefault(template.LayoutJson),
+                _datasetCatalog.GetAll()));
+        }
+
+        if (errors.Count == 0)
+            return;
+
+        throw new InvalidOperationException(
+            $"O layout do template '{template.Name}' e invalido e o relatorio nao pode ser gerado: " +
+            string.Join(" ", errors));
     }
 
     public async Task<ReportExecution> ProcessExecutionAsync(Guid executionId, Guid? clientId = null, CancellationToken cancellationToken = default, ReportQueryScope? scope = null)
@@ -104,6 +138,13 @@ public class ReportService : IReportService
 
             var template = await _templateRepository.GetByIdAsync(execution.TemplateId, null)
                 ?? throw new InvalidOperationException($"Template {execution.TemplateId} not found.");
+
+            // O create/update e o preview validam o layout, mas a EXECUCAO nao:
+            // um template antigo (ou editado direto no banco) chegava ate aqui e
+            // so falhava por acidente dentro do join, com mensagem ruim. A guarda
+            // fica DEPOIS do TryClaimPendingAsync para nao gastar tempo em
+            // execucoes ja reivindicadas por outra instancia.
+            ValidateLayoutForExecution(template);
 
             // O escopo efetivo (execucao/usuario) sobrescreve o FiltersJson.
             var scopedFilters = ApplyQueryScope(execution.FiltersJson, execution.ClientId, scope);

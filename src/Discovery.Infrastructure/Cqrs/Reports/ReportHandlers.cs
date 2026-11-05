@@ -104,7 +104,9 @@ public sealed class GetReportTemplateByIdQueryHandler(IReportTemplateRepository 
 }
 
 // new — create template
-public sealed class CreateReportTemplateCommandHandler(IReportTemplateRepository repo)
+public sealed class CreateReportTemplateCommandHandler(
+    IReportTemplateRepository repo,
+    IReportDatasetCatalogProvider catalog)
     : IRequestHandler<CreateReportTemplateCommand, Result<ReportTemplateDto>>
 {
     public async Task<Result<ReportTemplateDto>> Handle(CreateReportTemplateCommand cmd, CancellationToken ct)
@@ -119,9 +121,17 @@ public sealed class CreateReportTemplateCommandHandler(IReportTemplateRepository
                 "defaultFormat",
                 $"DefaultFormat {cmd.DefaultFormat} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
 
-        var createLayoutErrors = ReportLayoutValidator.ValidateJson(cmd.LayoutJson ?? "{}");
+        var createLayoutJson = cmd.LayoutJson ?? "{}";
+        var createLayoutErrors = ReportLayoutValidator.ValidateJson(createLayoutJson);
         if (createLayoutErrors.Count > 0)
             return Result<ReportTemplateDto>.Failure(Error.Validation("layoutJson", string.Join(" ", createLayoutErrors)));
+
+        // Valida os campos/joins contra o catalogo real: sem isso um layout com
+        // "hw.agentIde" ou sem sourceKey era gravado e so falhava no preview.
+        var createFieldErrors = ReportLayoutFieldResolver.Resolve(
+            ReportLayoutDefinitionParser.ParseOrDefault(createLayoutJson), catalog.GetAll());
+        if (createFieldErrors.Count > 0)
+            return Result<ReportTemplateDto>.Failure(Error.Validation("layoutJson", string.Join(" ", createFieldErrors)));
 
         var template = new ReportTemplate
         {
@@ -155,7 +165,9 @@ public sealed class CreateReportTemplateCommandHandler(IReportTemplateRepository
 }
 
 // new — update template
-public sealed class UpdateReportTemplateCommandHandler(IReportTemplateRepository repo)
+public sealed class UpdateReportTemplateCommandHandler(
+    IReportTemplateRepository repo,
+    IReportDatasetCatalogProvider catalog)
     : IRequestHandler<UpdateReportTemplateCommand, Result<ReportTemplateDto>>
 {
     public async Task<Result<ReportTemplateDto>> Handle(UpdateReportTemplateCommand cmd, CancellationToken ct)
@@ -174,6 +186,11 @@ public sealed class UpdateReportTemplateCommandHandler(IReportTemplateRepository
             var layoutErrors = ReportLayoutValidator.ValidateJson(cmd.LayoutJson);
             if (layoutErrors.Count > 0)
                 return Result<ReportTemplateDto>.Failure(Error.Validation("layoutJson", string.Join(" ", layoutErrors)));
+
+            var fieldErrors = ReportLayoutFieldResolver.Resolve(
+                ReportLayoutDefinitionParser.ParseOrDefault(cmd.LayoutJson), catalog.GetAll());
+            if (fieldErrors.Count > 0)
+                return Result<ReportTemplateDto>.Failure(Error.Validation("layoutJson", string.Join(" ", fieldErrors)));
         }
 
         if (cmd.DatasetType.HasValue && !Enum.IsDefined(typeof(ReportDatasetType), cmd.DatasetType.Value))
@@ -321,7 +338,8 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
 // new — report preview
 public sealed class PreviewReportCommandHandler(
     IReportService reportService,
-    IReportTemplateRepository templateRepo)
+    IReportTemplateRepository templateRepo,
+    IReportDatasetCatalogProvider catalog)
     : IRequestHandler<PreviewReportCommand, Result<ReportPreviewResultDto>>
 {
     public async Task<Result<ReportPreviewResultDto>> Handle(PreviewReportCommand cmd, CancellationToken ct)
@@ -335,6 +353,11 @@ public sealed class PreviewReportCommandHandler(
         var layoutErrors = ReportLayoutValidator.ValidateJson(template.LayoutJson);
         if (layoutErrors.Count > 0)
             return Result<ReportPreviewResultDto>.Failure(Error.Validation("layoutJson", string.Join(" ", layoutErrors)));
+
+        var previewFieldErrors = ReportLayoutFieldResolver.Resolve(
+            ReportLayoutDefinitionParser.ParseOrDefault(template.LayoutJson), catalog.GetAll());
+        if (previewFieldErrors.Count > 0)
+            return Result<ReportPreviewResultDto>.Failure(Error.Validation("layoutJson", string.Join(" ", previewFieldErrors)));
 
         var isHtml = string.Equals(cmd.PreviewMode, "html", StringComparison.OrdinalIgnoreCase);
 

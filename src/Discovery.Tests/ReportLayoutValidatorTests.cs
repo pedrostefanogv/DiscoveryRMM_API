@@ -228,4 +228,172 @@ public class ReportLayoutValidatorTests
 
     Assert.That(errors, Has.Some.Contains("is duplicated"));
   }
+
+  // ── Fatia D: fonte principal explicita (base) ─────────────────────────────
+
+  [Test]
+  public void ValidateJson_WhenLayoutHasNoBaseMark_StillUsesFirstSourceAsBase()
+  {
+    // ADITIVO: layout gravado ANTES do campo "base" precisa continuar valido e
+    // continuar usando dataSources[0] como principal.
+    const string layoutJson = """
+    {
+      "dataSources": [
+        { "datasetType": "AgentHardware", "alias": "hw" },
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Is.Empty, string.Join(" | ", errors));
+  }
+
+  [Test]
+  public void ValidateJson_WhenBaseIsMarked_ReturnsNoErrors()
+  {
+    const string layoutJson = """
+    {
+      "dataSources": [
+        { "datasetType": "AgentHardware", "alias": "hw", "base": true },
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Is.Empty, string.Join(" | ", errors));
+  }
+
+  [Test]
+  public void ValidateJson_WhenBaseIsNotTheFirstSource_ReturnsNoErrors()
+  {
+    // A base e a SEGUNDA do array: com base:true a ordem deixa de definir quem
+    // e a principal. A primeira fonte se liga nela.
+    const string layoutJson = """
+    {
+      "dataSources": [
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        },
+        { "datasetType": "AgentHardware", "alias": "hw", "base": true }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Is.Empty, string.Join(" | ", errors));
+  }
+
+  [Test]
+  public void ValidateJson_WhenTwoSourcesAreMarkedAsBase_ReturnsError()
+  {
+    const string layoutJson = """
+    {
+      "dataSources": [
+        { "datasetType": "AgentHardware", "alias": "hw", "base": true },
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "base": true,
+          "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Has.Some.Contains("apenas UMA fonte pode ser marcada como base"));
+  }
+
+  [Test]
+  public void ValidateJson_WhenJoinGraphIsDisconnected_ReturnsError()
+  {
+    // "audit" se liga a si mesma: nao alcanca a base. Antes o validador so
+    // conferia se o alias existia, entao o grafo desconexo passava.
+    const string layoutJson = """
+    {
+      "dataSources": [
+        { "datasetType": "AgentHardware", "alias": "hw" },
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        },
+        {
+          "datasetType": "ConfigurationAudit",
+          "alias": "audit",
+          "join": { "joinToAlias": "audit", "sourceKey": "entityId", "targetKey": "entityId", "joinType": "left" }
+        }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Has.Some.Contains("nao alcanca a base"),
+      "grafo desconexo precisa ser reprovado: " + string.Join(" | ", errors));
+  }
+
+  [Test]
+  public void ValidateJson_WhenSourceJoinsItself_ReturnsError()
+  {
+    const string layoutJson = """
+    {
+      "dataSources": [
+        { "datasetType": "AgentHardware", "alias": "hw" },
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "join": { "joinToAlias": "sns", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Has.Some.Contains("nao pode se ligar a si mesma"));
+  }
+
+  [Test]
+  public void ValidateJson_WhenChainedSourcesReachTheBase_ReturnsNoErrors()
+  {
+    // hw(base) <- sns <- lbl: a cadeia inteira alcanca a base.
+    const string layoutJson = """
+    {
+      "dataSources": [
+        { "datasetType": "AgentHardware", "alias": "hw", "base": true },
+        {
+          "datasetType": "AgentSensors",
+          "alias": "sns",
+          "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        },
+        {
+          "datasetType": "AgentLabels",
+          "alias": "lbl",
+          "join": { "joinToAlias": "sns", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" }
+        }
+      ]
+    }
+    """;
+
+    var errors = ReportLayoutValidator.ValidateJson(layoutJson);
+
+    Assert.That(errors, Is.Empty, string.Join(" | ", errors));
+  }
 }

@@ -3,6 +3,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Cqrs.Reports;
+using Discovery.Infrastructure.Services;
 
 namespace Discovery.Tests;
 
@@ -17,7 +18,7 @@ public class ReportValidatorsTests
     public void CreateTemplate_WhenDefaultFormatIsMarkdown_AcceptsRequest()
     {
         var repo = new FakeReportTemplateRepository();
-        var handler = new CreateReportTemplateCommandHandler(repo);
+        var handler = new CreateReportTemplateCommandHandler(repo, new ReportDatasetCatalogProvider());
 
         var result = handler.Handle(new CreateReportTemplateCommand(
             ClientId: null,
@@ -39,7 +40,7 @@ public class ReportValidatorsTests
     public void CreateTemplate_WhenCsvIsDefaultFormat_MapsCsv()
     {
         var repo = new FakeReportTemplateRepository();
-        var handler = new CreateReportTemplateCommandHandler(repo);
+        var handler = new CreateReportTemplateCommandHandler(repo, new ReportDatasetCatalogProvider());
 
         var result = handler.Handle(new CreateReportTemplateCommand(
             ClientId: null,

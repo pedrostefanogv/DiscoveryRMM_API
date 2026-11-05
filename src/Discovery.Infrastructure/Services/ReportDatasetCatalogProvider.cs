@@ -65,18 +65,6 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
                 .Select(f => new ReportDatasetFilterDto(f, InferFilterType(f), Required: false, Label: FormatLabel(f)))
                 .ToList();
 
-            // Join capabilities devem referenciar APENAS campos que existem no
-            // dataset (fields). Filtra chaves de join ausentes (ex: um dataset
-            // que expõe clientName em vez de clientId).
-            var effectiveJoinKeys = joinKeys.Where(k => fields.Contains(k)).ToArray();
-            var joinCapabilities = effectiveJoinKeys
-                .Select(k => new ReportDatasetJoinCapabilityDto(
-                    SourceKey: k,
-                    TargetKey: k,
-                    JoinTypes: ["left", "inner"],
-                    Description: $"Combina pelo campo {k}"))
-                .ToList();
-
             items.Add(new ReportDatasetCatalogItemDto(
                 Key: key,
                 Type: key,
@@ -86,7 +74,9 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
                 Fields: fields,
                 FieldMetadata: fieldMetadata,
                 Filters: filterDefs,
-                JoinCapabilities: joinCapabilities,
+                // Preenchido depois, em BuildJoinCapabilities: as capacidades
+                // dependem de TODOS os datasets já estarem no catálogo.
+                JoinCapabilities: [],
                 DefaultFormat: "xlsx",
                 SupportedFormats: AllFormats));
         }
@@ -462,7 +452,111 @@ public sealed class ReportDatasetCatalogProvider : IReportDatasetCatalogProvider
             ("criticalThreshold", "Limiar crítico", "number", false),
             ("lastRunAt", "Última coleta", "datetime", false));
 
-        return items.AsReadOnly();
+        return BuildJoinCapabilities(items);
+    }
+
+    /// <summary>
+    /// Gera as capacidades de join cruzando os datasets entre si.
+    ///
+    /// Antes esta lista era montada por dataset com <c>SourceKey == TargetKey == k</c>,
+    /// ou seja, sempre k-&gt;k. Sem um par origem-&gt;destino a UI não tinha como
+    /// montar join nenhum e exibia "não compartilha chaves com nenhum outro
+    /// dataset" mesmo para pares que compartilham 'agentId' (ex: hw e sns).
+    ///
+    /// Agora, para cada par ordenado (A, B) com interseção de chaves não vazia,
+    /// A recebe em JoinCapabilities uma entrada k-&gt;k para cada chave comum k que
+    /// exista em A.Fields E em B.Fields. O teto de 200 sugestões acompanha
+    /// ReportJoinCompatibilityBuilder.Build.
+    /// </summary>
+    private static IReadOnlyList<ReportDatasetCatalogItemDto> BuildJoinCapabilities(
+        IReadOnlyList<ReportDatasetCatalogItemDto> items)
+    {
+        const int maxSuggestions = 200;
+
+        // Chaves de join declaradas, filtradas pelos campos que o dataset
+        // realmente expõe (ex: um dataset que expõe clientName em vez de clientId).
+        var declaredKeys = items.ToDictionary(
+            item => item.Key,
+            item => item.Fields.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+
+        var capabilities = items.ToDictionary(
+            item => item.Key,
+            _ => new List<ReportDatasetJoinCapabilityDto>(),
+            StringComparer.OrdinalIgnoreCase);
+
+        // Round-robin entre os datasets em vez de varrer na ordem do catalogo:
+        // com o teto global, uma varredura sequencial consumia as 200 entradas
+        // nos primeiros datasets e deixava os ultimos (ex: agentSensors, 29o)
+        // sem NENHUMA capacidade — exatamente o sintoma relatado no wizard.
+        var pending = new List<(ReportDatasetCatalogItemDto Source, ReportDatasetCatalogItemDto Target, string Key)>[items.Count];
+        for (var i = 0; i < items.Count; i++)
+        {
+            var source = items[i];
+            var sourceFields = declaredKeys[source.Key];
+            var candidates = new List<(ReportDatasetCatalogItemDto, ReportDatasetCatalogItemDto, string)>();
+
+            for (var j = 0; j < items.Count; j++)
+            {
+                if (i == j)
+                    continue;
+
+                var target = items[j];
+                var targetFields = declaredKeys[target.Key];
+
+                foreach (var key in CommonJoinKeys(source, target))
+                {
+                    // A chave precisa existir nos campos dos DOIS lados.
+                    if (sourceFields.Contains(key) && targetFields.Contains(key))
+                        candidates.Add((source, target, key));
+                }
+            }
+
+            pending[i] = candidates;
+        }
+
+        var total = 0;
+        var rounds = pending.Length == 0 ? 0 : pending.Max(candidates => candidates.Count);
+        for (var round = 0; round < rounds && total < maxSuggestions; round++)
+        {
+            for (var i = 0; i < pending.Length && total < maxSuggestions; i++)
+            {
+                if (round >= pending[i].Count)
+                    continue;
+
+                var (source, target, key) = pending[i][round];
+                capabilities[source.Key].Add(new ReportDatasetJoinCapabilityDto(
+                    SourceKey: key,
+                    TargetKey: key,
+                    JoinTypes: ["left", "inner"],
+                    Description: $"Liga '{source.Name}' a '{target.Name}' pelo campo {key}"));
+
+                total++;
+            }
+        }
+
+        return items
+            .Select(item => item with { JoinCapabilities = capabilities[item.Key] })
+            .ToList()
+            .AsReadOnly();
+    }
+
+    /// <summary>
+    /// Chaves de join compartilhadas entre dois datasets: as declaradas em
+    /// <c>joinKeys</c>/<c>IsJoinKey</c> que aparecem nos campos de ambos.
+    /// </summary>
+    private static IEnumerable<string> CommonJoinKeys(
+        ReportDatasetCatalogItemDto source,
+        ReportDatasetCatalogItemDto target)
+    {
+        var targetFields = target.Fields.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var sourceKeys = source.FieldMetadata
+            .Where(metadata => metadata.IsJoinKey && !string.IsNullOrWhiteSpace(metadata.Field))
+            .Select(metadata => metadata.Field)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        return sourceKeys.Where(targetFields.Contains);
     }
 
     private static string GetDefaultAlias(string key) => key switch

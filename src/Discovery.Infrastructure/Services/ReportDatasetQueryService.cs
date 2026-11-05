@@ -8,6 +8,7 @@ using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
 
@@ -19,12 +20,25 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
 
     private readonly DiscoveryDbContext _db;
     private readonly IMemoryCache _cache;
+    private readonly ILogger<ReportDatasetQueryService>? _logger;
     private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// Resultados maiores que isso nao entram no cache: um cache sem SizeLimit
+    /// guardando ate 10.000 linhas por dataset/filtro crescia sem teto.
+    /// </summary>
+    private const int QueryCacheMaxRows = 2_000;
+
     public ReportDatasetQueryService(DiscoveryDbContext db, IMemoryCache cache)
+        : this(db, cache, null)
+    {
+    }
+
+    public ReportDatasetQueryService(DiscoveryDbContext db, IMemoryCache cache, ILogger<ReportDatasetQueryService>? logger)
     {
         _db = db;
         _cache = cache;
+        _logger = logger;
     }
 
     public async Task<ReportQueryResult> QueryAsync(ReportTemplate template, string? filtersJson, CancellationToken cancellationToken = default)
@@ -73,18 +87,52 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
             ReportDatasetType.PatchApprovals => await QueryPatchApprovalsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.PatchApprovalAudit => await QueryPatchApprovalAuditAsync(clientId, filters, cancellationToken),
             ReportDatasetType.Agents => await QueryAgentsAsync(clientId, filters, cancellationToken),
-            _ => new ReportQueryResult { Columns = ["message"], Rows = [new Dictionary<string, object?> { ["message"] = "Dataset not supported." }] }
+
+            // Antes o fallback devolvia um resultado de SUCESSO com uma linha
+            // "Dataset not supported.": o usuario recebia um arquivo inutil com
+            // status Completed e notificacao de sucesso. Adicionar um dataset ao
+            // enum sem o case aqui passava em silencio. Agora falha alto — o
+            // ProcessExecutionAsync captura, grava a mensagem e notifica.
+            _ => throw new InvalidOperationException(
+                $"O dataset '{datasetType}' ({(int)datasetType}) nao tem consulta implementada em " +
+                $"{nameof(ReportDatasetQueryService)}. Adicione o case em QuerySingleDatasetAsync.")
         };
     }
 
     private async Task<ReportQueryResult> QueryMultiSourceAsync(IReadOnlyList<ReportLayoutDataSourceDefinition> dataSources, string? runtimeFiltersJson, CancellationToken cancellationToken)
     {
-        var normalizedSources = dataSources
-            .Where(source => source.DatasetType.HasValue && !string.IsNullOrWhiteSpace(source.Alias))
+        // Antes as fontes invalidas eram REMOVIDAS sem aviso. Se a remocao
+        // deixasse uma fonte so, o relatorio voltava normalmente e o usuario
+        // achava que o multi-source funcionou; se zerava tudo, vinha um
+        // "sucesso" com uma linha de texto. Template antigo ou editado direto no
+        // banco chega aqui sem passar pelo ReportLayoutValidator, entao a guarda
+        // precisa existir tambem no caminho de execucao.
+        var invalidSources = dataSources
+            .Select((source, index) => new { source, index })
+            .Where(item => !item.source.DatasetType.HasValue || string.IsNullOrWhiteSpace(item.source.Alias))
             .ToList();
 
-        if (normalizedSources.Count == 0)
-            return new ReportQueryResult { Columns = ["message"], Rows = [new Dictionary<string, object?> { ["message"] = "No valid dataSources were provided." }] };
+        if (invalidSources.Count > 0)
+        {
+            var details = string.Join("; ", invalidSources.Select(item =>
+            {
+                var alias = string.IsNullOrWhiteSpace(item.source.Alias)
+                    ? "(alias vazio)"
+                    : $"alias '{item.source.Alias}'";
+
+                var type = item.source.DatasetType.HasValue
+                    ? $"datasetType {(int)item.source.DatasetType.Value}"
+                    : "datasetType ausente";
+
+                return $"dataSources[{item.index}]: {alias}, {type}";
+            }));
+
+            throw new InvalidOperationException(
+                "O layout multi-source tem fonte(s) invalida(s) e o relatorio nao pode ser gerado: " +
+                details + ". Cada fonte precisa de datasetType e alias.");
+        }
+
+        var normalizedSources = dataSources.ToList();
 
         var globalFilters = ParseJsonObject(runtimeFiltersJson);
         var sourceResults = new List<MultiSourceResult>(normalizedSources.Count);
@@ -102,7 +150,18 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
             if (!_cache.TryGetValue(cacheKey, out ReportQueryResult? cachedResult))
             {
                 cachedResult = await QuerySingleDatasetAsync(source.DatasetType!.Value, clientId, mergedFiltersElement, cancellationToken);
-                _cache.Set(cacheKey, cachedResult, QueryCacheTtl);
+
+                // Guardar o resultado INTEIRO no cache era um vazamento: ate
+                // 10.000 linhas por dataset, por filtro, sem SizeLimit. So
+                // entra no cache resultado pequeno, com Size declarado.
+                if (cachedResult is not null && cachedResult.Rows.Count <= QueryCacheMaxRows)
+                {
+                    _cache.Set(cacheKey, cachedResult, new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = QueryCacheTtl,
+                        Size = 1
+                    });
+                }
             }
 
             sourceResults.Add(new MultiSourceResult(source, cachedResult!));
@@ -111,69 +170,132 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
         if (sourceResults.Count == 1)
             return sourceResults[0].Result;
 
-        // Build lookup of sources by alias for chained joins (A←B←C pattern)
-        var sourceByAlias = sourceResults
-            .GroupBy(sr => sr.Source.Alias!)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        // D1: a base e a fonte MARCADA com base=true. Sem a marca nada muda: a
+        // base continua sendo dataSources[0] (compatibilidade total com o que
+        // ja esta gravado). Promover aqui deixa o laco de join — que percorre a
+        // partir do indice 1 — funcionando sem nenhuma outra alteracao.
+        sourceResults = PromoteBaseSource(sourceResults);
 
         var baseSource = sourceResults[0];
+
+        // B1: TODAS as fontes recebem o nome puro do campo alem de "{alias}.{field}".
+        // Antes so a primeira (a base) passava por BuildBaseRow; as demais ficavam
+        // apenas com o nome qualificado, entao um join por "siteId" puro nunca
+        // encontrava a chave na segunda fonte.
         var mergedRows = baseSource.Result.Rows
             .Select(row => BuildBaseRow(baseSource.Source.Alias!, row))
             .ToList();
+
+        // B2: indice de join pre-computado UMA vez por fonte (nao por linha) e
+        // valores normalizados com InvariantCulture (ToString() de DateTime/Guid
+        // depende da cultura do processo e derrubava o match).
 
         // Process joins in order — each source joins with whichever alias it specifies (chained)
         for (var index = 1; index < sourceResults.Count; index++)
         {
             var current = sourceResults[index];
+            var alias = current.Source.Alias!;
+
+            // B1 (cont.): as linhas da fonte corrente tambem ganham o nome puro.
+            var currentRows = current.Result.Rows
+                .Select(row => BuildBaseRow(alias, row))
+                .ToList();
             var join = current.Source.Join;
             if (join is null || string.IsNullOrWhiteSpace(join.SourceKey))
                 continue;
 
-            var sourceKey = join.SourceKey;
+            var sourceKey = join.SourceKey!;
             var targetKey = string.IsNullOrWhiteSpace(join.TargetKey) ? sourceKey : join.TargetKey!;
             var joinAlias = string.IsNullOrWhiteSpace(join.JoinToAlias)
                 ? baseSource.Source.Alias!
                 : join.JoinToAlias!;
             var joinType = string.Equals(join.JoinType, "inner", StringComparison.OrdinalIgnoreCase) ? "inner" : "left";
 
-            var lookup = current.Result.Rows
-                .GroupBy(row => GetJoinKey(row, sourceKey))
-                .Where(group => !string.IsNullOrWhiteSpace(group.Key))
-                .ToDictionary(group => group.Key!, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+            // Indice construido uma unica vez para a fonte inteira.
+            var lookup = new Dictionary<string, List<Dictionary<string, object?>>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in currentRows)
+            {
+                var key = GetJoinKey(row, alias, sourceKey);
+                if (string.IsNullOrWhiteSpace(key))
+                    continue;
 
+                if (!lookup.TryGetValue(key, out var bucket))
+                {
+                    bucket = [];
+                    lookup[key] = bucket;
+                }
+
+                bucket.Add(row);
+            }
+
+            var leftCount = mergedRows.Count;
+            var matchedLeftCount = 0;
             var nextRows = new List<Dictionary<string, object?>>();
+
             foreach (var left in mergedRows)
             {
-                var leftKey = GetJoinKey(left, targetKey);
-                if (string.IsNullOrWhiteSpace(leftKey))
+                var leftKey = GetJoinKey(left, joinAlias, targetKey);
+                if (string.IsNullOrWhiteSpace(leftKey) || !lookup.TryGetValue(leftKey, out var matches) || matches.Count == 0)
                 {
+                    // left preserva a linha da base; inner descarta. Em left, as
+                    // colunas da fonte entram como null para existirem no
+                    // dicionario — sem isso o renderer quebrava com KeyNotFound.
                     if (joinType == "left")
-                        nextRows.Add(left);
+                    {
+                        var semMatch = new Dictionary<string, object?>(left, StringComparer.OrdinalIgnoreCase);
+                        foreach (var column in current.Result.Columns)
+                            semMatch[$"{alias}.{column}"] = null;
+
+                        nextRows.Add(semMatch);
+                    }
                     continue;
                 }
 
-                if (!lookup.TryGetValue(leftKey, out var matches) || matches.Count == 0)
-                {
-                    if (joinType == "left")
-                        nextRows.Add(left);
-                    continue;
-                }
+                matchedLeftCount++;
 
                 foreach (var match in matches)
                 {
                     var merged = new Dictionary<string, object?>(left, StringComparer.OrdinalIgnoreCase);
-                    foreach (var field in match.Keys)
+                    foreach (var (field, value) in match)
                     {
-                        merged[$"{current.Source.Alias}.{field}"] = match[field];
+                        // A fonte ja traz nome puro + qualificado; copia os dois.
+                        merged[field] = value;
                     }
 
-                    // Atalho útil para join com alias explícito no target (ex.: hw.agentId)
+                    // Atalho para join com alias explicito no target (ex.: hw.agentId)
                     merged[$"{joinAlias}.{targetKey}"] = left.TryGetValue($"{joinAlias}.{targetKey}", out var targetValue)
                         ? targetValue
                         : left.TryGetValue(targetKey, out var plainValue) ? plainValue : null;
 
                     nextRows.Add(merged);
                 }
+            }
+
+            // B3: teto do produto cartesiano com ERRO explicito, nunca truncar em silencio.
+            if (nextRows.Count > HardLimit)
+            {
+                throw new InvalidOperationException(
+                    $"O join '{joinAlias}.{targetKey}' = '{alias}.{sourceKey}' produziu {nextRows.Count} linhas " +
+                    $"(limite {HardLimit}). Refine os filtros dos datasets '{joinAlias}' e '{alias}' para reduzir o cruzamento.");
+            }
+
+            // B4: nenhum match entre a base e a fonte => falha acionavel, em vez
+            // de um relatorio que "parece" pronto mas sai com as colunas do join
+            // 100% nulas.
+            // Uma fonte VAZIA tambem e falha: era o caso pior, em que o relatorio
+            // saia com a coluna do join totalmente nula e nenhum aviso.
+            if (matchedLeftCount == 0 && leftCount > 0)
+            {
+                var reason = currentRows.Count == 0
+                    ? $"O join por '{targetKey}' nao casou nenhuma linha entre '{joinAlias}' e '{alias}': " +
+                      $"o dataset '{alias}' nao retornou linhas para os filtros informados."
+                    : $"O join por '{targetKey}' nao casou nenhuma linha entre '{joinAlias}' e '{alias}': " +
+                      $"{leftCount} linha(s) na base e {currentRows.Count} na fonte, sem chave em comum.";
+                _logger.LogWarning(
+                    "Report multi-source join sem correspondencia: {Reason} (sourceKey={SourceKey}, targetKey={TargetKey})",
+                    reason, sourceKey, targetKey);
+
+                throw new InvalidOperationException(reason);
             }
 
             mergedRows = nextRows;
@@ -209,30 +331,103 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
         };
     }
 
+    /// <summary>
+    /// D1: coloca a fonte principal na posicao 0.
+    ///
+    /// A base e a fonte marcada com <c>base=true</c>; sem marca, mantem
+    /// <c>dataSources[0]</c> — nenhum layout antigo muda de comportamento.
+    /// As demais fontes sao reordenadas para que cada uma venha DEPOIS da fonte
+    /// em que se liga (joinToAlias), senao o laco de join processaria uma fonte
+    /// antes da sua origem. Fontes que nao alcancam a base ficam no fim, na ordem
+    /// original: o validador ja reprova esse layout antes de chegar aqui.
+    /// </summary>
+    private static List<MultiSourceResult> PromoteBaseSource(List<MultiSourceResult> sourceResults)
+    {
+        var marked = sourceResults.FirstOrDefault(result => result.Source.Base == true);
+        if (marked is null)
+            return sourceResults;
+
+        var ordered = new List<MultiSourceResult> { marked };
+        var pending = sourceResults.Where(result => !ReferenceEquals(result, marked)).ToList();
+
+        // Insere cada fonte assim que a sua origem (joinToAlias) ja estiver posta.
+        while (pending.Count > 0)
+        {
+            var placedIndex = pending.FindIndex(candidate =>
+            {
+                var joinToAlias = candidate.Source.Join?.JoinToAlias;
+                if (string.IsNullOrWhiteSpace(joinToAlias))
+                    return false;
+
+                return ordered.Any(placed =>
+                    string.Equals(placed.Source.Alias, joinToAlias, StringComparison.OrdinalIgnoreCase));
+            });
+
+            if (placedIndex < 0)
+                break; // Sem progresso: resto fica na ordem original (layout invalido).
+
+            ordered.Add(pending[placedIndex]);
+            pending.RemoveAt(placedIndex);
+        }
+
+        ordered.AddRange(pending);
+        return ordered;
+    }
+
+    /// <summary>
+    /// Duplica cada campo da fonte em duas chaves: o nome puro e "{alias}.{campo}".
+    /// Aplicado a TODAS as fontes (antes so a base passava por aqui, entao a
+    /// segunda fonte nao tinha o nome puro e o join por campo simples falhava).
+    /// O valor e o MESMO objeto: nenhuma conversao de tipo e introduzida.
+    /// </summary>
     private static Dictionary<string, object?> BuildBaseRow(string alias, IReadOnlyDictionary<string, object?> row)
     {
         var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var field in row.Keys)
+        foreach (var (field, value) in row)
         {
-            result[field] = row[field];
-            result[$"{alias}.{field}"] = row[field];
+            result[field] = value;
+            result[$"{alias}.{field}"] = value;
         }
 
         return result;
     }
 
-    private static string? GetJoinKey(IReadOnlyDictionary<string, object?> row, string key)
+    /// <summary>
+    /// Resolve a chave de join de uma linha, preferindo "{alias}.{key}" e caindo
+    /// para o nome puro. A versao antiga procurava por <c>EndsWith(".{key}")</c>
+    /// em TODAS as chaves, o que casava a chave errada quando dois campos
+    /// terminavam igual (ex: "target" e "sensorTarget").
+    /// </summary>
+    private static string? GetJoinKey(IReadOnlyDictionary<string, object?> row, string alias, string key)
     {
-        if (row.TryGetValue(key, out var value) && value is not null)
-            return value.ToString();
+        if (!string.IsNullOrWhiteSpace(alias) &&
+            row.TryGetValue($"{alias}.{key}", out var aliased) && aliased is not null)
+        {
+            return NormalizeJoinKey(aliased);
+        }
 
-        // tenta resolver formato alias.key quando key vier sem alias
-        var dottedCandidate = row.Keys.FirstOrDefault(current => current.EndsWith($".{key}", StringComparison.OrdinalIgnoreCase));
-        if (dottedCandidate is not null && row.TryGetValue(dottedCandidate, out var dottedValue) && dottedValue is not null)
-            return dottedValue.ToString();
+        if (row.TryGetValue(key, out var value) && value is not null)
+            return NormalizeJoinKey(value);
 
         return null;
     }
+
+    /// <summary>
+    /// Normaliza o valor da chave para comparacao. ToString() de DateTime/Guid
+    /// segue a cultura do processo: um relatorio gerado em pt-BR podia nao casar
+    /// com o mesmo dado lido em outra cultura.
+    /// </summary>
+    private static string? NormalizeJoinKey(object? value) => value switch
+    {
+        null => null,
+        string text => text.Trim(),
+        Guid guid => guid.ToString("D"),
+        DateTime dateTime => dateTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+        DateTimeOffset offset => offset.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+        bool flag => flag ? "true" : "false",
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString()
+    };
 
     private static JsonObject? ParseJsonObject(string? json)
     {

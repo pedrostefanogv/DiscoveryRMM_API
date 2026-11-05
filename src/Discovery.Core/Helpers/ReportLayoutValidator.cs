@@ -165,7 +165,20 @@ public static partial class ReportLayoutValidator
         if (dataSources.Count > MaxDataSources)
             errors.Add($"dataSources supports at most {MaxDataSources} sources.");
 
-        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // A fonte dispensada de join e a BASE, nao a posicao 0: com base:true a
+        // fonte marcada pode estar em qualquer indice do array.
+        var baseAlias = dataSources.FirstOrDefault(source => source.Base == true)?.Alias
+            ?? dataSources[0].Alias;
+
+        // Aliases declarados por DUPLICIDADE (incremental) e o conjunto COMPLETO
+        // para resolver joinToAlias: com base explicita uma fonte pode apontar
+        // para um alias declarado depois dela no array.
+        var declaredAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allAliases = dataSources
+            .Where(source => !string.IsNullOrWhiteSpace(source.Alias))
+            .Select(source => source.Alias!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         for (var index = 0; index < dataSources.Count; index++)
         {
             var source = dataSources[index];
@@ -185,16 +198,19 @@ public static partial class ReportLayoutValidator
                 if (!AliasRegex().IsMatch(source.Alias))
                     errors.Add($"dataSources[{index}].alias must contain only letters, numbers and underscore.");
 
-                if (!aliases.Add(source.Alias))
+                if (!declaredAliases.Add(source.Alias))
                     errors.Add($"dataSources[{index}].alias '{source.Alias}' is duplicated.");
             }
 
-            if (index == 0)
+            var isBase = !string.IsNullOrWhiteSpace(source.Alias) && !string.IsNullOrWhiteSpace(baseAlias) &&
+                string.Equals(source.Alias, baseAlias, StringComparison.OrdinalIgnoreCase);
+
+            if (isBase)
                 continue;
 
             if (source.Join is null)
             {
-                errors.Add($"dataSources[{index}].join is required from second source onward.");
+                errors.Add($"dataSources[{index}].join is required for every source that is not the base.");
                 continue;
             }
 
@@ -204,8 +220,95 @@ public static partial class ReportLayoutValidator
             if (!string.IsNullOrWhiteSpace(source.Join.JoinType) && !AllowedJoinTypes.Contains(source.Join.JoinType))
                 errors.Add($"dataSources[{index}].join.joinType must be one of: {string.Join(", ", AllowedJoinTypes)}.");
 
-            if (!string.IsNullOrWhiteSpace(source.Join.JoinToAlias) && !aliases.Contains(source.Join.JoinToAlias))
-                errors.Add($"dataSources[{index}].join.joinToAlias references unknown alias '{source.Join.JoinToAlias}'.");
+            if (!string.IsNullOrWhiteSpace(source.Join.JoinToAlias))
+            {
+                if (!allAliases.Contains(source.Join.JoinToAlias))
+                {
+                    errors.Add($"dataSources[{index}].join.joinToAlias references unknown alias '{source.Join.JoinToAlias}'.");
+                }
+                else if (!string.IsNullOrWhiteSpace(source.Alias) &&
+                         string.Equals(source.Alias, source.Join.JoinToAlias, StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add($"dataSources[{index}].join.joinToAlias: a fonte '{source.Alias}' nao pode se ligar a si mesma.");
+                }
+            }
+        }
+
+        ValidateBaseSource(dataSources, errors);
+    }
+
+    /// <summary>
+    /// D2/D3: no maximo UMA fonte marcada como base, e todo joinToAlias precisa
+    /// ALCANCAR a base. Antes so conferia se o alias existia, entao um grafo
+    /// desconexo (ex: A -&gt; B, C -&gt; D) passava e o join nunca casava nada.
+    /// </summary>
+    private static void ValidateBaseSource(
+        IReadOnlyList<ReportLayoutDataSourceDefinition> dataSources,
+        ICollection<string> errors)
+    {
+        var marked = dataSources
+            .Select((source, index) => new { source, index })
+            .Where(item => item.source.Base == true)
+            .ToList();
+
+        if (marked.Count > 1)
+        {
+            errors.Add(
+                "dataSources: apenas UMA fonte pode ser marcada como base (base=true). " +
+                $"Marcadas: {string.Join(", ", marked.Select(m => m.source.Alias ?? $"#{m.index}"))}.");
+            return;
+        }
+
+        // Sem marca explicita a base e a primeira fonte — comportamento historico
+        // preservado, layouts antigos continuam validos.
+        var baseAlias = marked.Count == 1
+            ? marked[0].source.Alias
+            : dataSources[0].Alias;
+
+        if (string.IsNullOrWhiteSpace(baseAlias))
+            return;
+
+        // Um alias so e "alcancavel" se, seguindo joinToAlias de tras para frente,
+        // chega na base. Isso pega tanto o no solto quanto o ciclo fechado.
+        var byAlias = dataSources
+            .Where(source => !string.IsNullOrWhiteSpace(source.Alias))
+            .GroupBy(source => source.Alias!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+        for (var index = 0; index < dataSources.Count; index++)
+        {
+            var source = dataSources[index];
+            if (string.IsNullOrWhiteSpace(source.Alias))
+                continue;
+
+            if (string.Equals(source.Alias, baseAlias, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var current = source;
+
+            while (current is not null && !string.IsNullOrWhiteSpace(current.Alias) && visited.Add(current.Alias!))
+            {
+                var nextAlias = current.Join?.JoinToAlias;
+                if (string.IsNullOrWhiteSpace(nextAlias) || !byAlias.TryGetValue(nextAlias!, out var next))
+                    break;
+
+                if (string.Equals(next.Alias, baseAlias, StringComparison.OrdinalIgnoreCase))
+                {
+                    visited.Add(baseAlias!);
+                    break;
+                }
+
+                current = next;
+            }
+
+            // Chegou na base se o laco a marcou como visitada ao final da cadeia.
+            if (!visited.Contains(baseAlias!))
+            {
+                errors.Add(
+                    $"dataSources[{index}].join.joinToAlias: a fonte '{source.Alias}' nao alcanca a base " +
+                    $"'{baseAlias}' seguindo joinToAlias (grafo desconexo ou ciclico).");
+            }
         }
     }
 
