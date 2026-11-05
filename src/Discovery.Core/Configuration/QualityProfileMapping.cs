@@ -51,7 +51,12 @@ public static class QualityProfileMapping
     /// </summary>
     public static bool IsCodecValidForTransport(RemoteCodec codec, RemoteTransport transport) => codec switch
     {
+        // Referência intencional ao membro obsoleto: esta é justamente a
+        // validação que o REJEITA. Não trocar por literal — mantém a ligação
+        // nomeada com o enum caso o membro seja removido no futuro.
+#pragma warning disable CS0618
         RemoteCodec.H264 => false,
+#pragma warning restore CS0618
         _ => true // JPEG e WebP funcionam no transporte NATS
     };
 }

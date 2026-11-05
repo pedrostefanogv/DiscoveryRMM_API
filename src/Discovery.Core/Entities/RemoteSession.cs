@@ -17,8 +17,13 @@ public class RemoteSession
     /// <summary>Tipo de sessão remota.</summary>
     public RemoteSessionKind Kind { get; set; } = RemoteSessionKind.Screen;
 
-    /// <summary>Transporte em uso (Webrtc, Nats, Http).</summary>
-    public RemoteTransport Transport { get; set; } = RemoteTransport.Webrtc;
+    /// <summary>
+    /// Transporte em uso. O default é <see cref="RemoteTransport.Nats"/> — o
+    /// WebRTC foi removido do agente (ver <see cref="RemoteTransport.Webrtc"/>,
+    /// obsoleto). Usa-se o literal 1 porque referenciar o membro obsoleto
+    /// geraria aviso CS0618 num inicializador.
+    /// </summary>
+    public RemoteTransport Transport { get; set; } = (RemoteTransport)1; // = RemoteTransport.Nats
 
     /// <summary>Perfil de qualidade do stream (preset inicial).</summary>
     public QualityProfile QualityProfile { get; set; } = QualityProfile.High;

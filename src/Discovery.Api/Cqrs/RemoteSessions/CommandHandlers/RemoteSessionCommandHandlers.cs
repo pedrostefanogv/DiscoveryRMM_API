@@ -48,6 +48,14 @@ public sealed class StartRemoteSessionCommandHandler(
         if (!Enum.IsDefined(cmd.Codec))
             return Result<RemoteSessionResponseDto>.Failure(Error.Validation("codec", $"Invalid value: {cmd.Codec}"));
 
+        // Codec obsoleto: o valor H264 continua DEFINIDO no enum (para leitura de
+        // dados históricos), então Enum.IsDefined o aceita. Rejeitamos aqui
+        // explicitamente para que o pedido falhe com erro claro em vez de cair
+        // silenciosamente em outro codec.
+        if (!QualityProfileMapping.IsCodecValidForTransport(cmd.Codec, cmd.Transport))
+            return Result<RemoteSessionResponseDto>.Failure(Error.Validation("codec",
+                $"Codec {cmd.Codec} is not supported with transport {cmd.Transport}. Use JPEG or WebP."));
+
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<RemoteSessionResponseDto>.Failure(Error.NotFound("Agent not found."));
 
@@ -604,7 +612,7 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
         if (!QualityProfileMapping.IsCodecValidForTransport(effectiveCodec, session.Transport))
         {
             return Result<RemoteSessionResponseDto>.Failure(
-                Error.Validation("Codec", $"Codec {effectiveCodec} is not supported with transport {session.Transport}. Use JPEG or WebP for NATS, or switch to WebRTC for H264."));
+                Error.Validation("Codec", $"Codec {effectiveCodec} is not supported with transport {session.Transport}. Use JPEG or WebP (WebRTC/H.264 were removed and are no longer selectable)."));
         }
 
         // Gerencia modo Auto no metrics store

@@ -58,11 +58,18 @@ public class RecordingManifestWriter
             "Assembling recording: {FrameCount} frames, codec {Codec}, {Width}x{Height}, {Fps:F1} FPS",
             frames.Count, codec, width, height, averageFps);
 
-        return codec switch
+        // Leitura de gravações HISTÓRICAS: sessões antigas podem ter Codec=H264
+        // persistido (o valor do enum foi preservado exatamente para isso).
+        // Não é seleção de codec novo.
+#pragma warning disable CS0618
+        var result = codec switch
         {
             RemoteCodec.H264 => AssembleMp4(frames, width, height, averageFps),
             _ => AssembleWebM(frames, codec, width, height, averageFps, ct)
         };
+#pragma warning restore CS0618
+
+        return result;
     }
 
     /// <summary>
@@ -247,12 +254,16 @@ public class RecordingManifestWriter
         writer.Write(new byte[] { 0x83, 0x81, 0x01 });
 
         // CodecID
+        // CodecID do manifesto: mapeia o codec HISTÓRICO da gravação, incluindo
+        // sessões antigas em H264. Referência intencional ao membro obsoleto.
+#pragma warning disable CS0618
         var codecId = codec switch
         {
             RemoteCodec.H264 => "V_MPEG4/ISO/AVC",
             RemoteCodec.WebP => "V_VP8",
             _ => "V_MJPEG"
         };
+#pragma warning restore CS0618
         writer.Write(new byte[] { 0x86 });
         var codecBytes = Encoding.ASCII.GetBytes(codecId);
         WriteVariableLengthUInt(writer.BaseStream, (ulong)codecBytes.Length);

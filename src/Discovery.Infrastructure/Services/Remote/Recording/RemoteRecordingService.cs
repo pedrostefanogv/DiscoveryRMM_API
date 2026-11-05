@@ -47,7 +47,11 @@ public class RemoteRecordingService : IRemoteRecordingService
             Status = "recording",
             SourceCodec = session.Codec,
             StorageProvider = ResolveStorageProvider(),
+            // Container derivado do codec da SESSÃO. Sessões históricas podem
+            // ter H264 persistido; referência intencional ao membro obsoleto.
+#pragma warning disable CS0618
             ContainerFormat = session.Codec == RemoteCodec.H264 ? "mp4" : "webm",
+#pragma warning restore CS0618
             StartedAt = DateTime.UtcNow,
             StartedBy = userId.ToString(),
             RetentionExpiresAt = DateTime.UtcNow.AddDays(_options.Recording.Retention.DefaultDays)
