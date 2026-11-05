@@ -18,8 +18,7 @@ namespace Discovery.Infrastructure.Cqrs.AutoTicketRules;
 /// resolvida (com herança) e a PROVENIÊNCIA de cada campo.
 /// </summary>
 public sealed class GetAutoTicketPolicyQueryHandler(
-    IAutoTicketPolicyResolver resolver,
-    DiscoveryDbContext db) : IRequestHandler<GetAutoTicketPolicyQuery, Result<AutoTicketPolicyDto>>
+    IAutoTicketPolicyResolver resolver) : IRequestHandler<GetAutoTicketPolicyQuery, Result<AutoTicketPolicyDto>>
 {
     public async Task<Result<AutoTicketPolicyDto>> Handle(GetAutoTicketPolicyQuery q, CancellationToken ct)
     {

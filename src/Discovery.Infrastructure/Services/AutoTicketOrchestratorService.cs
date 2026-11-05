@@ -272,7 +272,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             return ex;
         }
 
-        var ticketRequest = BuildTicketRequest(monitoringEvent, decision.Rule, labels);
+        var ticketRequest = BuildTicketRequest(monitoringEvent, decision.Rule!, labels);
 
         // Check reusable open ticket
         var (reused, reuseResult) = await TryReuseOpenTicketAsync(monitoringEvent, decision, ticketRequest, dedupKey, ct);
@@ -373,7 +373,7 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
 
         _logger.LogInformation(
             "AutoTicket created ticket {TicketId} for monitoring event {MonitoringEventId} using rule {RuleId} and dedupKey {DedupKey}.",
-            ticket.Id, monitoringEvent.Id, decision.Rule.Id, LogSanitizer.Sanitize(dedupKey));
+            ticket.Id, monitoringEvent.Id, decision.Rule!.Id, LogSanitizer.Sanitize(dedupKey));
 
         return execution;
     }

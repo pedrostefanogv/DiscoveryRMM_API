@@ -1051,7 +1051,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             .Select(group => new PatchInventoryGroup
             {
                 GroupKey = group.Key,
-                Title = group.Max(row => row.Update.Title),
+                Title = group.Max(row => row.Update.Title) ?? string.Empty,
                 Classification = group.Max(row => row.Update.Classification),
                 Severity = group.Max(row => row.Update.Severity),
                 PublishedAt = group.Max(row => row.Update.PublishedAt),

@@ -150,7 +150,7 @@ public sealed class ExecuteTicketRunbookCommandHandler(
             var preview = Truncate(outputPreview) ?? "(sem saída)";
             var content = $"[Runbook] {label} — passo {step.Order}: {(ok ? "OK" : "FALHA")} (exitCode {exitCode?.ToString() ?? "-"}): {preview}";
             var result = await mediator.Send(new AddTicketCommentCommand(cmd.TicketId, content, true, cmd.OperatorId, cmd.OperatorName), ct);
-            return result.IsSuccess ? result.Value.CommentId : null;
+            return result is { IsSuccess: true, Value: not null } ? result.Value.CommentId : null;
         }
         catch (Exception ex)
         {

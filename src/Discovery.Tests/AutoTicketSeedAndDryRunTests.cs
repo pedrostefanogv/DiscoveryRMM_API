@@ -28,7 +28,7 @@ public class AutoTicketSeedAndDryRunTests
     public async Task SeedDefaults_ShouldCreateConservativeRuleSet_OnFirstRun()
     {
         var repo = new InMemoryAutoTicketRuleRepository();
-        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo, new AutoTicketRuleEngineService(repo, new MonitoringEventNormalizationService()));
+        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo);
 
         var result = await handler.Handle(
             new SeedDefaultAutoTicketRulesCommand(new SeedDefaultAutoTicketRulesRequest
@@ -50,7 +50,7 @@ public class AutoTicketSeedAndDryRunTests
     public async Task SeedDefaults_ShouldBeIdempotent_OnSecondRun()
     {
         var repo = new InMemoryAutoTicketRuleRepository();
-        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo, new AutoTicketRuleEngineService(repo, new MonitoringEventNormalizationService()));
+        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo);
         var request = new SeedDefaultAutoTicketRulesRequest { ClientId = Guid.NewGuid(), IsEnabled = true };
 
         var first = await handler.Handle(new SeedDefaultAutoTicketRulesCommand(request), CancellationToken.None);
@@ -70,7 +70,7 @@ public class AutoTicketSeedAndDryRunTests
     public async Task SeedDefaults_ShouldNotCreateTicketsForNoisySensors()
     {
         var repo = new InMemoryAutoTicketRuleRepository();
-        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo, new AutoTicketRuleEngineService(repo, new MonitoringEventNormalizationService()));
+        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo);
 
         await handler.Handle(
             new SeedDefaultAutoTicketRulesCommand(new SeedDefaultAutoTicketRulesRequest { ClientId = Guid.NewGuid() }),
@@ -94,7 +94,7 @@ public class AutoTicketSeedAndDryRunTests
     public async Task SeedDefaults_ShouldRejectEmptyClientId()
     {
         var repo = new InMemoryAutoTicketRuleRepository();
-        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo, new AutoTicketRuleEngineService(repo, new MonitoringEventNormalizationService()));
+        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo);
 
         var result = await handler.Handle(
             new SeedDefaultAutoTicketRulesCommand(new SeedDefaultAutoTicketRulesRequest { ClientId = Guid.Empty }),
@@ -107,7 +107,7 @@ public class AutoTicketSeedAndDryRunTests
     public async Task SeedDefaults_ShouldScopeRulesToTheClient()
     {
         var repo = new InMemoryAutoTicketRuleRepository();
-        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo, new AutoTicketRuleEngineService(repo, new MonitoringEventNormalizationService()));
+        var handler = new SeedDefaultAutoTicketRulesCommandHandler(repo);
         var clientId = Guid.NewGuid();
 
         await handler.Handle(

@@ -19,8 +19,7 @@ namespace Discovery.Infrastructure.Cqrs.AutoTicketRules;
 /// AlertOnly (visíveis, mas sem chamado).
 /// </summary>
 public sealed class SeedDefaultAutoTicketRulesCommandHandler(
-    IAutoTicketRuleRepository ruleRepository,
-    IAutoTicketRuleEngineService ruleEngine) : IRequestHandler<SeedDefaultAutoTicketRulesCommand, Result<SeedDefaultAutoTicketRulesResponse>>
+    IAutoTicketRuleRepository ruleRepository) : IRequestHandler<SeedDefaultAutoTicketRulesCommand, Result<SeedDefaultAutoTicketRulesResponse>>
 {
     /// <summary>
     /// (Nometemplate, AlertCode, Ação, Prioridade). Nomes são a chave de idempotência.

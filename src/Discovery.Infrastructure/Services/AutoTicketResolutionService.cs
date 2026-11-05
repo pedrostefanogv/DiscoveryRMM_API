@@ -26,7 +26,6 @@ namespace Discovery.Infrastructure.Services;
 public class AutoTicketResolutionService(
     DiscoveryDbContext db,
     IAutoTicketPolicyResolver policyResolver,
-    IDedupFingerprintService dedupFingerprint,
     ILogger<AutoTicketResolutionService> logger) : IAutoTicketResolutionService
 {
     public async Task<Ticket?> CloseCorrelatedTicketAsync(

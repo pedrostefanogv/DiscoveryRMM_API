@@ -216,7 +216,6 @@ public class AutoTicketResolutionTests
     private static AutoTicketResolutionService BuildService(DiscoveryDbContext db, ResolvedAutoTicketPolicy policy)
         => new(db,
                new FakePolicyResolver(policy),
-               new DedupFingerprintService(new MonitoringEventNormalizationService()),
                NullLogger<AutoTicketResolutionService>.Instance);
 
     private static WorkflowState SeedWorkflow(DiscoveryDbContext db, Guid clientId)
