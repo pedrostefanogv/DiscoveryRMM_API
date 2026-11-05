@@ -199,6 +199,96 @@ public class SeedSensorReportTemplatesTests
         Assert.That(attribute!.Version, Is.EqualTo(20270106_271));
     }
 
+
+    // ── executionSchemaJson: o JSON aninhado que vai para a coluna json ──
+    //
+    // Estes testes existem por causa de um incidente real (2026-11-05): o campo
+    // 'filtersJson' e uma STRING que contem JSON, e as aspas internas estavam
+    // sem escape, produzindo JSON invalido. O Postgres rejeitou o INSERT com
+    // 22P02 (invalid input syntax for type json) na coluna execution_schema_json,
+    // a migration abortou, a API nao subiu e o update disparou rollback.
+    //
+    // A suite anterior validava apenas o LayoutJson — o schema nunca era
+    // parseado, entao o defeito passou pelo CI. Estes casos fecham essa lacuna.
+
+    private static string ReadExecutionSchemaJson(int seedNumber) => seedNumber switch
+    {
+        1 => M271_SeedSensorReportTemplates.SensorFailuresSchema,
+        2 => M271_SeedSensorReportTemplates.HardwareSensorsSchema,
+        _ => throw new ArgumentOutOfRangeException(nameof(seedNumber))
+    };
+
+    /// <summary>
+    /// O executionSchemaJson precisa ser JSON VALIDO: ele e gravado numa coluna
+    /// json, e um documento malformado aborta a migration inteira no boot.
+    /// </summary>
+    [TestCase(1, TestName = "SensorFailures_Schema_IsValidJson")]
+    [TestCase(2, TestName = "HardwareSensors_Schema_IsValidJson")]
+    public void SeedExecutionSchema_IsValidJson(int seedNumber)
+    {
+        var message = $"executionSchemaJson do seed {seedNumber} nao e JSON valido (a coluna e do tipo json)";
+        Assert.DoesNotThrow(() => JsonDocument.Parse(ReadExecutionSchemaJson(seedNumber)), message);
+    }
+
+    /// <summary>
+    /// Cada preset tem um 'filtersJson' — uma STRING que contem JSON. As aspas
+    /// internas DEVEM estar escapadas; sem isso o documento externo quebra.
+    /// Este e o caso que teria pego o incidente de 2026-11-05.
+    /// </summary>
+    [TestCase(1, TestName = "SensorFailures_SamplePresetFilters_AreValidJson")]
+    [TestCase(2, TestName = "HardwareSensors_SamplePresetFilters_AreValidJson")]
+    public void SeedSamplePresetFilters_AreValidJson(int seedNumber)
+    {
+        using var document = JsonDocument.Parse(ReadExecutionSchemaJson(seedNumber));
+        Assert.That(document.RootElement.TryGetProperty("sampleFilterPresets", out var presets), Is.True,
+            $"o schema do seed {seedNumber} deveria declarar sampleFilterPresets");
+        Assert.That(presets.GetArrayLength(), Is.GreaterThan(0),
+            $"sampleFilterPresets do seed {seedNumber} esta vazio");
+
+        foreach (var preset in presets.EnumerateArray())
+        {
+            var name = preset.GetProperty("name").GetString();
+            Assert.That(preset.TryGetProperty("filtersJson", out var filtersJson), Is.True,
+                $"o preset '{name}' do seed {seedNumber} nao tem filtersJson");
+
+            var inner = filtersJson.GetString();
+            Assert.That(inner, Is.Not.Null.And.Not.Empty,
+                $"filtersJson do preset '{name}' do seed {seedNumber} esta vazio");
+            var innerMessage = $"filtersJson do preset '{name}' do seed {seedNumber} nao e JSON valido: {inner}";
+            Assert.DoesNotThrow(() => JsonDocument.Parse(inner!), innerMessage);
+        }
+    }
+
+    /// <summary>
+    /// O schema precisa declarar os campos que os presets referenciam: um preset
+    /// que filtra por campo inexistente nasce quebrado para o usuario.
+    /// </summary>
+    [TestCase(1, TestName = "SensorFailures_Schema_DeclaresFilterNames")]
+    [TestCase(2, TestName = "HardwareSensors_Schema_DeclaresFilterNames")]
+    public void SeedExecutionSchema_DeclaresFilterNames(int seedNumber)
+    {
+        using var document = JsonDocument.Parse(ReadExecutionSchemaJson(seedNumber));
+        Assert.That(document.RootElement.TryGetProperty("filters", out var filters), Is.True);
+
+        var declared = filters.EnumerateArray()
+            .Select(f => f.GetProperty("name").GetString())
+            .Where(n => !string.IsNullOrEmpty(n))
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var preset in document.RootElement.GetProperty("sampleFilterPresets").EnumerateArray())
+        {
+            var name = preset.GetProperty("name").GetString();
+            using var inner = JsonDocument.Parse(preset.GetProperty("filtersJson").GetString()!);
+
+            foreach (var property in inner.RootElement.EnumerateObject())
+            {
+                // orderBy/orderDirection sao de ordenacao, nao filtros do catalogo.
+                if (property.Name is "orderBy" or "orderDirection") continue;
+                Assert.That(declared, Does.Contain(property.Name),
+                    $"o preset '{name}' do seed {seedNumber} filtra por '{property.Name}', que o schema nao declara");
+            }
+        }
+    }
     private static ReportDatasetCatalogItemDto FindByType(int datasetType)
         => Catalog.First(item => item.DatasetType == datasetType);
 }

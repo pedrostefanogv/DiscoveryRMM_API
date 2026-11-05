@@ -102,7 +102,12 @@ public class M271_SeedSensorReportTemplates : Migration
     { ""name"": ""orientation"", ""label"": ""Orientacao"", ""type"": 2, ""required"": false, ""group"": ""Formatacao"", ""description"": ""Orientacao da pagina do relatorio."", ""uiComponent"": 2, ""allowedValues"": [""landscape"", ""portrait""], ""defaultValue"": ""landscape"" },
     { ""name"": ""limit"", ""label"": ""Limite de linhas"", ""type"": 4, ""required"": false, ""group"": ""Saida"", ""description"": ""Maximo recomendado: 10000."", ""uiComponent"": 5, ""defaultValue"": ""1000"", ""min"": 1, ""max"": 10000 }";
 
-    private static string SensorFailuresSchema => @"
+    /// <summary>Schema de execucao do template "Sensores em Falha por Agente".
+    /// Exposto para o teste validar exatamente a string que o seed insere —
+    /// este bloco contem o campo json aninhado "filtersJson", cujo escape
+    /// errado fazia o INSERT falhar com 22P02 (invalid input syntax for type
+    /// json) e derrubava a API no boot.</summary>
+    public static string SensorFailuresSchema => @"
 {
   ""scopeType"": 3,
   ""dateMode"": 1,
@@ -122,13 +127,15 @@ public class M271_SeedSensorReportTemplates : Migration
     " + OutputFilters("agentHostname", ["agentHostname", "sensorName", "sensorType", "status", "severity", "lastRunAt"]) + @"
   ],
   ""sampleFilterPresets"": [
-    { ""name"": ""Falhas (todas)"", ""description"": ""Sensores em falha de todos os agentes, por severidade"", ""filtersJson"": ""{ ""status"": ""Failed"", ""orderBy"": ""severity"", ""orderDirection"": ""asc"" }"" },
-    { ""name"": ""Somente críticos"", ""description"": ""Sensores com severidade Critical"", ""filtersJson"": ""{ ""severity"": ""Critical"" }"" },
-    { ""name"": ""Discos com falha"", ""description"": ""Sensores de disco em estado de falha"", ""filtersJson"": ""{ ""sensorType"": ""disk"", ""status"": ""Failed"" }"" }
+    { ""name"": ""Falhas (todas)"", ""description"": ""Sensores em falha de todos os agentes, por severidade"", ""filtersJson"": ""{ \""status\"": \""Failed\"", \""orderBy\"": \""severity\"", \""orderDirection\"": \""asc\"" }"" },
+    { ""name"": ""Somente críticos"", ""description"": ""Sensores com severidade Critical"", ""filtersJson"": ""{ \""severity\"": \""Critical\"" }"" },
+    { ""name"": ""Discos com falha"", ""description"": ""Sensores de disco em estado de falha"", ""filtersJson"": ""{ \""sensorType\"": \""disk\"", \""status\"": \""Failed\"" }"" }
   ]
 }";
 
-    private static string HardwareSensorsSchema => @"
+    /// <summary>Schema de execucao do template "Hardware + Sensores por Agente".
+    /// Exposto para o teste validar exatamente a string que o seed insere.</summary>
+    public static string HardwareSensorsSchema => @"
 {
   ""scopeType"": 3,
   ""dateMode"": 1,
@@ -146,9 +153,9 @@ public class M271_SeedSensorReportTemplates : Migration
     " + OutputFilters("hw.agentHostname", ["hw.agentHostname", "hw.osName", "hw.totalMemoryGB", "hw.collectedAt"]) + @"
   ],
   ""sampleFilterPresets"": [
-    { ""name"": ""Agentes com sensores em falha"", ""description"": ""Hardware dos agentes que possuem ao menos um sensor em falha"", ""filtersJson"": ""{ ""sensorStatus"": ""Failed"", ""orderBy"": ""hw.agentHostname"", ""orderDirection"": ""asc"" }"" },
-    { ""name"": ""Máquinas com pouca RAM"", ""description"": ""Agentes com menos de 8 GB de memoria"", ""filtersJson"": ""{ ""minMemoryGB"": 8, ""orderBy"": ""hw.totalMemoryGB"", ""orderDirection"": ""asc"" }"" },
-    { ""name"": ""Somente Windows 11"", ""description"": ""Agentes cujo SO reportado contem 'Windows 11'"", ""filtersJson"": ""{ ""osName"": ""Windows 11"" }"" }
+    { ""name"": ""Agentes com sensores em falha"", ""description"": ""Hardware dos agentes que possuem ao menos um sensor em falha"", ""filtersJson"": ""{ \""sensorStatus\"": \""Failed\"", \""orderBy\"": \""hw.agentHostname\"", \""orderDirection\"": \""asc\"" }"" },
+    { ""name"": ""Máquinas com pouca RAM"", ""description"": ""Agentes com menos de 8 GB de memoria"", ""filtersJson"": ""{ \""minMemoryGB\"": 8, \""orderBy\"": \""hw.totalMemoryGB\"", \""orderDirection\"": \""asc\"" }"" },
+    { ""name"": ""Somente Windows 11"", ""description"": ""Agentes cujo SO reportado contem 'Windows 11'"", ""filtersJson"": ""{ \""osName\"": \""Windows 11\"" }"" }
   ]
 }";
 }
