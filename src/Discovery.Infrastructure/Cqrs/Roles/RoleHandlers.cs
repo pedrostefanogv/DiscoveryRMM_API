@@ -164,8 +164,17 @@ public sealed class AddRolePermissionCommandHandler(
 {
     public async Task<Result<PermissionDto>> Handle(AddRolePermissionCommand cmd, CancellationToken ct)
     {
-        if (await service.GetByIdAsync(cmd.RoleId, ct) is null)
+        var role = await service.GetByIdAsync(cmd.RoleId, ct);
+        if (role is null)
             return Result<PermissionDto>.Failure(Error.NotFound($"Role {cmd.RoleId} not found"));
+
+        // Papéis de sistema (Admin/Operator/Manager/Support/Viewer e as personas de
+        // menor privilégio) têm seu conjunto de permissões fixado por migração.
+        // O Update/Delete já bloqueavam IsSystem; add/remove de permissão NÃO —
+        // era possível ampliar silenciosamente o papel Admin embutido.
+        if (role.IsSystem)
+            return Result<PermissionDto>.Failure(
+                Error.Validation("RoleId", "Permissões de papéis de sistema não podem ser alteradas."));
 
         var catalog = await service.GetAllPermissionsAsync(ct);
         var permission = catalog.FirstOrDefault(p => p.Id == cmd.PermissionId);
@@ -173,7 +182,16 @@ public sealed class AddRolePermissionCommandHandler(
         if (permission is null)
             return Result<PermissionDto>.Failure(Error.NotFound($"Permission {cmd.PermissionId} not found"));
 
-        await service.AddPermissionAsync(cmd.RoleId, cmd.PermissionId, ct);
+        try
+        {
+            await service.AddPermissionAsync(cmd.RoleId, cmd.PermissionId, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Invariante da camada de repositório (defesa em profundidade).
+            return Result<PermissionDto>.Failure(Error.Validation("RoleId", ex.Message));
+        }
+
         await permissions.InvalidateAllCacheAsync();
 
         return Result<PermissionDto>.Success(RoleMapping.ToDto(permission));
@@ -187,10 +205,25 @@ public sealed class RemoveRolePermissionCommandHandler(
 {
     public async Task<Result<VoidResult>> Handle(RemoveRolePermissionCommand cmd, CancellationToken ct)
     {
-        if (await service.GetByIdAsync(cmd.RoleId, ct) is null)
+        var role = await service.GetByIdAsync(cmd.RoleId, ct);
+        if (role is null)
             return Result<VoidResult>.Failure(Error.NotFound($"Role {cmd.RoleId} not found"));
 
-        await service.RemovePermissionAsync(cmd.RoleId, cmd.PermissionId, ct);
+        // Mesma invariante do Add: remover permissão de papel de sistema é alteração
+        // silenciosa de privilégio (ex.: tirar Users:Edit do Admin).
+        if (role.IsSystem)
+            return Result<VoidResult>.Failure(
+                Error.Validation("RoleId", "Permissões de papéis de sistema não podem ser alteradas."));
+
+        try
+        {
+            await service.RemovePermissionAsync(cmd.RoleId, cmd.PermissionId, ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Result<VoidResult>.Failure(Error.Validation("RoleId", ex.Message));
+        }
+
         await permissions.InvalidateAllCacheAsync();
 
         return Result<VoidResult>.Success(VoidResult.Value);

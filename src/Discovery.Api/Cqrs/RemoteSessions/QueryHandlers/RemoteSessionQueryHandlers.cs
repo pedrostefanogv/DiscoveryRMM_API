@@ -60,7 +60,9 @@ public sealed class GetSessionCredentialsQueryHandler(
             return Result<SessionCredentialsDto>.Failure(Error.Validation("NatsSubject", "Session has no NATS subject configured."));
 
         // Fonte única de pub/sub e TTL (a resposta de start usa a MESMA lista).
-        var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(session.NatsSubject);
+        // As restrições da sessão são REAPLICADAS aqui: uma credencial pedida depois
+        // (reconexão, nova aba) não pode ganhar capacidades que o start negou.
+        var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(session.NatsSubject, session.Rights);
         var ttlMinutes = RemoteSessionViewerPermissions.TtlMinutes(session.ExpiresAt);
 
         var (jwt, nkeySeed, _) = await credentialsService.IssueSessionCredentialsAsync(

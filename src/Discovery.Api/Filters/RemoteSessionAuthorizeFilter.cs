@@ -26,6 +26,7 @@ public class RemoteSessionAuthorizeAttribute : Attribute, IFilterFactory
         => new RemoteSessionAuthorizeFilter(
             serviceProvider.GetRequiredService<IRemoteSessionManager>(),
             serviceProvider.GetRequiredService<ILogger<RemoteSessionAuthorizeFilter>>(),
+            serviceProvider.GetRequiredService<Services.RemoteSessionScopeResolver>(),
             RequiredAction,
             AllowPending);
 }
@@ -34,17 +35,20 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
 {
     private readonly IRemoteSessionManager _sessionManager;
     private readonly ILogger<RemoteSessionAuthorizeFilter> _logger;
+    private readonly Services.RemoteSessionScopeResolver _scopeResolver;
     private readonly ActionType _requiredAction;
     private readonly bool _allowPending;
 
     public RemoteSessionAuthorizeFilter(
         IRemoteSessionManager sessionManager,
         ILogger<RemoteSessionAuthorizeFilter> logger,
+        Services.RemoteSessionScopeResolver scopeResolver,
         ActionType requiredAction,
         bool allowPending)
     {
         _sessionManager = sessionManager;
         _logger = logger;
+        _scopeResolver = scopeResolver;
         _requiredAction = requiredAction;
         _allowPending = allowPending;
     }
@@ -60,6 +64,47 @@ internal class RemoteSessionAuthorizeFilter : IAsyncActionFilter
         {
             context.Result = new BadRequestObjectResult(new { error = "Invalid agentId." });
             return;
+        }
+
+        // ESCOPO (client/site): este filtro antes validava apenas a POSSE da sessão
+        // pelo usuário. Como o RequirePermission dos endpoints só prova que a
+        // permissão existe em ALGUM lugar, um técnico escopado ao cliente A
+        // conseguia operar sessões/controles no cliente B bastando conhecer o
+        // sessionId/agentId. O escopo é recortado aqui, antes de qualquer trabalho.
+        //
+        // ORDEM DOS FILTROS: este atributo é declarado ANTES de RequirePermission,
+        // então a checagem de escopo roda primeiro. Por isso ela NÃO decide quando o
+        // usuário simplesmente não tem a permissão: nesse caso quem responde é o
+        // RequirePermission, com 403 ("Permissão insuficiente"). Se respondêssemos
+        // 404 aqui, um usuário sem Agents:Execute receberia "não encontrado" em vez
+        // de "permissão insuficiente" — diagnóstico enganoso e mudança de contrato.
+        //
+        // A decisão de escopo só é aplicada quando o usuário POSSUI algum acesso a
+        // Agents: aí sim 404 (e não 403), para não confirmar a existência do
+        // agente/sessão de outro tenant — mesma decisão de
+        // AuthorizeTerminalRecordingAsync.
+        if (userId != Guid.Empty)
+        {
+            var isExecute = _requiredAction == ActionType.Execute;
+            var decision = await _scopeResolver.EvaluateAgentAsync(
+                userId, agentId, isExecute, context.HttpContext.RequestAborted);
+
+            if (decision == Services.RemoteSessionScopeDecision.DeniedOutOfScope)
+            {
+                _logger.LogWarning(
+                    "[RemoteSessionAuthorize] Acesso negado por ESCOPO: User={UserId}, AgentId={AgentId}, RequiredAction={Action}",
+                    userId, agentId, _requiredAction);
+
+                context.Result = new NotFoundObjectResult(new
+                {
+                    error = "Remote session not found.",
+                    reason = "out_of_scope"
+                });
+                return;
+            }
+
+            // WithoutResourceAccess: deixa o RequirePermission responder (403).
+            // AgentMissing cai no fluxo abaixo, que já trata sessão/agente ausente.
         }
 
         // Se tem sessionId na rota, valida que a sessão pertence ao usuário

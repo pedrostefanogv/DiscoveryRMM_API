@@ -14,7 +14,17 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/mfa")]
 public class MfaController(IMediator mediator) : ControllerBase
 {
+    /// <summary>
+    /// Lista as chaves MFA do próprio usuário.
+    ///
+    /// O guard global (<c>RequireUserAuthAttribute</c>, registrado em Program.cs)
+    /// já exige sessão completa — mas declará-lo aqui deixa a intenção explícita e
+    /// protege contra uma futura remoção do filtro global. Os demais endpoints
+    /// deste controller já eram explícitos; este era o único sem filtro próprio,
+    /// o que exigia confiar implicitamente no pipeline.
+    /// </summary>
     [HttpGet("keys")]
+    [RequireUserAuth]
     public async Task<IActionResult> GetMyKeys()
     {
         if (HttpContext.Items["UserId"] is Guid userId)

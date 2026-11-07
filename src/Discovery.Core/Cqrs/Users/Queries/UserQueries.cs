@@ -8,8 +8,20 @@ using UserSecurityStateDto = Discovery.Core.DTOs.Users.UserSecurityStateDto;
 
 namespace Discovery.Core.Cqrs.Users.Queries;
 
-public sealed record ListUsersQuery(string? Cursor = null, int Limit = 50)
-    : IQuery<Result<UsersPageDto>>;
+/// <summary>
+/// Lista usuários. O escopo do ator (<paramref name="HasGlobalAccess"/> +
+/// <paramref name="AllowedClientIds"/>/<paramref name="AllowedSiteIds"/>) é
+/// aplicado no repositório como row-level security: um administrador escopado a
+/// um cliente vê apenas usuários com atribuição dentro daquele escopo.
+/// Sem isso, a listagem vazaria todos os usuários da plataforma.
+/// </summary>
+public sealed record ListUsersQuery(
+    string? Cursor = null,
+    int Limit = 50,
+    bool HasGlobalAccess = true,
+    IReadOnlyList<Guid>? AllowedClientIds = null,
+    IReadOnlyList<Guid>? AllowedSiteIds = null
+) : IQuery<Result<UsersPageDto>>;
 
 public sealed record GetUserByIdQuery(Guid Id) : IQuery<Result<UserDto>>;
 

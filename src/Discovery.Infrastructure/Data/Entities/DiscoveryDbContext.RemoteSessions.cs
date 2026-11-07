@@ -31,6 +31,9 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.Status).HasColumnName("status").HasMaxLength(32);
             entity.Property(s => s.NatsSubject).HasColumnName("nats_subject").HasMaxLength(512);
             entity.Property(s => s.WebrtcSessionId).HasColumnName("webrtc_session_id").HasMaxLength(256);
+            // Restrições da sessão (view-only, sem terminal...). Int para preservar a
+            // combinação de flags mesmo se novas forem adicionadas.
+            entity.Property(s => s.Rights).HasColumnName("rights").HasConversion<int>();
             entity.Property(s => s.RecordingEnabled).HasColumnName("recording_enabled");
             entity.Property(s => s.RecordingId).HasColumnName("recording_id");
             entity.Property(s => s.StartedAt).HasColumnName("started_at").HasColumnType("timestamptz");

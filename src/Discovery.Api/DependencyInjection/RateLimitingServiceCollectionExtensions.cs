@@ -33,6 +33,13 @@ public static class RateLimitingServiceCollectionExtensions
         var ticketCreateWindow = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:TicketCreate:WindowSeconds") ?? 60);
         var ticketCreateQueue = Math.Max(0, configuration.GetValue<int?>("Security:RateLimiting:TicketCreate:QueueLimit") ?? 0);
 
+        // Identity administration tier (usuários/papéis/grupos). Antes caía no bucket
+        // genérico (240/min por IP), que permite varredura e mutação em massa do
+        // diretório de identidade. É uma superfície sensível: limite mais apertado.
+        var identityPermit = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:Identity:PermitLimit") ?? 60);
+        var identityWindow = Math.Max(1, configuration.GetValue<int?>("Security:RateLimiting:Identity:WindowSeconds") ?? 60);
+        var identityQueue = Math.Max(0, configuration.GetValue<int?>("Security:RateLimiting:Identity:QueueLimit") ?? 0);
+
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -70,6 +77,28 @@ public static class RateLimitingServiceCollectionExtensions
                             PermitLimit = authPermit,
                             Window = TimeSpan.FromSeconds(authWindow),
                             QueueLimit = authQueue,
+                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                            AutoReplenishment = true
+                        });
+                }
+
+                // Superfície de administração de identidade: bucket próprio e restrito.
+                // Particionado por IP (o usuário ainda não foi resolvido neste ponto do
+                // pipeline), suficiente para conter varredura/enumeração em massa.
+                var isIdentityAdminPath = path.Value is not null
+                    && (path.StartsWithSegments("/api/v1/users", StringComparison.OrdinalIgnoreCase)
+                        || path.StartsWithSegments("/api/v1/roles", StringComparison.OrdinalIgnoreCase)
+                        || path.StartsWithSegments("/api/v1/user-groups", StringComparison.OrdinalIgnoreCase));
+
+                if (isIdentityAdminPath)
+                {
+                    return RateLimitPartition.GetFixedWindowLimiter(
+                        partitionKey: $"identity:{ip}",
+                        factory: _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = identityPermit,
+                            Window = TimeSpan.FromSeconds(identityWindow),
+                            QueueLimit = identityQueue,
                             QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                             AutoReplenishment = true
                         });

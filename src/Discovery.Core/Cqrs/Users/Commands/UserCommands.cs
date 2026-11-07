@@ -1,12 +1,39 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.Enums.Identity;
 
 namespace Discovery.Core.Cqrs.Users.Commands;
 
+/// <summary>
+/// Cria um usuário e, opcionalmente, já o vincula a um grupo num escopo.
+///
+/// <para>
+/// <b>Por que escopo aqui:</b> antes, criar um usuário e dar-lhe acesso eram dois
+/// passos não relacionados — o usuário nascia com ZERO permissões e o vínculo
+/// dependia de uma segunda chamada que podia falhar em silêncio (o console fazia
+/// um loop sequencial e reportava "groupsFailed"). Resultado: usuários criados
+/// "com acesso" que não conseguiam fazer nada, ou vínculos parciais.
+/// </para>
+///
+/// <para>
+/// A criação agora é <b>atômica</b> e <b>escopada</b>: valida a política de senha
+/// ANTES de persistir e exige que o ator tenha escopo para conceder o vínculo
+/// inicial (mesma regra de <c>AssignGroupRoleCommand</c>).
+/// </para>
+/// </summary>
+/// <param name="Login">Login único.</param>
+/// <param name="Email">E-mail único.</param>
+/// <param name="FullName">Nome completo.</param>
+/// <param name="Password">Senha inicial (validada pelo IPasswordService antes de gravar).</param>
+/// <param name="MfaRequired">Exigir MFA (default true, como antes).</param>
+/// <param name="GroupId">Grupo ao qual vincular já na criação (opcional).</param>
+/// <param name="RequestedByUserId">
+/// Ator. Necessário para validar que ele pode conceder o vínculo inicial.
+/// </param>
 public sealed record CreateUserCommand(
     string Login, string Email, string FullName, string Password,
-    // Default true preserva o comportamento anterior e mantém compatibilidade
-    // com chamadas existentes; o console web envia o valor explicitamente.
-    bool MfaRequired = true
+    bool MfaRequired = true,
+    Guid? GroupId = null,
+    Guid RequestedByUserId = default
 ) : ICommand<Result<UserDto>>;
 
 public sealed record UpdateUserCommand(

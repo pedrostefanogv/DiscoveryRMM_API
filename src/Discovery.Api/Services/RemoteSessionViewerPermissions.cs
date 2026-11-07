@@ -1,3 +1,5 @@
+using Discovery.Core.Enums;
+
 namespace Discovery.Api.Services;
 
 /// <summary>
@@ -7,6 +9,12 @@ namespace Discovery.Api.Services;
 /// POST /remote-sessions (credenciais embutidas no start, 2026-10-27). Duplicar
 /// as listas já causou -ERR Permissions Violation quando um subject novo era
 /// adicionado em só um dos caminhos.
+///
+/// <b>Restrições por sessão (RemoteSessionRights)</b> são aplicadas AQUI: a
+/// credencial do viewer simplesmente não recebe os subjects de input, terminal,
+/// arquivos, clipboard ou desktop conforme a política. A imposição fica no broker
+/// NATS, então não depende de o cliente web se comportar — um viewer malicioso ou
+/// adulterado que tente publicar em <c>...input</c> recebe -ERR Permissions Violation.
 /// </summary>
 public static class RemoteSessionViewerPermissions
 {
@@ -20,48 +28,97 @@ public static class RemoteSessionViewerPermissions
             : 30;
     }
 
-    /// <summary>PUB/SUB permitidos para o viewer da sessão.</summary>
+    /// <summary>PUB/SUB permitidos para o viewer da sessão (sem restrições).</summary>
     public static (string[] Publish, string[] Subscribe) Build(string natsSubject)
+        => Build(natsSubject, RemoteSessionRights.None);
+
+    /// <summary>
+    /// PUB/SUB permitidos para o viewer, respeitando as restrições da sessão.
+    ///
+    /// Cada restrição remove os subjects correspondentes das DUAS listas (pub e sub):
+    /// remover só do pub deixaria o viewer recebendo dados que não deveria (ex.: ver
+    /// o terminal sem poder digitar ainda é leitura de dados do cliente), e remover
+    /// só do sub faria o viewer tentar operar e falhar com -ERR.
+    /// </summary>
+    public static (string[] Publish, string[] Subscribe) Build(string natsSubject, RemoteSessionRights rights)
     {
-        var pub = new[]
+        var viewOnly = rights.HasFlag(RemoteSessionRights.ViewOnly);
+        var limitedInput = rights.HasFlag(RemoteSessionRights.LimitedInput);
+        var noTerminal = rights.HasFlag(RemoteSessionRights.NoTerminal);
+        var noFiles = rights.HasFlag(RemoteSessionRights.NoFiles);
+        var noDesktop = rights.HasFlag(RemoteSessionRights.NoDesktop);
+        var noEvents = rights.HasFlag(RemoteSessionRights.NoEvents);
+
+        var pub = new List<string>
         {
-            $"{natsSubject}.input",
             $"{natsSubject}.ack",
-            $"{natsSubject}.term.in",
-            // Terminal remoto: consulta de autocompletar (viewer -> agent).
-            // O viewer publica completion.req e recebe completion.res; sem a
-            // permissao de PUB o NATS rejeita com -ERR e derruba o WebSocket.
-            $"{natsSubject}.completion.req",
-            $"{natsSubject}.files.req",
-            $"{natsSubject}.proxy.req",
-            $"{natsSubject}.proc.req",
-            $"{natsSubject}.clipboard.req",
             // Controle do viewer (keyframe ao voltar para a aba, liveness).
             $"{natsSubject}.control",
         };
 
-        var sub = new[]
+        // Input de teclado/mouse: bloqueado em view-only e input limitado.
+        // (LimitedInput deixa o teclado para o agente decidir; aqui o gate grosso é
+        // não conceder o canal de input de desktop.)
+        if (!viewOnly && !limitedInput)
+            pub.Add($"{natsSubject}.input");
+
+        if (!noTerminal)
+        {
+            pub.Add($"{natsSubject}.term.in");
+            // Autocompletar do terminal (viewer -> agent). Sem PUB o NATS rejeita
+            // com -ERR e derruba o WebSocket.
+            pub.Add($"{natsSubject}.completion.req");
+        }
+
+        if (!noFiles)
+            pub.Add($"{natsSubject}.files.req");
+
+        pub.Add($"{natsSubject}.proxy.req");
+        pub.Add($"{natsSubject}.proc.req");
+
+        if (!viewOnly)
+            pub.Add($"{natsSubject}.clipboard.req");
+
+        var sub = new List<string>
         {
             $"{natsSubject}.frame",
             $"{natsSubject}.frame.frag",
-            $"{natsSubject}.cursor",
-            $"{natsSubject}.cursor.img",
             $"{natsSubject}.monitors",
-            $"{natsSubject}.event",
-            $"{natsSubject}.clipboard",
-            $"{natsSubject}.term.out",
-            $"{natsSubject}.term.ready",
             $"{natsSubject}.stats",
-            $"{natsSubject}.completion.res",
-            $"{natsSubject}.files.ready",
-            $"{natsSubject}.files.resp",
-            $"{natsSubject}.files.progress",
-            $"{natsSubject}.proxy.resp",
-            $"{natsSubject}.proc.resp",
-            $"{natsSubject}.proc.ready",
             $"{natsSubject}.control",
         };
 
-        return (pub, sub);
+        // Cursor revela a posição do mouse do operador na máquina do cliente.
+        if (!noDesktop)
+        {
+            sub.Add($"{natsSubject}.cursor");
+            sub.Add($"{natsSubject}.cursor.img");
+        }
+
+        if (!noEvents)
+            sub.Add($"{natsSubject}.event");
+
+        if (!viewOnly)
+            sub.Add($"{natsSubject}.clipboard");
+
+        if (!noTerminal)
+        {
+            sub.Add($"{natsSubject}.term.out");
+            sub.Add($"{natsSubject}.term.ready");
+            sub.Add($"{natsSubject}.completion.res");
+        }
+
+        if (!noFiles)
+        {
+            sub.Add($"{natsSubject}.files.ready");
+            sub.Add($"{natsSubject}.files.resp");
+            sub.Add($"{natsSubject}.files.progress");
+        }
+
+        sub.Add($"{natsSubject}.proxy.resp");
+        sub.Add($"{natsSubject}.proc.resp");
+        sub.Add($"{natsSubject}.proc.ready");
+
+        return (pub.ToArray(), sub.ToArray());
     }
 }

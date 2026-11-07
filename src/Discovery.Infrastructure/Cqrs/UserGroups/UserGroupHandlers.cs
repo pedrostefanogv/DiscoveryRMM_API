@@ -4,8 +4,10 @@ using Discovery.Core.Cqrs.UserGroups.Queries;
 using Discovery.Core.DTOs.Groups;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
+using Discovery.Infrastructure.Services.Identity;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 
@@ -156,7 +158,9 @@ public sealed class ListGroupMembersQueryHandler(
 public sealed class AddGroupMemberCommandHandler(
     IUserGroupRepository groups,
     IUserRepository users,
-    IPermissionService permissions
+    IPermissionService permissions,
+    IScopeContext scopeContext,
+    ISiteRepository sites
 ) : IRequestHandler<AddGroupMemberCommand, Result<GroupMemberDto>>
 {
     public async Task<Result<GroupMemberDto>> Handle(AddGroupMemberCommand cmd, CancellationToken ct)
@@ -166,6 +170,15 @@ public sealed class AddGroupMemberCommandHandler(
             return Result<GroupMemberDto>.Failure(Error.NotFound($"UserGroup {cmd.GroupId} not found"));
         if (!group.IsActive)
             return Result<GroupMemberDto>.Failure(Error.Validation("GroupId", "Grupo inativo não aceita novos membros."));
+
+        // ESCOPO: vincular alguém a um grupo concede todas as atribuições daquele grupo.
+        // Sem esta guarda, um admin de cliente adicionava quem quisesse a um grupo com
+        // papel Global. O grupo só é vinculável se TODAS as suas atribuições estiverem
+        // dentro do escopo do ator.
+        var scopeDenied = await GroupGrantGuard.CheckGroupAsync(
+            groups, scopeContext, cmd.RequestedByUserId, cmd.GroupId, sites);
+        if (scopeDenied is not null)
+            return Result<GroupMemberDto>.Failure(scopeDenied);
 
         var user = await users.GetByIdAsync(cmd.UserId);
         if (user is null)
@@ -197,13 +210,20 @@ public sealed class AddGroupMemberCommandHandler(
 
 public sealed class RemoveGroupMemberCommandHandler(
     IUserGroupRepository groups,
-    IPermissionService permissions
+    IPermissionService permissions,
+    IScopeContext scopeContext,
+    ISiteRepository sites
 ) : IRequestHandler<RemoveGroupMemberCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RemoveGroupMemberCommand cmd, CancellationToken ct)
     {
         if (await groups.GetByIdAsync(cmd.GroupId) is null)
             return Result<VoidResult>.Failure(Error.NotFound($"UserGroup {cmd.GroupId} not found"));
+
+        var scopeDenied = await GroupGrantGuard.CheckGroupAsync(
+            groups, scopeContext, cmd.RequestedByUserId, cmd.GroupId, sites);
+        if (scopeDenied is not null)
+            return Result<VoidResult>.Failure(scopeDenied);
 
         try
         {
@@ -255,7 +275,10 @@ public sealed class ListGroupRolesQueryHandler(
 public sealed class AssignGroupRoleCommandHandler(
     IUserGroupRepository groups,
     IRoleRepository roles,
-    IPermissionService permissions
+    IPermissionService permissions,
+    IScopeContext scopeContext,
+    IClientRepository clients,
+    ISiteRepository sites
 ) : IRequestHandler<AssignGroupRoleCommand, Result<GroupRoleAssignmentDto>>
 {
     public async Task<Result<GroupRoleAssignmentDto>> Handle(AssignGroupRoleCommand cmd, CancellationToken ct)
@@ -270,6 +293,40 @@ public sealed class AssignGroupRoleCommandHandler(
         if (cmd.ScopeLevel != ScopeLevel.Global && cmd.ScopeId is null)
             return Result<GroupRoleAssignmentDto>.Failure(
                 Error.Validation("ScopeId", "ScopeId é obrigatório quando o escopo é Client ou Site."));
+
+        // ESCOPO DO CONCEDENTE — o vetor de escalação entre tenants (achado P0-2).
+        // O payload { roleId: <admin>, scopeLevel: "Global" } era aceito por qualquer
+        // portador de Users:Edit. A regra da v1 é por escopo: só se concede o que está
+        // contido no próprio escopo.
+        Guid? parentClientId = null;
+        if (cmd.ScopeLevel == ScopeLevel.Site && cmd.ScopeId.HasValue && cmd.ScopeId.Value != Guid.Empty)
+        {
+            var site = await sites.GetByIdAsync(cmd.ScopeId.Value);
+            if (site is null)
+                return Result<GroupRoleAssignmentDto>.Failure(
+                    Error.Validation("ScopeId", "Site informado não existe."));
+            parentClientId = site.ClientId;
+        }
+        else if (cmd.ScopeLevel == ScopeLevel.Client && cmd.ScopeId.HasValue && cmd.ScopeId.Value != Guid.Empty)
+        {
+            // Antes o ScopeId era gravado sem qualquer validação: um GUID inexistente
+            // criava atribuição "válida" que não concedia nada e poluía a auditoria.
+            if (await clients.GetByIdAsync(cmd.ScopeId.Value) is null)
+                return Result<GroupRoleAssignmentDto>.Failure(
+                    Error.Validation("ScopeId", "Cliente informado não existe."));
+        }
+
+        if (cmd.RequestedByUserId != Guid.Empty)
+        {
+            scopeContext.SetUserId(cmd.RequestedByUserId);
+            var granterAccess = await scopeContext.GetAccessAsync(ResourceType.Users, ActionType.Edit);
+
+            if (!RoleGrantScopePolicy.CanGrant(granterAccess, cmd.ScopeLevel, cmd.ScopeId, parentClientId))
+            {
+                return Result<GroupRoleAssignmentDto>.Failure(
+                    Error.Forbidden("Você não pode conceder acesso fora do seu escopo."));
+            }
+        }
 
         var existing = (await groups.GetRolesForGroupAsync(cmd.GroupId)).ToList();
         if (existing.Any(a => a.RoleId == cmd.RoleId && a.ScopeLevel == cmd.ScopeLevel && a.ScopeId == cmd.ScopeId))
@@ -312,7 +369,9 @@ public sealed class AssignGroupRoleCommandHandler(
 
 public sealed class RemoveGroupRoleAssignmentCommandHandler(
     IUserGroupRepository groups,
-    IPermissionService permissions
+    IPermissionService permissions,
+    IScopeContext scopeContext,
+    ISiteRepository sites
 ) : IRequestHandler<RemoveGroupRoleAssignmentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RemoveGroupRoleAssignmentCommand cmd, CancellationToken ct)
@@ -322,16 +381,91 @@ public sealed class RemoveGroupRoleAssignmentCommandHandler(
 
         // RemoveRoleAssignmentAsync filtra apenas por assignmentId: validar o vínculo com o
         // grupo impede que um assignmentId de outro grupo seja removido por engano/abuso.
-        var belongsToGroup = (await groups.GetRolesForGroupAsync(cmd.GroupId))
-            .Any(a => a.Id == cmd.AssignmentId);
+        var assignment = (await groups.GetRolesForGroupAsync(cmd.GroupId))
+            .FirstOrDefault(a => a.Id == cmd.AssignmentId);
 
-        if (!belongsToGroup)
+        if (assignment is null)
             return Result<VoidResult>.Failure(Error.NotFound("Atribuição de role não encontrada neste grupo."));
+
+        // Remover também é alteração de privilégio: um admin de cliente não pode
+        // desmontar o acesso de outro tenant (nem se livrar de uma restrição alheia).
+        if (cmd.RequestedByUserId != Guid.Empty)
+        {
+            Guid? parentClientId = null;
+            if (assignment.ScopeLevel == ScopeLevel.Site && assignment.ScopeId.HasValue && assignment.ScopeId.Value != Guid.Empty)
+            {
+                var site = await sites.GetByIdAsync(assignment.ScopeId.Value);
+                parentClientId = site?.ClientId;
+            }
+
+            scopeContext.SetUserId(cmd.RequestedByUserId);
+            var granterAccess = await scopeContext.GetAccessAsync(ResourceType.Users, ActionType.Edit);
+
+            if (!RoleGrantScopePolicy.CanGrant(granterAccess, assignment.ScopeLevel, assignment.ScopeId, parentClientId))
+            {
+                return Result<VoidResult>.Failure(
+                    Error.Forbidden("Você não pode remover acesso fora do seu escopo."));
+            }
+        }
 
         await groups.RemoveRoleAssignmentAsync(cmd.AssignmentId);
         await UserGroupPermissionInvalidation.InvalidateMembersAsync(groups, permissions, cmd.GroupId);
 
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+/// <summary>
+/// Guarda de "quem pode mexer neste grupo". Um grupo é um pacote de atribuições
+/// (papel + escopo); se QUALQUER atribuição do grupo estiver fora do escopo do
+/// ator, ele não pode vincular/desvincular membros — senão contornaria a guarda
+/// de concessão passando pelo membro em vez de pelo papel.
+/// </summary>
+internal static class GroupGrantGuard
+{
+    /// <summary>
+    /// Retorna null quando permitido, ou o erro a devolver. Ator sem id (chamadas
+    /// internas/seed) passa direto, preservando compatibilidade.
+    /// </summary>
+    /// <param name="sites">
+    /// Necessário para resolver o CLIENTE pai de uma atribuição Site. Sem ele, uma
+    /// concessão legítima no nível de Client não autoriza gerenciar um grupo cuja
+    /// atribuição é Site-scoped — a policy só consegue aplicar a herança
+    /// Client→Site se souber qual é o cliente do site.
+    /// </param>
+    internal static async Task<Error?> CheckGroupAsync(
+        IUserGroupRepository groups,
+        IScopeContext scopeContext,
+        Guid requestedByUserId,
+        Guid groupId,
+        ISiteRepository? sites = null)
+    {
+        if (requestedByUserId == Guid.Empty)
+            return null;
+
+        scopeContext.SetUserId(requestedByUserId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Users, ActionType.Edit);
+
+        if (access.HasGlobalAccess)
+            return null;
+
+        foreach (var assignment in await groups.GetRolesForGroupAsync(groupId))
+        {
+            Guid? parentClientId = null;
+            if (sites is not null
+                && assignment.ScopeLevel == ScopeLevel.Site
+                && assignment.ScopeId.HasValue
+                && assignment.ScopeId.Value != Guid.Empty)
+            {
+                var site = await sites.GetByIdAsync(assignment.ScopeId.Value);
+                parentClientId = site?.ClientId;
+            }
+
+            if (!RoleGrantScopePolicy.CanGrant(access, assignment.ScopeLevel, assignment.ScopeId, parentClientId))
+                return Error.Forbidden("Este grupo concede acesso fora do seu escopo.");
+        }
+
+        return null;
     }
 }
 
@@ -346,7 +480,33 @@ internal static class UserGroupPermissionInvalidation
         IPermissionService permissions,
         Guid groupId)
     {
-        foreach (var userId in await groups.GetMemberIdsAsync(groupId))
-            await permissions.InvalidateUserCacheAsync(userId);
+        var memberIds = (await groups.GetMemberIdsAsync(groupId)).ToList();
+        if (memberIds.Count == 0)
+            return;
+
+        // Antes: await sequencial por membro. Num grupo com milhares de membros isso
+        // eram milhares de DELs do Redis dentro de UM request, somando latência ao
+        // tempo de resposta da operação administrativa. A invalidação é idempotente
+        // e independente por usuário, então pode ser paralela.
+        //
+        // Concorrência limitada: paralelizar tudo de uma vez num grupo grande
+        // saturaria o pool de conexões do Redis e derrubaria requests concorrentes.
+        const int maxParallelism = 16;
+        using var gate = new SemaphoreSlim(maxParallelism);
+
+        var tasks = memberIds.Select(async userId =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                await permissions.InvalidateUserCacheAsync(userId);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
     }
 }

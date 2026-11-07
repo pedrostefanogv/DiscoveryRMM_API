@@ -11,6 +11,15 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public class OtpAuthService : IOtpService
 {
+    private readonly IPasswordService _passwordService;
+
+    /// <summary>
+    /// Os códigos de backup usam o MESMO KDF das senhas (Argon2id com salt por
+    /// código), em vez do SHA-256 sem salt usado antes.
+    /// </summary>
+    public OtpAuthService(IPasswordService passwordService)
+        => _passwordService = passwordService;
+
     public (string secretBase32, string qrCodeUri) GenerateSecret(string issuer, string accountName)
     {
         var key = KeyGeneration.GenerateRandomKey(20);
@@ -70,6 +79,18 @@ public class OtpAuthService : IOtpService
         }
     }
 
+    /// <summary>
+    /// Gera códigos de backup de uso único.
+    ///
+    /// Os códigos são curtos por natureza (precisam ser digitáveis), então o hash
+    /// precisa compensar a entropia limitada com custo computacional. Antes era
+    /// SHA-256 puro e SEM SALT: um vazamento do banco permitia brute-force offline
+    /// dos códigos (o espaço é de 40 bits, trivialmente enumerável em GPU).
+    ///
+    /// Agora usa <see cref="IPasswordService"/> — o mesmo Argon2id das senhas — com
+    /// salt por código. O formato armazenado é <c>salt:hash</c>, que se
+    /// auto-descreve para a verificação.
+    /// </summary>
     public (IEnumerable<string> plaintextCodes, IEnumerable<string> hashedCodes) GenerateBackupCodes(int count = 8)
     {
         var plaintextCodes = new List<string>();
@@ -83,8 +104,10 @@ public class OtpAuthService : IOtpService
             var code = Convert.ToHexString(bytes)[..8].ToLowerInvariant();
             var readableCode = code[..4] + "-" + code[4..];
             plaintextCodes.Add(readableCode);
-            var hash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(readableCode)));
-            hashedCodes.Add(hash);
+
+            var salt = _passwordService.GenerateSalt();
+            var hash = _passwordService.HashPassword(NormalizeCode(readableCode), salt);
+            hashedCodes.Add($"{salt}:{hash}");
         }
 
         return (plaintextCodes, hashedCodes);
@@ -92,11 +115,33 @@ public class OtpAuthService : IOtpService
 
     public bool VerifyBackupCode(string code, IEnumerable<string> storedHashes, out string? matchedHash)
     {
-        var codeHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(code.Trim().ToLowerInvariant())));
-        matchedHash = storedHashes.FirstOrDefault(h =>
-            System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-                Convert.FromBase64String(h),
-                Convert.FromBase64String(codeHash)));
-        return matchedHash != null;
+        matchedHash = null;
+        var normalized = NormalizeCode(code);
+
+        foreach (var stored in storedHashes)
+        {
+            if (string.IsNullOrWhiteSpace(stored))
+                continue;
+
+            // Formato novo: "salt:hash" (Argon2id + salt por código).
+            var separator = stored.IndexOf(':');
+            if (separator <= 0)
+                continue;
+
+            var salt = stored[..separator];
+            var expected = stored[(separator + 1)..];
+
+            if (_passwordService.VerifyPassword(normalized, salt, expected))
+            {
+                matchedHash = stored;
+                return true;
+            }
+        }
+
+        return false;
     }
+
+    /// <summary>Normaliza para comparação: sem espaços/hífens e minúsculo.</summary>
+    private static string NormalizeCode(string code)
+        => code.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace(" ", string.Empty);
 }

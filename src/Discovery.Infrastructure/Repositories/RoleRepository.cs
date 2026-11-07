@@ -65,6 +65,11 @@ public class RoleRepository : IRoleRepository
 
     public async Task AddPermissionToRoleAsync(Guid roleId, Guid permissionId)
     {
+        // Invariante de camada (defesa em profundidade): o handler já bloqueia, mas
+        // o papel de sistema não pode ganhar permissão nova por NENHUM caminho —
+        // inclusive um futuro chamador que esqueça a checagem.
+        await EnsureRoleIsNotSystem(roleId);
+
         var exists = await _db.RolePermissions.AnyAsync(rp => rp.RoleId == roleId && rp.PermissionId == permissionId);
         if (exists) return;
         _db.RolePermissions.Add(new RolePermission { RoleId = roleId, PermissionId = permissionId });
@@ -73,9 +78,27 @@ public class RoleRepository : IRoleRepository
 
     public async Task RemovePermissionFromRoleAsync(Guid roleId, Guid permissionId)
     {
+        await EnsureRoleIsNotSystem(roleId);
+
         await _db.RolePermissions
             .Where(rp => rp.RoleId == roleId && rp.PermissionId == permissionId)
             .ExecuteDeleteAsync();
+    }
+
+    /// <summary>
+    /// Lança quando a role é de sistema. As permissões dessas roles são fixadas por
+    /// migração (seeds); alterá-las em runtime muda privilégio sem deixar rastro.
+    /// </summary>
+    private async Task EnsureRoleIsNotSystem(Guid roleId)
+    {
+        var isSystem = await _db.Roles
+            .AsNoTracking()
+            .Where(r => r.Id == roleId)
+            .Select(r => (bool?)r.IsSystem)
+            .SingleOrDefaultAsync();
+
+        if (isSystem == true)
+            throw new InvalidOperationException("Permissões de papéis de sistema não podem ser alteradas.");
     }
 
     public async Task<IEnumerable<Permission>> GetAllPermissionsAsync()

@@ -48,6 +48,15 @@ public class RemoteSession
     /// <summary>Session ID do WebRTC (Pion peer connection).</summary>
     public string? WebrtcSessionId { get; set; }
 
+    /// <summary>
+    /// Restrições aplicadas a ESTA sessão (view-only, sem terminal, sem arquivos...).
+    /// Persistido porque a credencial do viewer é pedida em momentos diferentes
+    /// (start, renovação, reconexão) e a política tem de ser a mesma.
+    /// Default <see cref="RemoteSessionRights.None"/> preserva o comportamento
+    /// anterior (controle total) em sessões e bancos já existentes.
+    /// </summary>
+    public RemoteSessionRights Rights { get; set; } = RemoteSessionRights.None;
+
     /// <summary>Se gravação está habilitada nesta sessão.</summary>
     public bool RecordingEnabled { get; set; }
 

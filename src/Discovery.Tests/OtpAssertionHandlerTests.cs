@@ -10,6 +10,7 @@ using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Infrastructure.Cqrs.Auth.CommandHandlers;
 using Discovery.Infrastructure.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 using OtpNet;
@@ -26,7 +27,8 @@ namespace Discovery.Tests;
 [TestFixture]
 public class OtpAssertionHandlerTests
 {
-    private static readonly OtpAuthService Otp = new();
+    private static readonly OtpAuthService Otp =
+        new(new UserPasswordService(new ConfigurationBuilder().Build()));
     private static readonly FakeSecretProtector Protector = new();
 
     [Test]

@@ -33,6 +33,10 @@ public static class CqrsServiceCollectionExtensions
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(PerformanceBehavior<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
+        // Auditoria de identidade ANTES da transação (que é a mais interna): assim o
+        // registro é gravado DEPOIS do commit. Se a mutação reverter, nada é auditado
+        // (correto: não aconteceu). Ver IdentityAuditBehavior.
+        services.AddTransient(typeof(IPipelineBehavior<,>), typeof(IdentityAuditBehavior<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
 
         return services;

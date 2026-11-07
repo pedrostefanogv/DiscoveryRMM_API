@@ -124,6 +124,17 @@ builder.Services.AddSingleton<SpecialCommandPayloadValidator>();
 builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();
+
+// Ator da operação (auditoria de identidade). Abstração em Core para que a
+// Infrastructure audite sem referenciar ASP.NET Core.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentActorAccessor, HttpContextActorAccessor>();
+
+// Escopo (client/site) de sessões remotas: usado pelo RemoteSessionAuthorizeFilter
+// (todos os endpoints de sessão) e pelo StartRemoteSessionCommandHandler. Vive em
+// Discovery.Api e não implementa interface de Core, portanto não entra no auto-scan.
+builder.Services.AddScoped<RemoteSessionScopeResolver>();
+
 builder.Services.AddSingleton(TimeProvider.System);
 
 // Presenca de visualizacao do chat de suporte: singleton porque o estado
@@ -292,6 +303,11 @@ builder.Services.AddControllers(options =>
         // Previne recursão infinita em navigation properties cíclicas (ex: Article ↔ Chunks)
         opts.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
     });
+
+// Auditoria de identidade: serviço próprio (não passa pelo auto-scan porque mora em
+// Discovery.Infrastructure/Services/Identity e não tem interface de Core mapeada 1:1).
+builder.Services.AddScoped<Discovery.Core.Interfaces.Security.IIdentityAuditService,
+    Discovery.Infrastructure.Services.Identity.IdentityAuditService>();
 
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<Discovery.Api.Validators.CreateTicketCommandValidator>();

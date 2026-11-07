@@ -90,6 +90,11 @@ public partial class DiscoveryDbContext
             e.HasKey(rp => new { rp.RoleId, rp.PermissionId });
             e.Property(rp => rp.RoleId).HasColumnName("role_id");
             e.Property(rp => rp.PermissionId).HasColumnName("permission_id");
+
+            // A PK (role_id, permission_id) já cobre buscas por role_id; o índice por
+            // permission_id atende a checagem reversa (quem possui esta permissão),
+            // usada na concessão/revogação e na auditoria.
+            e.HasIndex(rp => rp.PermissionId).HasDatabaseName("ix_role_permissions_permission_id");
         });
 
         modelBuilder.Entity<UserGroupRole>(e =>
@@ -102,6 +107,20 @@ public partial class DiscoveryDbContext
             e.Property(r => r.ScopeLevel).HasColumnName("scope_level").HasConversion<string>();
             e.Property(r => r.ScopeId).HasColumnName("scope_id");
             e.Property(r => r.AssignedAt).HasColumnName("assigned_at").HasColumnType("timestamptz");
+
+            // Espelha o índice único criado pela migração M196 (ux_user_group_roles_scope).
+            // Ele existe SÓ em SQL bruto até aqui: um scaffold de migração ou um banco
+            // recriado a partir do modelo EF derrubaria a proteção TOCTOU que o handler
+            // de atribuição de papel depende (dois admins simultâneos na mesma concessão).
+            // O índice em COALESCE(scope_id, uuid-zero) é expressão e não é representável
+            // no modelo; por isso o mapeamento aqui normaliza apenas as colunas.
+            e.HasIndex(r => new { r.GroupId, r.RoleId, r.ScopeLevel })
+                .HasDatabaseName("ix_user_group_roles_group_role");
+
+            // Caminho quente de resolução de permissões: join por grupo e por role.
+            // Sem estes índices a consulta de permissões varre a tabela a cada cache miss.
+            e.HasIndex(r => r.GroupId).HasDatabaseName("ix_user_group_roles_group_id");
+            e.HasIndex(r => r.RoleId).HasDatabaseName("ix_user_group_roles_role_id");
         });
 
         modelBuilder.Entity<UserMfaKey>(e =>

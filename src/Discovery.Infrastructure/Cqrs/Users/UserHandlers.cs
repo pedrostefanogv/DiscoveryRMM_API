@@ -5,6 +5,7 @@ using Discovery.Core.Entities.Identity;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Enums.Security;
 using Discovery.Core.Helpers;
+using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
@@ -22,13 +23,18 @@ using UserSecurityStateDto = Discovery.Core.DTOs.Users.UserSecurityStateDto;
 namespace Discovery.Infrastructure.Cqrs.Users;
 
 public sealed class ListUsersQueryHandler(
-    IUserRepository repo
+    IUserRepository repo,
+    IUserScopedQueryRepository scopedRepo
 ) : IRequestHandler<ListUsersQuery, Result<UsersPageDto>>
 {
     public async Task<Result<UsersPageDto>> Handle(ListUsersQuery q, CancellationToken ct)
     {
-        var users = await repo.GetAllPageAsync(q.Cursor, q.Limit);
-        var count = await repo.CountAsync();
+        var allowedClientIds = q.AllowedClientIds ?? [];
+        var allowedSiteIds = q.AllowedSiteIds ?? [];
+
+        var users = await scopedRepo.GetScopedPageAsync(
+            q.HasGlobalAccess, allowedClientIds, allowedSiteIds, q.Cursor, q.Limit);
+        var count = await scopedRepo.CountScopedAsync(q.HasGlobalAccess, allowedClientIds, allowedSiteIds);
         var items = users.Select(Map).ToList().AsReadOnly();
         var hasMore = items.Count >= q.Limit;
         // Cursor DEVE ser codificado via helper — o decoder (UserRepository →
@@ -59,7 +65,14 @@ public sealed class GetUserByIdQueryHandler(
 }
 
 public sealed class CreateUserCommandHandler(
-    IUserRepository repo, IUserPasswordManagementService passwordManagement
+    IUserRepository repo,
+    IUserPasswordManagementService passwordManagement,
+    IPasswordService passwordService,
+    IUserGroupRepository groups,
+    IPermissionService permissions,
+    IScopeContext scopeContext,
+    ISiteRepository sites,
+    DiscoveryDbContext db
 ) : IRequestHandler<CreateUserCommand, Result<UserDto>>
 {
     public async Task<Result<UserDto>> Handle(CreateUserCommand cmd, CancellationToken ct)
@@ -68,6 +81,79 @@ public sealed class CreateUserCommandHandler(
             return Result<UserDto>.Failure(Error.Conflict($"Login '{cmd.Login}' already exists"));
         if (await repo.ExistsByEmailAsync(cmd.Email))
             return Result<UserDto>.Failure(Error.Conflict($"Email '{cmd.Email}' already exists"));
+
+        // POLÍTICA DE SENHA ANTES DE PERSISTIR (bug de criação não-transacional):
+        // antes o usuário era criado e SÓ DEPOIS a senha era aplicada. Se a política
+        // recusasse (o validador só checava "não vazio"), a linha do usuário ficava
+        // persistida com hash vazio — uma conta órfã que nunca conseguiria logar.
+        var (policyValid, policyReason) = passwordService.ValidatePolicy(cmd.Password);
+        if (!policyValid)
+            return Result<UserDto>.Failure(Error.Validation("Password", policyReason ?? "Senha inválida."));
+
+        // ESCOPO DO VÍNCULO INICIAL: criar um usuário já dentro de um grupo é uma
+        // concessão de acesso. Sem esta checagem, um admin de cliente criaria um
+        // usuário direto num grupo com papel Global, contornando a guarda do
+        // AssignGroupRole (o mesmo vetor, por outra porta).
+        //
+        // USUÁRIO ÓRFÃO (bug da revisão): um administrador ESCOPADO que criasse sem
+        // grupo produzia uma conta com zero permissões que ele mesmo não enxergava
+        // depois — a listagem escopada mostra só usuários com atribuição no escopo.
+        // A conta ficava inacessível para ele e invisível para administradores de
+        // outros clientes. Para administrador escopado o grupo passa a ser
+        // OBRIGATÓRIO; o admin global continua podendo criar sem grupo (ele enxerga
+        // e vincula depois).
+        if (!cmd.GroupId.HasValue && cmd.RequestedByUserId != Guid.Empty)
+        {
+            scopeContext.SetUserId(cmd.RequestedByUserId);
+            var actorAccess = await scopeContext.GetAccessAsync(ResourceType.Users, ActionType.Create);
+
+            if (actorAccess is not null && !actorAccess.HasGlobalAccess)
+            {
+                return Result<UserDto>.Failure(Error.Validation("GroupId",
+                    "Administrador com escopo limitado precisa informar o grupo inicial do usuário "
+                    + "(sem grupo, a conta não pertence a nenhum escopo e não pode ser administrada)."));
+            }
+        }
+
+        if (cmd.GroupId.HasValue && cmd.RequestedByUserId != Guid.Empty)
+        {
+            var group = await groups.GetByIdAsync(cmd.GroupId.Value);
+            if (group is null)
+                return Result<UserDto>.Failure(Error.Validation("GroupId", "Grupo informado não existe."));
+
+            if (group.IsActive == false)
+                return Result<UserDto>.Failure(Error.Validation("GroupId", "Grupo inativo não aceita novos membros."));
+
+            scopeContext.SetUserId(cmd.RequestedByUserId);
+            var granterAccess = await scopeContext.GetAccessAsync(ResourceType.Users, ActionType.Edit);
+
+            if (granterAccess is null || !granterAccess.HasGlobalAccess)
+            {
+                // Só pode vincular a grupo cujas atribuições caibam no próprio escopo.
+                foreach (var assignment in await groups.GetRolesForGroupAsync(cmd.GroupId.Value))
+                {
+                    // O cliente PAI é necessário para a herança Client→Site: sem ele,
+                    // uma concessão no nível de Client não autorizaria vincular a um
+                    // grupo cuja atribuição é Site-scoped (bug #10 da revisão final —
+                    // mesma classe do bug #9, em outro caminho).
+                    Guid? parentClientId = null;
+                    if (assignment.ScopeLevel == ScopeLevel.Site
+                        && assignment.ScopeId.HasValue
+                        && assignment.ScopeId.Value != Guid.Empty)
+                    {
+                        var site = await sites.GetByIdAsync(assignment.ScopeId.Value);
+                        parentClientId = site?.ClientId;
+                    }
+
+                    if (!Services.Identity.RoleGrantScopePolicy.CanGrant(
+                            granterAccess, assignment.ScopeLevel, assignment.ScopeId, parentClientId))
+                    {
+                        return Result<UserDto>.Failure(
+                            Error.Forbidden("Este grupo concede acesso fora do seu escopo."));
+                    }
+                }
+            }
+        }
 
         var user = new User
         {
@@ -84,12 +170,36 @@ public sealed class CreateUserCommandHandler(
             UpdatedAt = DateTime.UtcNow
         };
 
-        var created = await repo.CreateAsync(user);
+        // TRANSAÇÃO: usuário + credencial + vínculo entram juntos ou não entram.
+        // Sem isso, uma falha no vínculo deixava o usuário criado "sem acesso" e o
+        // chamador recebia erro — estado que o operador não conseguia reconciliar.
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await db.Database.BeginTransactionAsync(ct);
+            try
+            {
+                var created = await repo.CreateAsync(user);
 
-        // Apply password via password management service
-        await passwordManagement.ResetPasswordAsync(created.Id, cmd.Password, "system", ct);
+                // Apply password via password management service
+                await passwordManagement.ResetPasswordAsync(created.Id, cmd.Password, "system", ct);
 
-        return Result<UserDto>.Success(UserMapping.ToDto(created));
+                if (cmd.GroupId.HasValue)
+                {
+                    await groups.AddMemberAsync(cmd.GroupId.Value, created.Id);
+                    // As permissões efetivas mudaram — invalida o cache do usuário novo.
+                    await permissions.InvalidateUserCacheAsync(created.Id);
+                }
+
+                await transaction.CommitAsync(ct);
+                return Result<UserDto>.Success(UserMapping.ToDto(created));
+            }
+            catch
+            {
+                await transaction.RollbackAsync(ct);
+                throw;
+            }
+        });
     }
 }
 

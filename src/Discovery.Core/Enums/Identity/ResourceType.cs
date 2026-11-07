@@ -28,5 +28,9 @@ public enum ResourceType
     Patches,
     // Sensores de monitoramento (estado + métricas + gráficos). Recurso próprio
     // para não misturar com Automation (execução) nem Logs (leitura de eventos).
-    Sensors
+    Sensors,
+    // Operações sobre a sessão remota em si (hoje: Execute = preemptar a sessão de
+    // OUTRO técnico). Recurso separado de Agents porque abrir a própria sessão e
+    // derrubar a de um colega são privilégios de risco bem diferente.
+    RemoteSession
 }

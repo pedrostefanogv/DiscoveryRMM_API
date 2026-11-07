@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Repositories;
 
-public class UserRepository : IUserRepository
+public class UserRepository : IUserRepository, IUserScopedQueryRepository
 {
     private readonly DiscoveryDbContext _db;
     public UserRepository(DiscoveryDbContext db) => _db = db;
@@ -54,6 +54,89 @@ public class UserRepository : IUserRepository
             .ThenByDescending(u => u.Id)
             .Take(safeTake + 1)
             .ToListAsync();
+    }
+
+    public async Task<IReadOnlyList<User>> GetScopedPageAsync(
+        bool hasGlobalAccess,
+        IReadOnlyList<Guid> allowedClientIds,
+        IReadOnlyList<Guid> allowedSiteIds,
+        string? cursor,
+        int take = 50)
+    {
+        var query = ApplyScopeFilter(_db.Users.AsNoTracking(), hasGlobalAccess, allowedClientIds, allowedSiteIds);
+
+        if (CursorPaginationHelper.TryDecodeCreatedAtCursor(cursor, out var cursorCreatedAtUtc, out var cursorId))
+        {
+            query = CursorPaginationHelper.ApplyCreatedAtCursor(
+                query, cursorCreatedAtUtc, cursorId, u => u.CreatedAt, u => u.Id);
+        }
+
+        var safeTake = Math.Clamp(take, 1, 200);
+        return await query
+            .OrderByDescending(u => u.CreatedAt)
+            .ThenByDescending(u => u.Id)
+            .Take(safeTake + 1)
+            .ToListAsync();
+    }
+
+    public Task<int> CountScopedAsync(
+        bool hasGlobalAccess,
+        IReadOnlyList<Guid> allowedClientIds,
+        IReadOnlyList<Guid> allowedSiteIds)
+        => ApplyScopeFilter(_db.Users.AsNoTracking(), hasGlobalAccess, allowedClientIds, allowedSiteIds).CountAsync();
+
+    public Task<bool> IsUserInScopeAsync(
+        bool hasGlobalAccess,
+        IReadOnlyList<Guid> allowedClientIds,
+        IReadOnlyList<Guid> allowedSiteIds,
+        Guid targetUserId)
+        // Mesmo predicado da listagem (ApplyScopeFilter): o que o ator não vê na
+        // lista, também não pode administrar pelo id. Manter uma única origem evita
+        // a divergência clássica entre "listar" e "operar".
+        => ApplyScopeFilter(_db.Users.AsNoTracking(), hasGlobalAccess, allowedClientIds, allowedSiteIds)
+            .AnyAsync(u => u.Id == targetUserId);
+
+    /// <summary>
+    /// Row-level security da listagem de usuários.
+    ///
+    /// Um usuário é VISÍVEL para um administrador escopado quando possui ao menos
+    /// uma atribuição de papel cujo escopo está contido no escopo do administrador:
+    /// atribuição Client cujo <c>scope_id</c> está nos clientes permitidos, ou
+    /// atribuição Site cujo <c>scope_id</c> está nos sites permitidos (ou cujo
+    /// cliente esteja nos clientes permitidos).
+    /// </summary>
+    private IQueryable<User> ApplyScopeFilter(
+        IQueryable<User> query,
+        bool hasGlobalAccess,
+        IReadOnlyList<Guid> allowedClientIds,
+        IReadOnlyList<Guid> allowedSiteIds)
+    {
+        if (hasGlobalAccess)
+            return query;
+
+        var clientIds = allowedClientIds.Distinct().ToArray();
+        var siteIds = allowedSiteIds.Distinct().ToArray();
+
+        if (clientIds.Length == 0 && siteIds.Length == 0)
+        {
+            // Sem escopo concedido: nega em vez de vazar (deny-by-default).
+            return query.Where(u => false);
+        }
+
+        // Ids de grupos que possuem ao menos uma atribuição dentro do escopo.
+        var groupsInScope = _db.UserGroupRoles
+            .Where(r =>
+                (r.ScopeLevel == Discovery.Core.Enums.Identity.ScopeLevel.Client
+                    && r.ScopeId != null && clientIds.Contains(r.ScopeId.Value))
+                || (r.ScopeLevel == Discovery.Core.Enums.Identity.ScopeLevel.Site
+                    && r.ScopeId != null && siteIds.Contains(r.ScopeId.Value)))
+            .Select(r => r.GroupId);
+
+        var userIdsInScope = _db.UserGroupMemberships
+            .Where(m => groupsInScope.Contains(m.GroupId))
+            .Select(m => m.UserId);
+
+        return query.Where(u => userIdsInScope.Contains(u.Id));
     }
 
     public async Task<User> CreateAsync(User user)

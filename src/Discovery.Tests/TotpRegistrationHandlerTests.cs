@@ -21,7 +21,12 @@ namespace Discovery.Tests;
 [TestFixture]
 public class TotpRegistrationHandlerTests
 {
-    private static readonly OtpAuthService Otp = new();
+    /// <summary>
+    /// Serviço real (não fake): os códigos de backup usam o MESMO KDF das senhas
+    /// (Argon2id), então o teste precisa do serviço real para exercitar o caminho.
+    /// </summary>
+    private static readonly OtpAuthService Otp =
+        new(new UserPasswordService(new ConfigurationBuilder().Build()));
 
     [Test]
     public async Task Begin_ReturnsSecretAndOtpAuthUriForTheUser()

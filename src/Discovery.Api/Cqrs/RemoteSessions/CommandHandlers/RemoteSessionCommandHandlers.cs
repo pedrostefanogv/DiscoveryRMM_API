@@ -6,8 +6,10 @@ using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.ValueObjects;
 using Discovery.Core.Interfaces.Identity;
 using Discovery.Infrastructure.Services.Remote;
@@ -29,6 +31,7 @@ public sealed class StartRemoteSessionCommandHandler(
     IUserRepository userRepo,
     IClientRepository clientRepo,
     IOptions<RemoteAccessOptions> options,
+    IScopeContext scopeContext,
     ILogger<StartRemoteSessionCommandHandler> logger
 ) : IRequestHandler<StartRemoteSessionCommand, Result<RemoteSessionResponseDto>>
 {
@@ -65,6 +68,22 @@ public sealed class StartRemoteSessionCommandHandler(
         // Deriva tenantId/siteId do agente se não vieram populados (caso de ScopeSource.Global)
         var tenantId = cmd.TenantId != Guid.Empty ? cmd.TenantId : site.ClientId;
         var siteId = cmd.SiteId != Guid.Empty ? cmd.SiteId : agent.SiteId;
+
+        // ── ESCOPO (client/site) — obrigatório antes de qualquer efeito ──
+        // O endpoint declara RequirePermission(Agents, Execute) com escopo Global,
+        // que apenas prova que a permissão existe em ALGUM lugar. Sem esta checagem
+        // um técnico escopado ao cliente A abria sessão remota em máquina do cliente B
+        // (o tenant era DERIVADO do agente, nunca validado contra o chamador).
+        scopeContext.SetUserId(cmd.UserId);
+        var scopeAccess = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (scopeAccess is null || !RemoteSessionScopePolicy.Allows(scopeAccess, tenantId, siteId))
+        {
+            logger.LogWarning(
+                "[RemoteSession] StartSession NEGADO por escopo: User={UserId}, Agent={AgentId}, Client={TenantId}, Site={SiteId}",
+                cmd.UserId, cmd.AgentId, tenantId, siteId);
+            return Result<RemoteSessionResponseDto>.Failure(
+                Error.Forbidden("Você não tem acesso a este cliente/site."));
+        }
 
         // Diagnóstico: logar UserId recebido para rastrear sessões órfãs
         logger.LogInformation(
@@ -112,8 +131,25 @@ public sealed class StartRemoteSessionCommandHandler(
         // Se Force=true, mata sessões ativas do agent (incluindo órfãs com UserId vazio).
         // Além de fechar no banco, envia stop ao agent para evitar sessões órfãs no
         // processo (o agent só fecha sessões do mesmo kind no superseded).
+        //
+        // PERMISSÃO DEDICADA: preemptar a sessão de OUTRO técnico derruba um
+        // atendimento em andamento. Antes bastava Agents:Execute (a mesma permissão
+        // de abrir a própria sessão) e o console decidia por regex de mensagem de erro.
+        // Agora exige RemoteSession:Execute, semeada em M274.
         if (cmd.Force)
         {
+            var forceAccess = await scopeContext.GetAccessAsync(ResourceType.RemoteSession, ActionType.Execute);
+            if (forceAccess is null || (!forceAccess.HasGlobalAccess
+                && !forceAccess.AllowedClientIds.Contains(tenantId)
+                && !(siteId != Guid.Empty && forceAccess.AllowedSiteIds.Contains(siteId))))
+            {
+                logger.LogWarning(
+                    "[RemoteSession] Force negado: User={UserId} sem RemoteSession:Execute no escopo (Client={TenantId}, Site={SiteId})",
+                    cmd.UserId, tenantId, siteId);
+                return Result<RemoteSessionResponseDto>.Failure(
+                    Error.Forbidden("Você não tem permissão para encerrar a sessão de outro técnico."));
+            }
+
             var existingSessions = await sessionManager.GetActiveSessionsForAgentAsync(cmd.AgentId, ct);
             foreach (var existing in existingSessions)
             {
@@ -256,7 +292,9 @@ public sealed class StartRemoteSessionCommandHandler(
         {
             try
             {
-                var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(natsSubject);
+                // Restrições da sessão (view-only, sem terminal/arquivos...) já vêm
+                // persistidas em session.Rights e viram ACL do NATS nesta credencial.
+                var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(natsSubject, session.Rights);
                 var (jwt, nkeySeed, expiresAt) = await credentialsService.IssueSessionCredentialsAsync(
                     pubSubjects,
                     subSubjects,
