@@ -27,6 +27,21 @@ public class Department
     public int SortOrder { get; set; } = 0;
     public bool IsActive { get; set; } = true;
 
+    /// <summary>
+    /// Este departamento executa automação NAS MÁQUINAS (runbook de macro)?
+    ///
+    /// Nem todo departamento deveria: um chamado de COMPRAS ("comprar um monitor")
+    /// pode estar vinculado a um agent e nem por isso o time de compras deve rodar
+    /// script no equipamento. Sem esta trava, o vínculo com o chamado (que é o que
+    /// autoriza tratar) daria implicitamente poder de execução na máquina.
+    ///
+    /// Padrão FALSE (fail-closed): um departamento novo não executa nada até que
+    /// alguém habilite explicitamente. Depende TAMBÉM da permissão Tickets:Execute
+    /// — as duas condições são exigidas (permissão do usuário E habilitação do
+    /// departamento).
+    /// </summary>
+    public bool CanExecuteOnMachines { get; set; } = false;
+
     /// <summary>Estratégia de auto-atribuição (0=None, 1=RoundRobin, 2=LeastOpenTickets, 3=AiTriage).</summary>
     public int AssignmentStrategy { get; set; } = 0;
 

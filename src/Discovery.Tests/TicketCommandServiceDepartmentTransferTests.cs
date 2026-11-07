@@ -2,7 +2,9 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
 using NUnit.Framework;
 
 namespace Discovery.Tests;
@@ -272,6 +274,75 @@ public class TicketCommandServiceDepartmentTransferTests
         UpdatedAt = DateTime.UtcNow.AddHours(-1),
     };
 
+    /// <summary>
+    /// Contexto com o usuário de teste como membro ATIVO de TODOS os
+    /// departamentos usados nos cenários. A transferência passou a exigir vínculo
+    /// com o departamento de DESTINO (antes, mover o chamado era a forma mais
+    /// fácil de contornar a autorização por departamento), então o teste precisa
+    /// de um time real para exercitar a regra de negócio que ele cobre.
+    /// </summary>
+    private static DepartmentTeamResolver CreateTeamResolver()
+    {
+        var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
+            .UseInMemoryDatabase("transfer-team-" + Guid.NewGuid().ToString("N"))
+            .Options;
+        var db = new TransferTestDbContext(options);
+
+        db.Users.Add(new Core.Entities.Identity.User
+        {
+            Id = UserId, Login = "autor", Email = "autor@x.com", FullName = "Autor", IsActive = true
+        });
+
+        // O resolver exige departamento ATIVO para ter equipe elegível: sem as
+        // linhas de Department a resolucao devolveria lista vazia e o teste
+        // falharia por um motivo que nao tem relacao com o cenario sob teste.
+        foreach (var deptId in new[] { DepartmentA, DepartmentB })
+        {
+            db.Departments.Add(new Department
+            {
+                Id = deptId, ClientId = ClientId, Name = "Depto " + deptId.ToString("N")[..4],
+                IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+        }
+
+        foreach (var deptId in new[] { DepartmentA, DepartmentB })
+        {
+            db.DepartmentMembers.Add(new DepartmentMember
+            {
+                Id = Guid.NewGuid(), DepartmentId = deptId, UserId = UserId,
+                IsActive = true, CreatedAt = DateTime.UtcNow
+            });
+        }
+        db.SaveChanges();
+
+        return new DepartmentTeamResolver(db);
+    }
+
+    /// <summary>Contexto mínimo: só usuário e vínculo de departamento.</summary>
+    private sealed class TransferTestDbContext(DbContextOptions<DiscoveryDbContext> options)
+        : DiscoveryDbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var allowed = new HashSet<Type>
+            {
+                typeof(Core.Entities.Identity.User), typeof(Department), typeof(DepartmentMember)
+            };
+
+            foreach (var entityType in typeof(Department).Assembly.GetTypes()
+                         .Where(t => t.IsClass && t.Namespace is not null
+                                     && t.Namespace.StartsWith("Discovery.Core.Entities", StringComparison.Ordinal))
+                         .Where(t => !allowed.Contains(t)))
+            {
+                modelBuilder.Ignore(entityType);
+            }
+
+            modelBuilder.Entity<Core.Entities.Identity.User>(e => e.HasKey(u => u.Id));
+            modelBuilder.Entity<Department>(e => e.HasKey(d => d.Id));
+            modelBuilder.Entity<DepartmentMember>(e => e.HasKey(m => m.Id));
+        }
+    }
+
     private static TicketCommandService CreateService(
         ITicketRepository repo,
         IActivityLogService activityLog,
@@ -289,7 +360,44 @@ public class TicketCommandServiceDepartmentTransferTests
             null!,               // IMediator
             null!,               // IUserRepository
             new FakeOverrideTracker(),
-            departments);
+            departments,
+            CreateTeamResolver());
+
+    // ── G4: transferência só para departamento do próprio time ──────────
+
+    [Test]
+    public async Task UpdateTicketAsync_ShouldRejectTransfer_WhenActorIsNotMemberOfTargetDepartment()
+    {
+        var ticket = CreateTicket(DepartmentA, ProfileA);
+        var repo = new FakeTicketRepository(ticket);
+        var activityLog = new FakeActivityLogService();
+        var profiles = new FakeWorkflowProfileRepository(DepartmentB, ProfileB, ClientId);
+        var sla = new FakeSlaService();
+        var departments = new FakeDepartmentService(DepartmentB, ClientId, isActive: true);
+
+        // Equipe VAZIA: o autor não é membro de nenhum departamento.
+        var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
+            .UseInMemoryDatabase("transfer-empty-" + Guid.NewGuid().ToString("N"))
+            .Options;
+        await using var emptyDb = new TransferTestDbContext(options);
+
+        var svc = new TicketCommandService(
+            repo, activityLog, null!, null!, profiles, sla, null!, null!, null!,
+            new FakeOverrideTracker(), departments, new DepartmentTeamResolver(emptyDb));
+
+        // Mover o chamado para um departamento do qual não se faz parte era a
+        // forma mais fácil de contornar a autorização por departamento: o usuário
+        // transferia o chamado para o próprio time e passava a tratá-lo.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await svc.UpdateTicketAsync(
+                ticket.Id, null, null, null,
+                departmentId: DepartmentB, workflowProfileId: null,
+                assignedToUserId: ticket.AssignedToUserId, category: null,
+                changedByUserId: UserId));
+
+        Assert.That(ex.Message, Does.Contain("time de atendimento"),
+            "a transferencia deve ser recusada com motivo explicito");
+    }
 
     // ── Fakes ──
 
@@ -303,6 +411,12 @@ public class TicketCommandServiceDepartmentTransferTests
         public Task<Ticket> CreateAsync(Ticket t) => Task.FromResult(t);
         public Task UpdateAsync(Ticket t) => Task.CompletedTask;
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
+
+        // Restauracao nao faz parte dos cenarios de transferencia de departamento.
+        public Task RestoreAsync(Guid id) => Task.CompletedTask;
+
+        public Task<Ticket?> GetByIdIncludingDeletedAsync(Guid id) =>
+            Task.FromResult<Ticket?>(Ticket.Id == id ? Ticket : null);
         public Task<IEnumerable<Ticket>> GetByClientIdAsync(Guid clientId, Guid? workflowStateId = null) =>
             Task.FromResult<IEnumerable<Ticket>>(Array.Empty<Ticket>());
         public Task<IEnumerable<Ticket>> GetByAgentIdAsync(Guid agentId, Guid? workflowStateId = null) =>

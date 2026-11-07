@@ -26,6 +26,7 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly IUserRepository _userRepository;
     private readonly ITicketAssignmentOverrideTracker _overrideTracker;
     private readonly IDepartmentService _departmentService;
+    private readonly IDepartmentTeamResolver _departmentTeamResolver;
 
     public TicketCommandService(
         ITicketRepository repo,
@@ -38,7 +39,8 @@ public sealed class TicketCommandService : ITicketCommandService
         IMediator mediator,
         IUserRepository userRepository,
         ITicketAssignmentOverrideTracker overrideTracker,
-        IDepartmentService departmentService)
+        IDepartmentService departmentService,
+        IDepartmentTeamResolver departmentTeamResolver)
     {
         _repo = repo;
         _activityLog = activityLog;
@@ -51,6 +53,7 @@ public sealed class TicketCommandService : ITicketCommandService
         _userRepository = userRepository;
         _overrideTracker = overrideTracker;
         _departmentService = departmentService;
+        _departmentTeamResolver = departmentTeamResolver;
     }
 
     public async Task<Ticket> CreateTicketAsync(
@@ -274,7 +277,8 @@ public sealed class TicketCommandService : ITicketCommandService
         // create (existe, ativo e do próprio cliente ou global), senão um PUT
         // forjado moveria o chamado para fora do escopo do cliente.
         if (departmentChanged && newDepartmentId.HasValue)
-            await EnsureDepartmentBelongsToClientAsync(ticket.ClientId, newDepartmentId.Value, ct);
+            await EnsureDepartmentBelongsToClientAsync(
+                ticket.ClientId, newDepartmentId.Value, ct, changedByUserId);
 
         ticket.DepartmentId = newDepartmentId;
 
@@ -409,15 +413,33 @@ public sealed class TicketCommandService : ITicketCommandService
     /// Valida que o departamento destino existe, está ativo e é do cliente do
     /// chamado (ou global). Mesma regra do create para não permitir mover um
     /// chamado para um departamento de outro cliente via API.
+    ///
+    /// Além disso exige que o AUTOR da transferência seja membro do time do
+    /// departamento de DESTINO. Sem isso, mover o chamado era a forma mais fácil
+    /// de contornar a autorização por departamento: um usuário de fora transferia
+    /// o chamado para o próprio time e passava a tratá-lo.
     /// </summary>
     private async Task EnsureDepartmentBelongsToClientAsync(
-        Guid clientId, Guid departmentId, CancellationToken ct)
+        Guid clientId, Guid departmentId, CancellationToken ct,
+        Guid? changedByUserId = null)
     {
         var department = await _departmentService.GetByIdAsync(departmentId, ct);
         if (department is null || !department.IsActive
             || (department.ClientId.HasValue && department.ClientId.Value != clientId))
         {
             throw new InvalidOperationException("Departamento inválido para este cliente.");
+        }
+
+        // Sem autor identificado (rotinas internas/background) a checagem de time
+        // não se aplica: não há ator a quem atribuir a transferência.
+        if (changedByUserId is null)
+            return;
+
+        var members = await _departmentTeamResolver.ResolveMembersAsync(departmentId, ct);
+        if (members.All(m => m.UserId != changedByUserId.Value))
+        {
+            throw new InvalidOperationException(
+                "Você só pode transferir chamados para um departamento do qual faz parte do time de atendimento.");
         }
     }
 

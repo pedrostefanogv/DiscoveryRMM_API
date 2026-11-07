@@ -48,5 +48,12 @@ public enum TicketActivityType
     ChatEnded = 30,
 
     /// <summary>Comentário excluído (soft delete) — permanece legível no histórico.</summary>
-    CommentDeleted = 31
+    CommentDeleted = 31,
+
+    /// <summary>
+    /// Chamado RESTAURADO da lixeira. Existe porque a exclusão é reversível: o
+    /// histórico (comentários, anexos, timeline) nunca sai do banco, então um
+    /// engano ao excluir precisa poder ser desfeito — e ficar auditado.
+    /// </summary>
+    Restored = 32
 }

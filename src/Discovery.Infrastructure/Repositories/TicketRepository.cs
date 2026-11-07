@@ -28,6 +28,15 @@ public class TicketRepository : ITicketRepository
             .SingleOrDefaultAsync(ticket => ticket.Id == id);
     }
 
+    public async Task<Ticket?> GetByIdIncludingDeletedAsync(Guid id)
+    {
+        // Sem o filtro de DeletedAt: usado pela restauração, que precisa enxergar
+        // exatamente o registro que GetByIdAsync esconde.
+        return await _db.Tickets
+            .AsNoTracking()
+            .SingleOrDefaultAsync(ticket => ticket.Id == id);
+    }
+
     public async Task<IEnumerable<Ticket>> GetByClientIdAsync(Guid clientId, Guid? workflowStateId = null)
     {
         IQueryable<Ticket> query = _db.Tickets
@@ -272,6 +281,29 @@ public class TicketRepository : ITicketRepository
 
         if (deletedTicket is not null)
             await PublishDashboardEventAsync("TicketDeleted", deletedTicket);
+    }
+
+    /// <summary>
+    /// Desfaz o soft delete (restaura da lixeira). Espelha DeleteAsync: mesma
+    /// estratégia de ExecuteUpdate para não trazer a entidade ao change tracker
+    /// e publica o mesmo tipo de evento de dashboard.
+    /// </summary>
+    public async Task RestoreAsync(Guid id)
+    {
+        var now = DateTime.UtcNow;
+
+        await _db.Tickets
+            .Where(ticket => ticket.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(ticket => ticket.DeletedAt, _ => (DateTime?)null)
+                .SetProperty(ticket => ticket.UpdatedAt, _ => now));
+
+        var restored = await _db.Tickets
+            .AsNoTracking()
+            .SingleOrDefaultAsync(ticket => ticket.Id == id);
+
+        if (restored is not null)
+            await PublishDashboardEventAsync("TicketRestored", restored);
     }
 
     public async Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId)

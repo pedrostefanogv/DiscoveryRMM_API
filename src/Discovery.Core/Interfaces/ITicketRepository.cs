@@ -13,6 +13,20 @@ public interface ITicketRepository
     Task<Ticket> CreateAsync(Ticket ticket);
     Task UpdateAsync(Ticket ticket);
     Task DeleteAsync(Guid id);
+
+    /// <summary>
+    /// Restaura um chamado da lixeira (limpa <c>DeletedAt</c>). Par da
+    /// <see cref="DeleteAsync"/>: a exclusão é reversível e precisa de um caminho
+    /// de volta, senão vira perda definitiva na prática.
+    /// </summary>
+    Task RestoreAsync(Guid id);
+
+    /// <summary>
+    /// Busca o chamado INCLUINDO os da lixeira. Necessário porque
+    /// <see cref="GetByIdAsync"/> filtra <c>DeletedAt == null</c> — sem esta
+    /// variante, o handler de restauração não enxergaria o próprio registro.
+    /// </summary>
+    Task<Ticket?> GetByIdIncludingDeletedAsync(Guid id);
     Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId);
 
     /// <summary>Pagina comentários usando cursor (CreatedAt + Id).</summary>

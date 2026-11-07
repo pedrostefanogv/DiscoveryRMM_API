@@ -8,6 +8,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -433,7 +434,9 @@ public sealed class ListNotificationChannelsQueryHandler(DiscoveryDbContext db)
 
 // ── Membros de departamento ──────────────────────────────────────────────
 
-public sealed class AddDepartmentMemberCommandHandler(DiscoveryDbContext db)
+public sealed class AddDepartmentMemberCommandHandler(
+    DiscoveryDbContext db,
+    IPermissionService? permissionService = null)
     : IRequestHandler<AddDepartmentMemberCommand, Result<DepartmentMemberDto>>
 {
     public async Task<Result<DepartmentMemberDto>> Handle(AddDepartmentMemberCommand cmd, CancellationToken ct)
@@ -467,6 +470,9 @@ public sealed class AddDepartmentMemberCommandHandler(DiscoveryDbContext db)
         {
             existing.IsActive = true;
             await db.SaveChangesAsync(ct);
+            // O vinculo agora AUTORIZA atendimento: sem invalidar, o usuario
+            // ficaria ate 5 min (TTL do cache) sem poder tratar os chamados.
+            await InvalidatePermissionCacheAsync(cmd.UserId, ct);
             return Result<DepartmentMemberDto>.Success(await MapMemberAsync(db, existing, ct));
         }
 
@@ -480,7 +486,28 @@ public sealed class AddDepartmentMemberCommandHandler(DiscoveryDbContext db)
         };
         db.DepartmentMembers.Add(member);
         await db.SaveChangesAsync(ct);
+        await InvalidatePermissionCacheAsync(cmd.UserId, ct);
         return Result<DepartmentMemberDto>.Success(await MapMemberAsync(db, member, ct));
+    }
+
+    /// <summary>
+    /// Invalida o cache de permissoes do usuario apos mudar o vinculo com o time.
+    /// A invalidacao e best-effort: uma falha de Redis nao pode desfazer a
+    /// alteracao de vinculo, que ja foi persistida.
+    /// </summary>
+    private async Task InvalidatePermissionCacheAsync(Guid userId, CancellationToken ct)
+    {
+        if (permissionService is null)
+            return;
+
+        try
+        {
+            await permissionService.InvalidateUserCacheAsync(userId);
+        }
+        catch
+        {
+            // Cache indisponivel: a proxima leitura reconstroi a partir do banco.
+        }
     }
 
     /// <summary>
@@ -528,7 +555,9 @@ public sealed class AddDepartmentMemberCommandHandler(DiscoveryDbContext db)
     }
 }
 
-public sealed class RemoveDepartmentMemberCommandHandler(DiscoveryDbContext db)
+public sealed class RemoveDepartmentMemberCommandHandler(
+    DiscoveryDbContext db,
+    IPermissionService? permissionService = null)
     : IRequestHandler<RemoveDepartmentMemberCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RemoveDepartmentMemberCommand cmd, CancellationToken ct)
@@ -539,6 +568,22 @@ public sealed class RemoveDepartmentMemberCommandHandler(DiscoveryDbContext db)
             return Result<VoidResult>.Failure(Error.NotFound("Membro não encontrado."));
         db.DepartmentMembers.Remove(member);
         await db.SaveChangesAsync(ct);
+
+        // CRÍTICO de segurança: removido do time, o usuário deve perder o acesso
+        // ao chamado IMEDIATAMENTE. Sem invalidar, o cache (TTL 300s) manteria o
+        // acesso residual por até 5 minutos.
+        if (permissionService is not null)
+        {
+            try
+            {
+                await permissionService.InvalidateUserCacheAsync(cmd.UserId);
+            }
+            catch
+            {
+                // Cache indisponível: a próxima leitura reconstrói do banco.
+            }
+        }
+
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }

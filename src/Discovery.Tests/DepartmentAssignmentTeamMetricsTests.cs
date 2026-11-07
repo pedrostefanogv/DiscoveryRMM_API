@@ -5,7 +5,9 @@ using Discovery.Core.Cqrs.Support.Assignments;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Entities.Identity;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Cqrs.Support;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
@@ -163,7 +165,11 @@ public class DepartmentAssignmentTeamMetricsTests
                 "Membro herdado do departamento global: o perfil é gerenciado no departamento global.")
         };
 
-        var controller = new DepartmentsController(mediator, null!, null!, null!)
+        // O controller ganhou IScopeContext para aplicar escopo de cliente nas
+        // LEITURAS de departamento (antes qualquer autenticado listava todos).
+        // Este cenario exercita o perfil de membro, que nao passa por esse filtro.
+        var controller = new DepartmentsController(
+            mediator, null!, null!, null!, new GlobalScopeStub())
         {
             ControllerContext = new ControllerContext
             {
@@ -179,6 +185,24 @@ public class DepartmentAssignmentTeamMetricsTests
 
         var payload = JsonSerializer.Serialize(objectResult.Value);
         Assert.That(payload, Does.Contain("gerenciado no departamento global"));
+    }
+
+    /// <summary>
+    /// Escopo global: os cenarios deste arquivo nao exercitam o filtro por
+    /// cliente das leituras de departamento, entao o stub concede acesso total.
+    /// </summary>
+    private sealed class GlobalScopeStub : IScopeContext
+    {
+        public Guid? UserId => null;
+        public Guid? ResolvedClientId { get; set; }
+        public Guid? ResolvedSiteId { get; set; }
+        public void SetUserId(Guid userId) { }
+
+        public Task<UserScopeAccess> GetAccessAsync(ResourceType r, ActionType a) =>
+            Task.FromResult(new UserScopeAccess { HasGlobalAccess = true });
+
+        public Task<bool> HasGlobalAccessAsync(ResourceType r, ActionType a) =>
+            Task.FromResult(true);
     }
 
     private sealed class FakeMetrics : ITechnicianMetricsService

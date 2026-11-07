@@ -14,6 +14,16 @@ public sealed record ReopenTicketCommand(Guid TicketId, string? Reason, Guid? Ch
 public sealed record DeleteTicketCommand(Guid TicketId, Guid? ChangedByUserId)
     : ICommand<Result<VoidResult>>;
 
+/// <summary>
+/// Restaura um chamado da lixeira (desfaz o soft delete).
+///
+/// A exclusão NUNCA apagou dados — só marcou <c>DeletedAt</c>. Sem esta operação,
+/// um clique errado em "Excluir" tornava o chamado inalcançável pela API, o que
+/// na prática transformava um soft delete reversível em perda definitiva.
+/// </summary>
+public sealed record RestoreTicketCommand(Guid TicketId, Guid? ChangedByUserId)
+    : ICommand<Result<VoidResult>>;
+
 /// <summary>Avalia (CSAT 1..5) um chamado encerrado. Upsert nos campos do próprio chamado.</summary>
 public sealed record RateTicketCommand(
     Guid TicketId,

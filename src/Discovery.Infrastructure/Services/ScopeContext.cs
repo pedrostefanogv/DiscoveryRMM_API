@@ -39,6 +39,9 @@ public class ScopeContext : IScopeContext
         _permissionService = permissionService;
     }
 
+    /// <inheritdoc />
+    public Guid? UserId => _userId;
+
     public void SetUserId(Guid userId)
     {
         // Nao limpa o cache: as entradas passam a ser por usuario, entao trocar de

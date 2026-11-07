@@ -32,16 +32,25 @@ public class TicketsController(
     IScopeContext scopeContext,
     ITicketAnswerSearchService ticketAnswerSearchService,
     INotificationService notificationService,
+    ITicketAccessPolicy accessPolicy,
+    IWorkflowRepository workflowRepository,
     ILogger<TicketsController> logger) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
     private Guid? CurrentUserId => HttpContext.Items["UserId"] as Guid?;
 
     /// <summary>
-    /// Valida o escopo (cliente/site) do ticket para o usuário atual. Usuários com
-    /// acesso global passam direto; os demais só acessam tickets no seu ACL.
+    /// Autorização por chamado — agora delegada à política ÚNICA
+    /// (<see cref="ITicketAccessPolicy"/>). Antes esta lógica era duplicada aqui
+    /// e em <c>TicketAccessGuard</c>, e comparava apenas Cliente/Site: um usuário
+    /// com Edit no cliente tratava chamados de QUALQUER departamento.
+    ///
+    /// As ações são mapeadas para a decisão correta em vez de virarem todas
+    /// "escopo de edição":
+    /// - View/Delete             -> ver o chamado (ACL de cliente/site)
+    /// - Edit/Execute            -> TRATAR (membro do time do departamento)
+    /// - Close (via workflow)    -> fechar (time ou solicitante do próprio)
     /// </summary>
-    /// <summary>Atalho para checagens de leitura (escopo View).</summary>
     private Task<bool> CanAccessTicketAsync(Guid ticketId, CancellationToken ct)
         => CanAccessTicketAsync(ticketId, ActionType.View, ct);
 
@@ -49,15 +58,39 @@ public class TicketsController(
         Guid ticketId,
         ActionType action = ActionType.View,
         CancellationToken ct = default)
+        => (await ResolveTicketAccessAsync(ticketId, action, ct)).Allowed;
+
+    /// <summary>Decisão completa (com motivo), usada para responder 403 explicativo.</summary>
+    private async Task<TicketAccessDecision> ResolveTicketAccessAsync(
+        Guid ticketId,
+        ActionType action,
+        CancellationToken ct = default,
+        Guid? targetStateId = null)
     {
-        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, action);
-        if (access.HasGlobalAccess) return true;
+        var ticket = await ticketRepository.GetByIdAsync(ticketId);
+        if (ticket is null)
+            return TicketAccessDecision.Deny("Chamado não encontrado.", "NOT_FOUND");
 
-        var ticket = await queryService.GetTicketByIdAsync(ticketId, ct);
-        if (ticket is null) return false;
+        var decision = action switch
+        {
+            // Editar/executar um chamado é "tratar": exige vínculo com o time.
+            ActionType.Edit or ActionType.Execute =>
+                await accessPolicy.CanTreatAsync(CurrentUserId, ticket, ct),
 
-        return access.AllowedClientIds.Contains(ticket.ClientId)
-            || (ticket.SiteId.HasValue && access.AllowedSiteIds.Contains(ticket.SiteId.Value));
+            // Excluir é destrutivo e continua exigindo escopo de leitura no chamado;
+            // a permissão de exclusão já é validada por RequirePermission.
+            ActionType.Delete =>
+                await accessPolicy.CanViewAsync(CurrentUserId, ticket, ct),
+
+            _ => await accessPolicy.CanViewAsync(CurrentUserId, ticket, ct)
+        };
+
+        // Modo de observação: registra a negação e concede, para medir o impacto
+        // antes de bloquear. Sem efeito quando o shadow está desligado.
+        if (action is ActionType.Edit or ActionType.Execute)
+            return accessPolicy.ApplyShadow(decision, CurrentUserId, ticketId, action.ToString());
+
+        return decision;
     }
 
     // ── Listagem com paginação cursor ─────────────────────────────────
@@ -125,9 +158,6 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
     public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] TransitionTicketStateRequest request)
     {
-        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
-            return NotFound();
-
         // Aceita "targetStateId" (canônico) e "workflowStateId" (legado). Sem a
         // resolução, um corpo com a grafia antiga virava 400 de validação em
         // TODA troca de estado.
@@ -143,6 +173,24 @@ public class TicketsController(
             });
         }
 
+        // FECHAR/ALTERAR ESTADO: a regra é mais restrita que "editar".
+        // Quem trata pode mover o chamado; quem apenas ABRIU pode somente
+        // encerrá-lo (transição para estado final) — nunca reabrir ou pular etapas.
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        var decision = await accessPolicy.CanCloseAsync(
+            CurrentUserId, ticket, targetStateId, HttpContext.RequestAborted);
+        decision = accessPolicy.ApplyShadow(decision, CurrentUserId, id, "Close");
+
+        if (!decision.Allowed)
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = decision.Code,
+                message = decision.Reason
+            });
+
         var result = await mediator.Send(
             new TransitionTicketStateCommand(id, targetStateId, CurrentUserId),
             HttpContext.RequestAborted);
@@ -152,6 +200,11 @@ public class TicketsController(
     /// <summary>
     /// Move o chamado para a lixeira (soft delete). O registro é preservado com
     /// DeletedAt preenchido e deixa de aparecer nas listagens.
+    ///
+    /// A resposta inclui um AVISO orientando o uso correto: na maioria dos casos o
+    /// certo é FECHAR o chamado como indevido (mantendo o histórico e as métricas
+    /// do departamento), não removê-lo da visão de todos. Excluir deve ser reserva
+    /// para engano/spam — e é reversível via <c>POST {id}/restore</c>.
     /// </summary>
     [HttpDelete("{id:guid}")]
     [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
@@ -162,6 +215,47 @@ public class TicketsController(
 
         var result = await mediator.Send(
             new DeleteTicketCommand(id, CurrentUserId), HttpContext.RequestAborted);
+
+        if (result.IsFailure)
+            return result.ToActionResult();
+
+        return Ok(new
+        {
+            ticketId = id,
+            deleted = true,
+            // Orientação de uso: excluir tira o chamado das listagens e dos
+            // indicadores; encerrar como indevido preserva ambos.
+            advice = "Prefira encerrar o chamado como indevido quando ele nao deveria ter sido aberto: " +
+                     "isso preserva o historico e as metricas do departamento. Use a exclusao apenas para " +
+                     "engano ou spam. A exclusao pode ser desfeita em POST /tickets/{id}/restore.",
+            restoreEndpoint = $"/api/v1/tickets/{id}/restore"
+        });
+    }
+
+    /// <summary>
+    /// Restaura um chamado da lixeira.
+    ///
+    /// Existe porque a exclusão sempre foi soft (o registro nunca sai do banco),
+    /// mas não havia caminho de volta: um clique errado tornava o chamado
+    /// inalcançável pela API. Exige a permissão de exclusão (é a mesma alçada) e o
+    /// mesmo escopo do chamado.
+    /// </summary>
+    [HttpPost("{id:guid}/restore")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
+    public async Task<IActionResult> Restore(Guid id)
+    {
+        // O chamado está na lixeira, então CanAccessTicketAsync (que usa
+        // GetByIdAsync) não o encontraria. Valida-se o escopo direto no registro.
+        var ticket = await ticketRepository.GetByIdIncludingDeletedAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        var view = await accessPolicy.CanViewAsync(CurrentUserId, ticket, HttpContext.RequestAborted);
+        if (!view.Allowed)
+            return NotFound();
+
+        var result = await mediator.Send(
+            new RestoreTicketCommand(id, CurrentUserId), HttpContext.RequestAborted);
         return result.ToActionResult();
     }
 
@@ -172,10 +266,10 @@ public class TicketsController(
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
             return NotFound();
 
-        // Notas internas: só quem pode editar ESTE chamado vê. O cálculo anterior
-        // usava o conjunto global de acesso de edição — um usuário com Edit no
-        // cliente A enxergava notas internas de chamados do cliente B (onde só
-        // tinha View).
+        // Notas internas: só quem TRATA o chamado vê (membro do time do
+        // departamento, ou acesso global). Antes o critério era "pode editar o
+        // chamado", que no modelo por cliente/site incluía colegas de OUTROS
+        // departamentos do mesmo cliente — as notas internas do time vazavam.
         var includeInternal = await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted);
 
         var result = await mediator.Send(new GetTicketCommentsQuery(id, cursor, Math.Clamp(limit, 1, 200), includeInternal), HttpContext.RequestAborted);
@@ -203,8 +297,24 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.Execute)]
     public async Task<IActionResult> ExecuteRunbook(Guid id, [FromBody] ExecuteTicketRunbookCommand command)
     {
-        if (!await CanAccessTicketAsync(id, ActionType.Execute, HttpContext.RequestAborted))
+        // Execução em MÁQUINA exige três coisas: permissão Tickets:Execute, ser do
+        // time do chamado e o DEPARTAMENTO estar habilitado a executar. Um
+        // departamento de compras pode ter chamado vinculado a um agent sem que seu
+        // time deva rodar scripts no equipamento.
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
             return NotFound();
+
+        var decision = await accessPolicy.CanExecuteOnMachineAsync(
+            CurrentUserId, ticket, HttpContext.RequestAborted);
+        decision = accessPolicy.ApplyShadow(decision, CurrentUserId, id, "Runbook");
+
+        if (!decision.Allowed)
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                code = decision.Code,
+                message = decision.Reason
+            });
 
         // Operator sempre vem do token autenticado — nunca do payload do cliente.
         var result = await mediator.Send(command with { TicketId = id, OperatorId = CurrentUserId, OperatorName = Username }, HttpContext.RequestAborted);
@@ -954,6 +1064,106 @@ public class TicketsController(
         var result = await ticketAnswerSearchService.SearchAsync(
             new TicketAnswerSearchRequest(q, limit, templateId, questionKey, minSimilarity), ct);
         return Ok(result);
+    }
+
+    // ── Capacidades do ator sobre ESTE chamado ───────────────────────────
+
+    /// <summary>
+    /// Informa o que o usuário autenticado pode fazer NESTE chamado.
+    ///
+    /// Existe para o console não REIMPLEMENTAR a regra de autorização no cliente:
+    /// a UI só esconde/desabilita o que o backend já negaria, e a decisão continua
+    /// tendo uma única fonte de verdade. Sem isso, qualquer divergência entre
+    /// frontend e backend vira botão que dá erro (ou pior, botão que aparece e
+    /// não deveria).
+    /// </summary>
+    [HttpGet("{id:guid}/capabilities")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    public async Task<IActionResult> GetCapabilities(Guid id, CancellationToken ct)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        var canView = await accessPolicy.CanViewAsync(CurrentUserId, ticket, ct);
+        if (!canView.Allowed)
+            return NotFound();
+
+        var canTreat = await accessPolicy.CanTreatAsync(CurrentUserId, ticket, ct);
+        var isRequester = ticket.RequesterUserId.HasValue && ticket.RequesterUserId == CurrentUserId;
+
+        // Cada flag reflete o caminho de execução REAL, não uma suposição de que
+        // "tratar" implica todas as ações. Sem isso a UI esconderia (ou mostraria)
+        // botões que divergem do que o endpoint correspondente aceita:
+        // - Delete passa por ResolveTicketAccessAsync(Delete) => escopo de LEITURA.
+        // - Editar/atribuir/merge/runbook passam por CanTreat.
+        var canDeleteByPolicy = (await ResolveTicketAccessAsync(id, ActionType.Delete, ct)).Allowed;
+
+        // "Pode fechar" depende do ESTADO DE DESTINO (só encerrar vale para o
+        // solicitante), então informamos quais estados finais ele pode atingir.
+        var states = await workflowRepository.GetStatesAsync(ticket.ClientId);
+        var closableStateIds = new List<Guid>();
+        foreach (var state in states.Where(s => s.IsFinal))
+        {
+            var closeDecision = await accessPolicy.CanCloseAsync(CurrentUserId, ticket, state.Id, ct);
+            // O mesmo shadow aplicado pelo endpoint de workflow-state: se lá o
+            // acesso é concedido durante a medição, aqui deve ser também, senão a
+            // UI esconderia um botão que o backend aceitaria.
+            if (accessPolicy.ApplyShadow(closeDecision, CurrentUserId, id, "Close").Allowed)
+                closableStateIds.Add(state.Id);
+        }
+
+        // Em shadow mode a UI precisa refletir o que o backend REALMENTE fará,
+        // senão esconderia ações ainda permitidas durante a medição.
+        var treatAllowed = accessPolicy.ApplyShadow(canTreat, CurrentUserId, id, "Capabilities").Allowed;
+
+        return Ok(new
+        {
+            canView = true,
+            canTreat = treatAllowed,
+            canEdit = treatAllowed,
+            canAssign = treatAllowed,
+            canMerge = treatAllowed,
+            // Runbook NÃO segue "tratar": exige a permissão de execução E o
+            // departamento habilitado a executar na máquina.
+            canExecuteRunbook = accessPolicy.ApplyShadow(
+                await accessPolicy.CanExecuteOnMachineAsync(CurrentUserId, ticket, ct),
+                CurrentUserId, id, "Runbook").Allowed,
+            canSeeInternalNotes = treatAllowed,
+            // Excluir segue a política de escopo de leitura, igual ao endpoint DELETE.
+            canDelete = canDeleteByPolicy,
+            canClose = closableStateIds.Count > 0,
+            closableStateIds,
+            isRequester,
+            // true quando o acesso vem do vínculo com o time (e não de bypass global).
+            isDepartmentTeamMember = canTreat.Allowed
+                && !canTreat.Reason.Contains("global", StringComparison.OrdinalIgnoreCase),
+            shadowMode = accessPolicy.ShadowMode,
+            // O motivo descreve o que a POLÍTICA decidiu, mesmo em shadow — é o
+            // dado que permite avaliar o impacto da regra antes de ligá-la.
+            reason = canTreat.Allowed ? null : canTreat.Reason,
+            code = canTreat.Allowed ? null : canTreat.Code,
+            // Sinaliza que o acesso foi concedido APENAS pelo modo de observação.
+            grantedByShadow = !canTreat.Allowed && treatAllowed
+        });
+    }
+
+    // ── Departamentos do usuário (para fila "Meu time") ──────────────────
+
+    /// <summary>
+    /// Departamentos em que o usuário é membro ativo do time de atendimento.
+    /// Alimenta a fila "Meu time" e o filtro de departamento do console — hoje a
+    /// UI não tem como saber os vínculos do usuário logado.
+    /// </summary>
+    [HttpGet("my-departments")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetMyDepartments(CancellationToken ct)
+    {
+        if (CurrentUserId is not { } userId)
+            return Unauthorized(new { message = "Autenticação necessária." });
+
+        var departmentIds = await accessPolicy.GetMemberDepartmentIdsAsync(userId, ct);
+        return Ok(new { departmentIds });
     }
 
     // ── Respostas do questionário do template ────────────────────────────

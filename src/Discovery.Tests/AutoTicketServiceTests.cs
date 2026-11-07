@@ -823,6 +823,12 @@ public class AutoTicketServiceTests
             return Task.CompletedTask;
         }
 
+        // Restauracao nao participa dos cenarios de auto-ticket.
+        public Task RestoreAsync(Guid id) => Task.CompletedTask;
+
+        public Task<Ticket?> GetByIdIncludingDeletedAsync(Guid id) =>
+            Task.FromResult(_tickets.TryGetValue(id, out var t) ? t : null);
+
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId)
             => Task.FromResult<IEnumerable<TicketComment>>([]);
 

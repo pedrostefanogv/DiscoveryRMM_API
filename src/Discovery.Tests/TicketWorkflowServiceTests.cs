@@ -265,6 +265,11 @@ public class TicketWorkflowServiceTests
         public Task UpdateAsync(Ticket ticket) => Task.CompletedTask;
         public Task DeleteAsync(Guid id) => Task.CompletedTask;
 
+        public Task RestoreAsync(Guid id) => Task.CompletedTask;
+
+        public Task<Ticket?> GetByIdIncludingDeletedAsync(Guid id) =>
+            Task.FromResult<Ticket?>(_ticket?.Id == id ? _ticket : null);
+
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId) =>
             Task.FromResult<IEnumerable<TicketComment>>(Array.Empty<TicketComment>());
         public Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit) =>

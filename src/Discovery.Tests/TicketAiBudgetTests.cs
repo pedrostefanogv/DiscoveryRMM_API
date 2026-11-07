@@ -205,6 +205,12 @@ public class TicketAiBudgetTests
         public Task<Ticket> CreateAsync(Ticket value) => throw new NotSupportedException();
         public Task UpdateAsync(Ticket value) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();
+
+        // Restauracao nao participa dos cenarios de budget de IA.
+        public Task RestoreAsync(Guid id) => throw new NotSupportedException();
+
+        public Task<Ticket?> GetByIdIncludingDeletedAsync(Guid id) =>
+            Task.FromResult<Ticket?>(ticket.Id == id ? ticket : null);
         public Task<IEnumerable<TicketComment>> GetCommentsAsync(Guid ticketId) => throw new NotSupportedException();
         public Task<IReadOnlyList<TicketComment>> GetCommentsPageAsync(Guid ticketId, string? cursor, int limit) => throw new NotSupportedException();
         public Task<TicketComment> AddCommentAsync(TicketComment comment) => throw new NotSupportedException();

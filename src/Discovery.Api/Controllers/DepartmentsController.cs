@@ -8,6 +8,7 @@ using Discovery.Core.Cqrs.Support.Assignments;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -39,11 +40,27 @@ public class DepartmentsController(
     IMediator mediator,
     ICustomFieldService customFieldService,
     IDepartmentCustomFieldService departmentCustomFieldService,
-    IAiAssignmentLearningService learningService) : ControllerBase
+    IAiAssignmentLearningService learningService,
+    IScopeContext scopeContext) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
     private Guid? CurrentUserId => HttpContext.Items["UserId"] is Guid uid ? uid : null;
+
+    // ── Leitura ──────────────────────────────────────────────────────────
+    //
+    // As três rotas abaixo eram as ÚNICAS do controller sem exigir permissão:
+    // bastava estar autenticado. Combinado com "allClients=true", qualquer
+    // usuário listava departamentos de TODOS os clientes — nomes de
+    // departamentos de um cliente visíveis para outro.
+    //
+    // Agora exigem Departments:View e aplicam o MESMO escopo de cliente/site do
+    // resto do sistema (AccessList): usuário restrito só enxerga os
+    // departamentos dos clientes/sites que já pode acessar. Departamentos
+    // globais (ClientId nulo) seguem visíveis, porque não pertencem a cliente
+    // algum — são catálogo do sistema.
+
     [HttpGet]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
         [FromQuery] bool includeGlobal = true,
@@ -55,26 +72,69 @@ public class DepartmentsController(
         // clientId devolve apenas os globais, como antes).
         var result = await mediator.Send(
             new ListDepartmentsQuery(clientId, includeGlobal, activeOnly, allClients));
-        return result.ToActionResult();
+        if (result.IsFailure)
+            return result.ToActionResult();
+
+        return Ok(await FilterByScopeAsync(result.Value!, HttpContext.RequestAborted));
     }
 
     /// <summary>Somente departamentos globais (ClientId = null) — D12.</summary>
     [HttpGet("global")]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetGlobal([FromQuery] bool activeOnly = false)
     {
         var result = await mediator.Send(new ListDepartmentsQuery(null, IncludeGlobal: false, ActiveOnly: activeOnly));
-        return result.ToActionResult();
+        if (result.IsFailure)
+            return result.ToActionResult();
+
+        // Globais não pertencem a cliente: não há o que filtrar por escopo.
+        return Ok(result.Value!);
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetDepartmentByIdQuery(id));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        if (result.IsFailure)
+        {
+            return result.Match<IActionResult>(
+                success: Ok,
+                failure: errors => errors[0].Code == "NotFound"
+                    ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                    : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        }
+
+        // Departamento de outro cliente responde 404 (não 403): não confirma a
+        // existência do registro alheio.
+        var scoped = await FilterByScopeAsync(
+            new List<DepartmentDto> { result.Value! }, HttpContext.RequestAborted);
+        if (scoped.Count == 0)
+            return NotFound(new { errors = new[] { new { code = "NotFound", message = "Departamento não encontrado." } } });
+
+        return Ok(result.Value!);
+    }
+
+    /// <summary>
+    /// Remove da resposta os departamentos de clientes fora do escopo do usuário.
+    /// Acesso global (ou departamentos sem cliente) passam intactos.
+    ///
+    /// O filtro é aplicado no CONTROLLER, e não no handler, porque o handler é
+    /// compartilhado com fluxos internos (jobs, triagem) que rodam sem usuário e
+    /// não têm escopo a aplicar.
+    /// </summary>
+    private async Task<IReadOnlyList<DepartmentDto>> FilterByScopeAsync(
+        IReadOnlyList<DepartmentDto> departments, CancellationToken ct)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Departments, ActionType.View);
+
+        if (access.HasGlobalAccess)
+            return departments;
+
+        return departments
+            .Where(d => d.ClientId is null
+                        || access.AllowedClientIds.Contains(d.ClientId.Value))
+            .ToList();
     }
 
     [HttpPost]

@@ -188,7 +188,23 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     // ── Power Management (todos os agentes do site) ─────────────────────
 
     [HttpPost("{id:guid}/power/restart")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    // ESCOPO: energia e operação em MASSA (todos os agentes do site). Antes usava o
+    // default Global — ou seja, as ações MAIS destrutivas do controller exigiam o
+    // escopo MAIS amplo, o inverso de menor privilégio; enquanto o Delete (:81), menos
+    // destrutivo, já aceitava escopo do cliente. Agora alinha com os irmãos
+    // (GetById :53, Update :72, Delete :81), que usam FromRoute nesta mesma rota
+    // "clients/{clientId}/sites/{id}".
+    //
+    // LIMITE CONHECIDO (travado por SitePowerScopeTests.FromRoute_com_clientId_e_id_...):
+    // ResolveScopeFromRoute (AuthFilters.cs:327-364) procura primeiro "siteId" e
+    // depois "clientId". Como esta action recebe (clientId, id) e NÃO "siteId", o
+    // resolvedor para em AuthFilters.cs:345 e devolve ScopeLevel.Client com
+    // scopeId = clientId — o {id} do site NÃO é aplicado pelo filtro. A autorização
+    // fica no grão de CLIENTE, idêntica à do Delete. A posse do site continua
+    // verificada a jusante, pelos handlers (SiteRestartCommand resolve o site dentro
+    // do cliente da rota). Para exigir grão de SITE seria preciso renomear o
+    // parâmetro da rota para "siteId" — mudança de contrato, fora deste patch.
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.FromRoute)]
     public async Task<IActionResult> RestartSite(Guid clientId, Guid id, [FromBody] SiteRestartRequest request, CancellationToken ct = default)
     {
         var cmd = new SiteRestartCommand(id, request.DelaySeconds, request.Force, request.NotifyUser, request.Message);
@@ -199,7 +215,10 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     }
 
     [HttpPost("{id:guid}/power/shutdown")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    // Mesma correção de escopo do RestartSite (ver comentário acima): energia em massa
+    // deixa de exigir atribuição Global e passa a aceitar o escopo do cliente da rota,
+    // como o Delete (:81). O resolvedor entrega ScopeLevel.Client (grão de cliente).
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.FromRoute)]
     public async Task<IActionResult> ShutdownSite(Guid clientId, Guid id, [FromBody] SiteShutdownRequest request, CancellationToken ct = default)
     {
         var cmd = new SiteShutdownCommand(id, request.DelaySeconds, request.Force, request.NotifyUser, request.Message);
@@ -210,7 +229,10 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     }
 
     [HttpPost("{id:guid}/power/wake-on-lan")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    // Mesma correção de escopo (ver RestartSite). Wake-on-LAN não é destrutivo, mas
+    // pertence à mesma família de energia em massa e estava com o mesmo Global
+    // implícito; alinhado por consistência com os irmãos.
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.FromRoute)]
     public async Task<IActionResult> WakeOnLanSite(Guid clientId, Guid id, CancellationToken ct = default)
     {
         var result = await mediator.Send(new SiteWakeOnLanCommand(id), ct);

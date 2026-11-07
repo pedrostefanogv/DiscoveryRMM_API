@@ -163,3 +163,36 @@ public sealed class DeleteTicketCommandHandler(
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
+
+/// <summary>
+/// Restaura um chamado da lixeira. Idempotente: restaurar um chamado que não
+/// está excluído devolve sucesso sem alterar timestamps (o usuário que clicou
+/// duas vezes não deve receber erro).
+/// </summary>
+public sealed class RestoreTicketCommandHandler(
+    ITicketRepository ticketRepo,
+    IActivityLogService activityLog,
+    ILogger<RestoreTicketCommandHandler> logger
+) : IRequestHandler<RestoreTicketCommand, Result<VoidResult>>
+{
+    public async Task<Result<VoidResult>> Handle(RestoreTicketCommand cmd, CancellationToken ct)
+    {
+        // GetByIdIncludingDeleted porque GetByIdAsync filtra a lixeira — o
+        // handler precisa justamente do registro excluído.
+        var ticket = await ticketRepo.GetByIdIncludingDeletedAsync(cmd.TicketId);
+        if (ticket is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"Ticket {cmd.TicketId} not found"));
+
+        if (ticket.DeletedAt is null)
+            return Result<VoidResult>.Success(VoidResult.Value);
+
+        await ticketRepo.RestoreAsync(cmd.TicketId);
+        await activityLog.LogActivityAsync(
+            cmd.TicketId, TicketActivityType.Restored, cmd.ChangedByUserId,
+            null, null, "Chamado restaurado da lixeira.");
+
+        logger.LogInformation("Ticket {TicketId} restored from trash by {UserId}",
+            cmd.TicketId, cmd.ChangedByUserId);
+        return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
