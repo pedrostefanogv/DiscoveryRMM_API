@@ -48,8 +48,8 @@ public class M279_AddCanExecuteOnMachinesToDepartments : Migration
                 WHERE m.department_id = d.id
                   AND m.is_active = true
                   AND m.runbook_steps_json IS NOT NULL
-                  AND m.runbook_steps_json <> '''',
-                  AND m.runbook_steps_json <> ''[]''
+                  AND m.runbook_steps_json <> 'null'::jsonb
+                  AND m.runbook_steps_json <> '[]'::jsonb
             );
         ");
     }
