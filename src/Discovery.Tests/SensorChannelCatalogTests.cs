@@ -162,6 +162,14 @@ public class SensorChannelCatalogTests
         m.DaysToExpiry = 30; m.CertificateSubject = "CN=x";
         m.DefenderEnabled = true; m.DefenderRealTimeEnabled = true; m.SignatureAgeDays = 1;
         m.BitLockerStatus = "On"; m.BitLockerEncryptionPercent = 100;
+        // Consistencia de AD: a evidencia viaja em campos da medida (e no mapa
+        // Channels, por compatibilidade). Sem preencher aqui o fixture diria que
+        // o extrator nao emite nenhum canal AD e o teste de cobertura do
+        // catalogo acusaria divergencia.
+        m.AdCollectOk = true;
+        m.AdReplicationFailures = 0; m.AdReplicationOk = true;
+        m.AdDcdiagFailedTests = 0; m.AdDcdiagOk = true;
+        m.AdTimeOffsetSeconds = 0.5; m.AdClockOk = true;
         return m;
     }
 }

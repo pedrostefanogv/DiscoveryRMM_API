@@ -34,6 +34,45 @@ internal static class AgentQueryHelper
         PendingRebootReasons: a.PendingRebootReasons,
         PendingRebootCheckedAt: a.PendingRebootCheckedAt);
 
+    /// <summary>
+    /// Identidade Windows Server por agente, vinda de <c>agent_hardware_info</c>
+    /// (colunas <c>os_is_server</c>/<c>os_product_type</c>, migration M272).
+    /// Valores <c>null</c> significam "não reportado" — nunca "não é servidor".
+    /// </summary>
+    internal readonly record struct AgentOsIdentity(bool? IsServer, string? ProductType);
+
+    /// <summary>
+    /// Busca a identidade de SO em LOTE para os agentes pedidos.
+    ///
+    /// Feito à parte do MapToDto de propósito: a listagem de agentes é chamada
+    /// com frequência e um Include/join por agente transformaria a consulta em
+    /// N+1. Aqui é UMA consulta projetando só as duas colunas, devolvendo um
+    /// dicionário vazio quando o repositório não suporta (o DTO fica com null,
+    /// que o site trata como "desconhecido" e cai para a heurística).
+    /// </summary>
+    internal static async Task<Dictionary<Guid, AgentOsIdentity>> GetOsIdentityByAgentAsync(
+        IAgentHardwareRepository hardwareRepo,
+        IReadOnlyCollection<Guid> agentIds,
+        CancellationToken ct)
+    {
+        var map = new Dictionary<Guid, AgentOsIdentity>(agentIds.Count);
+        if (agentIds.Count == 0)
+            return map;
+
+        // UMA consulta para todos os agentes da página — não um por agente.
+        // Se um agente ainda não enviou hardware, ele simplesmente não aparece
+        // no dicionário e o DTO fica com null (desconhecido, não "cliente").
+        var hardwareById = await hardwareRepo.GetByAgentIdsAsync(agentIds, ct);
+        foreach (var (agentId, hardware) in hardwareById)
+        {
+            if (hardware is null)
+                continue;
+            map[agentId] = new AgentOsIdentity(hardware.IsServer, hardware.ProductType);
+        }
+
+        return map;
+    }
+
     internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb)
     {
         // Versão: o heartbeat é a fonte mais fresca (reflete o binário em
@@ -77,6 +116,14 @@ internal static class AgentQueryHelper
 
         return WithLiveLoggedUser(dto, a, hb);
     }
+
+    /// <summary>
+    /// MapToDto com a identidade de SO já resolvida (ver <see cref="AgentOsIdentity"/>).
+    /// Sobrecarga separada para NÃO obrigar todos os chamadores existentes a
+    /// carregar hardware só para montar o DTO.
+    /// </summary>
+    internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb, AgentOsIdentity identity)
+        => MapToDto(a, hb) with { IsServer = identity.IsServer, ProductType = identity.ProductType };
 
     /// <summary>
     /// Precedência do usuário logado: heartbeat ao vivo (Redis) → último

@@ -362,6 +362,21 @@ public static class SensorChannelCatalog
             [
                 Channel("bitlocker_on", "Volume protegido", SensorChannelUnit.Boolean, primary: true),
                 Channel("encryption_percent", "Criptografia", SensorChannelUnit.Percent)
+            ],
+            // Consistência de AD. Os canais vêm do PRÓPRIO agente (o
+            // SensorMeasure não tem campo para AD), por isso o primário é o
+            // contador de falhas de replicação: é o mais acionável.
+            [SensorType.ADConsistency] =
+            [
+                Channel("replication_failures", "Falhas de replicação", SensorChannelUnit.Count, primary: true),
+                Channel("replication_ok", "Replicação saudável", SensorChannelUnit.Boolean),
+                Channel("dcdiag_failed_tests", "Testes do dcdiag com falha", SensorChannelUnit.Count),
+                Channel("dcdiag_ok", "dcdiag saudável", SensorChannelUnit.Boolean),
+                Channel("time_offset_seconds", "Desvio de relógio", SensorChannelUnit.Seconds),
+                Channel("clock_ok", "Relógio sincronizado", SensorChannelUnit.Boolean),
+                // ad_collect_ok distingue "sem falhas" de "não conseguimos
+                // perguntar" — é o canal que sustenta o Unknown.
+                Channel("ad_collect_ok", "Coleta do AD concluída", SensorChannelUnit.Boolean)
             ]
         };
 
@@ -696,6 +711,105 @@ public static class SensorEvaluator
                     declaredStatus, channels, primaryChannel, primaryValue);
             }
 
+            case SensorType.ADConsistency:
+            {
+                // PRINCÍPIO: "não perguntamos" NÃO é "está tudo certo".
+                //
+                // ad_collect_ok=false significa que repadmin/dcdiag/w32tm não
+                // responderam — o agente não conseguiu falar com o AD. Reportar
+                // Passing aqui pintaria de verde um DC que nunca foi verificado.
+                // É o mesmo princípio do isServer null: ausência de evidência
+                // não é evidência de saúde. Unknown não conta falha consecutiva
+                // e só alerta com AlertOnSensorError.
+                double? collectOk = channels.TryGetValue("ad_collect_ok", out var collectFlag) ? collectFlag : null;
+
+                if (collectOk is null)
+                {
+                    return Build(SensorStatus.Unknown, null,
+                        "Coleta de consistência do AD não reportou se conseguiu consultar o domínio.",
+                        declaredStatus, channels, primaryChannel, primaryValue);
+                }
+
+                if (collectOk.Value < 1)
+                {
+                    // Coleta vazia por falta de resposta: o agente devolve isso
+                    // em cliente/servidor membro (sensor não se aplica) e quando
+                    // os três utilitários falham.
+                    return Build(SensorStatus.Unknown, null,
+                        "Coleta de consistência do AD não conseguiu consultar o domínio (repadmin/dcdiag/w32tm).",
+                        declaredStatus, channels, primaryChannel, primaryValue);
+                }
+
+                // Daqui para baixo houve coleta de verdade: ausência de um
+                // bloco passa a significar "aquele bloco falhou", não "não medido".
+                var issues = new List<string>();
+                var status = SensorStatus.Passing;
+                SensorSeverity? severity = null;
+
+                void Escalate(SensorStatus candidate, SensorSeverity? candidateSeverity)
+                {
+                    if (Rank(candidate) > Rank(status))
+                    {
+                        status = candidate;
+                        severity = candidateSeverity;
+                    }
+                }
+
+                // 1) Replicação: qualquer falha é problema real de AD.
+                if (channels.TryGetValue("replication_failures", out var failures))
+                {
+                    if (failures > 0)
+                    {
+                        issues.Add($"{FormatNumber(failures)} falha(s) de replicação");
+                        Escalate(SensorStatus.Failing, definition.SeverityWhenFailing);
+                    }
+                }
+                else
+                {
+                    issues.Add("replicação não avaliada");
+                    Escalate(SensorStatus.Warning, SensorSeverity.Warning);
+                }
+
+                // 2) dcdiag: um teste com falha já indica DC degradado.
+                if (channels.TryGetValue("dcdiag_failed_tests", out var dcdiagFailures))
+                {
+                    if (dcdiagFailures > 0)
+                    {
+                        issues.Add($"{FormatNumber(dcdiagFailures)} teste(s) do dcdiag com falha");
+                        Escalate(SensorStatus.Warning, SensorSeverity.Warning);
+                    }
+                }
+                else
+                {
+                    issues.Add("dcdiag não avaliado");
+                    Escalate(SensorStatus.Warning, SensorSeverity.Warning);
+                }
+
+                // 3) Relógio: desvio > 15s quebra Kerberos.
+                if (channels.TryGetValue("clock_ok", out var clockOk))
+                {
+                    if (clockOk < 1)
+                    {
+                        var offset = channels.TryGetValue("time_offset_seconds", out var o)
+                            ? $" (desvio de {FormatNumber(o)} s)"
+                            : string.Empty;
+                        issues.Add("relógio fora de sincronia" + offset);
+                        Escalate(SensorStatus.Warning, SensorSeverity.Warning);
+                    }
+                }
+                else
+                {
+                    issues.Add("relógio não avaliado");
+                    Escalate(SensorStatus.Warning, SensorSeverity.Warning);
+                }
+
+                return Build(status, severity,
+                    issues.Count == 0
+                        ? "Consistência do AD: replicação, dcdiag e relógio sem problemas."
+                        : "Consistência do AD: " + string.Join("; ", issues) + ".",
+                    declaredStatus, channels, primaryChannel, primaryValue);
+            }
+
             default:
             {
                 // Sem medição o sensor NÃO está saudável: o coletor não conseguiu
@@ -888,6 +1002,7 @@ public static class SensorEvaluator
             SensorType.CertificateExpiry => "days_to_expiry",
             SensorType.DefenderStatus => "defender_ok",
             SensorType.BitLocker => "bitlocker_on",
+            SensorType.ADConsistency => "replication_failures",
             _ => null
         };
     }
@@ -991,6 +1106,32 @@ public static class SensorEvaluator
                     .Equals("On", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
                 Add(channels, "encryption_percent", measure.BitLockerEncryptionPercent);
                 break;
+            case SensorType.ADConsistency:
+            {
+                // Fonte preferida: campos explícitos da medida.
+                Add(channels, "replication_failures", measure.AdReplicationFailures);
+                Add(channels, "replication_ok", Bool01(measure.AdReplicationOk));
+                Add(channels, "dcdiag_failed_tests", measure.AdDcdiagFailedTests);
+                Add(channels, "dcdiag_ok", Bool01(measure.AdDcdiagOk));
+                Add(channels, "time_offset_seconds", measure.AdTimeOffsetSeconds);
+                Add(channels, "clock_ok", Bool01(measure.AdClockOk));
+                Add(channels, "ad_collect_ok", Bool01(measure.AdCollectOk));
+
+                // Fallback: o agente Go publica os MESMOS valores no mapa
+                // Channels (é o transporte histórico deste tipo). Só preenche o
+                // que ainda falta, para o campo explícito sempre vencer.
+                if (providedChannels is not null)
+                {
+                    foreach (var key in AdChannelKeys)
+                    {
+                        if (channels.ContainsKey(key)) continue;
+                        if (providedChannels.TryGetValue(key, out var value) && double.IsFinite(value))
+                            channels[key] = value;
+                    }
+                }
+
+                break;
+            }
             case SensorType.Script:
             {
                 var declared = SensorJson.ParseChannels(definition.ChannelsJson)
@@ -1013,6 +1154,25 @@ public static class SensorEvaluator
 
         return channels;
     }
+
+    /// <summary>
+    /// Canais do sensor de consistência de AD. CONTRATO com o agente Go:
+    /// os nomes estão em sensors_ad_windows.go (ChannelAD*) e renomear
+    /// qualquer um quebra o outro lado em silêncio.
+    /// </summary>
+    private static readonly string[] AdChannelKeys =
+    [
+        "ad_collect_ok",
+        "replication_failures",
+        "replication_ok",
+        "dcdiag_failed_tests",
+        "dcdiag_ok",
+        "time_offset_seconds",
+        "clock_ok"
+    ];
+
+    /// <summary>Converte bool opcional em 1/0 para canal numérico (null = ausente).</summary>
+    private static double? Bool01(bool? value) => value is null ? null : value.Value ? 1d : 0d;
 
     private static void Add(Dictionary<string, double> channels, string key, double? value)
     {

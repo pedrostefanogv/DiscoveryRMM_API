@@ -89,6 +89,19 @@ internal static class ParseJson
         };
     }
 
+    public static long? GetNullableLong(JsonElement obj, string propertyName)
+    {
+        if (!TryGetProperty(obj, propertyName, out var value))
+            return null;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt64(out var number) => number,
+            JsonValueKind.String when long.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => null
+        };
+    }
+
     public static bool GetBool(JsonElement obj, string propertyName)
     {
         if (!TryGetProperty(obj, propertyName, out var value))
@@ -141,6 +154,63 @@ internal static class ParseJson
             JsonValueKind.String when DateTime.TryParse(value.GetString(), out var parsed) => parsed.ToUniversalTime(),
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Acesso a propriedade que deve ser um OBJETO (ex.: <c>serverHardware</c>,
+    /// <c>hyperV</c>, <c>cluster</c>, <c>storageRds</c>). Devolve false quando a
+    /// chave não existe ou não é objeto — arrays/strings não são erro.
+    /// </summary>
+    public static bool TryGetObjectProperty(JsonElement obj, out JsonElement nested, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (TryGetProperty(obj, name, out var value) && value.ValueKind == JsonValueKind.Object)
+            {
+                nested = value;
+                return true;
+            }
+        }
+
+        nested = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Booleano que distingue "não reportado" (null) de false. Aceita booleano
+    /// JSON nativo e, por tolerância, as formas textuais "true"/"1"/"sim".
+    /// </summary>
+    public static bool? GetNullableBool(JsonElement obj, string propertyName)
+    {
+        if (!TryGetProperty(obj, propertyName, out var value))
+            return null;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number when value.TryGetInt32(out var number) => number != 0,
+            JsonValueKind.String => value.GetString()?.Trim().ToLowerInvariant() switch
+            {
+                "true" or "1" or "sim" or "yes" => true,
+                "false" or "0" or "nao" or "não" or "no" => false,
+                _ => null
+            },
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Serializa uma lista aninhada (nós/recursos do cluster, discos degradados)
+    /// para guardar em coluna JSON. Devolve null quando ausente/vazia, para não
+    /// poluir a coluna com "[]".
+    /// </summary>
+    public static string? SerializeArrayProperty(JsonElement obj, string propertyName)
+    {
+        if (!TryGetProperty(obj, propertyName, out var value) || value.ValueKind != JsonValueKind.Array)
+            return null;
+
+        return value.GetArrayLength() == 0 ? null : value.GetRawText();
     }
 
     public static bool TryGetArrayProperty(JsonElement obj, out JsonElement array, params string[] names)

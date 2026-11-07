@@ -514,6 +514,31 @@ public class AgentSensorMeasureDto
     public string? BitLockerStatus { get; set; }
     public double? BitLockerEncryptionPercent { get; set; }
 
+    // Consistência de AD (ADConsistency)
+    //
+    // A evidência crua deste tipo viaja historicamente no mapa Channels (o
+    // agente Go publica ad_collect_ok, replication_failures, ... porque o
+    // SensorMeasure não tinha campos para AD). Estes campos espelham os
+    // mesmos valores para que o EXTRATOR do servidor tenha fonte própria — sem
+    // eles o catálogo declararia canais que o DeriveChannels nunca emitiria,
+    // que é exatamente a divergência que SensorChannelCatalogTests barra.
+    // Net: o agente continua mandando Channels; o servidor prefere o campo
+    // explícito e cai para o canal quando ele faltar.
+    /// <summary>1 = a coleta conseguiu consultar o AD; 0 = não conseguiu.</summary>
+    public bool? AdCollectOk { get; set; }
+    /// <summary>Nº de falhas de replicação no repadmin /showrepl.</summary>
+    public int? AdReplicationFailures { get; set; }
+    /// <summary>true = replicação sem falhas.</summary>
+    public bool? AdReplicationOk { get; set; }
+    /// <summary>Nº de testes do dcdiag que falharam.</summary>
+    public int? AdDcdiagFailedTests { get; set; }
+    /// <summary>true = nenhum teste do dcdiag falhou.</summary>
+    public bool? AdDcdiagOk { get; set; }
+    /// <summary>Desvio de relógio em segundos (|v| > 15 quebra Kerberos).</summary>
+    public double? AdTimeOffsetSeconds { get; set; }
+    /// <summary>true = relógio dentro da tolerância.</summary>
+    public bool? AdClockOk { get; set; }
+
     // Serviço: tentativa de restart (opção restartIfStopped)
     public bool? RestartAttempted { get; set; }
     public bool? RestartSucceeded { get; set; }

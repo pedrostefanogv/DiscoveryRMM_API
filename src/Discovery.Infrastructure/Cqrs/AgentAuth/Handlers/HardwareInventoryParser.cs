@@ -31,9 +31,27 @@ internal static class HardwareInventoryParser
             ListeningPorts = ParseListeningPorts(root, agentId, collectedAt),
             OpenSockets = ParseOpenSockets(root, agentId, collectedAt),
             StartupItems = ParseStartupItems(root, agentId, collectedAt),
-            ScheduledTasks = ParseScheduledTasks(root, agentId, collectedAt)
+            ScheduledTasks = ParseScheduledTasks(root, agentId, collectedAt),
+
+            // Windows Server: roles, RAID/BMC, Hyper-V, cluster, storage/RDS.
+            WindowsRoles = ParseWindowsRoles(root, agentId, collectedAt),
+            RaidControllers = ParseRaidControllers(root, agentId, collectedAt),
+            VirtualMachines = ParseVirtualMachines(root, agentId, collectedAt),
+            Clusters = ParseClusters(root, agentId, collectedAt),
+            StoragePools = ParseStoragePools(root, agentId, collectedAt),
+            RdsSessions = ParseRdsSessions(root, agentId, collectedAt)
         };
 
+        result.IsRdsHost = ParseJson.TryGetObjectProperty(root, out var storageRoot, "storageRds")
+            ? ParseJson.GetNullableBool(storageRoot, "rdsHost")
+            : null;
+
+        result.ServerInventoryReason = ParseJson.GetString(root, "serverInventoryReason");
+
+        // As listas de Windows Server entram nesta checagem: um servidor que só
+        // reportasse dados de servidor (sem discos/portas/tarefas) seria
+        // descartado como "inventário vazio". IsRdsHost/ServerInventoryReason
+        // também contam, pois são sinal de que houve coleta de servidor.
         return result.Disks.Count == 0
             && result.NetworkAdapters.Count == 0
             && result.MemoryModules.Count == 0
@@ -42,6 +60,14 @@ internal static class HardwareInventoryParser
             && result.OpenSockets.Count == 0
             && result.StartupItems.Count == 0
             && result.ScheduledTasks.Count == 0
+            && result.WindowsRoles.Count == 0
+            && result.RaidControllers.Count == 0
+            && result.VirtualMachines.Count == 0
+            && result.Clusters.Count == 0
+            && result.StoragePools.Count == 0
+            && result.RdsSessions.Count == 0
+            && result.IsRdsHost is null
+            && string.IsNullOrWhiteSpace(result.ServerInventoryReason)
             ? null
             : result;
     }
@@ -461,10 +487,344 @@ internal static class HardwareInventoryParser
             ListeningPorts = Pick(inc, hasIncoming, "listeningPorts", rawRoot, hasRaw, existing?.ListeningPorts, ParseListeningPorts, agentId, collectedAt),
             OpenSockets = Pick(inc, hasIncoming, "openSockets", rawRoot, hasRaw, existing?.OpenSockets, ParseOpenSockets, agentId, collectedAt),
             StartupItems = Pick(inc, hasIncoming, "startupItems", rawRoot, hasRaw, existing?.StartupItems, ParseStartupItems, agentId, collectedAt),
-            ScheduledTasks = Pick(inc, hasIncoming, "scheduledTasks", rawRoot, hasRaw, existing?.ScheduledTasks, ParseScheduledTasks, agentId, collectedAt)
+            ScheduledTasks = Pick(inc, hasIncoming, "scheduledTasks", rawRoot, hasRaw, existing?.ScheduledTasks, ParseScheduledTasks, agentId, collectedAt),
+
+            // Windows Server. Os dados são aninhados (osRoles é array na raiz,
+            // mas raidTools/vms/clusters/storagePools/rdsSessions vivem dentro
+            // de serverHardware/hyperV/cluster/storageRds), por isso cada um tem
+            // a sua própria regra de merge.
+            WindowsRoles = Pick(inc, hasIncoming, "osRoles", rawRoot, hasRaw, existing?.WindowsRoles, ParseWindowsRoles, agentId, collectedAt),
+            RaidControllers = PickNested(inc, hasIncoming, "serverHardware", "raidTools", rawRoot, hasRaw, existing?.RaidControllers, ParseRaidControllers, agentId, collectedAt),
+            VirtualMachines = PickNested(inc, hasIncoming, "hyperV", "vms", rawRoot, hasRaw, existing?.VirtualMachines, ParseVirtualMachines, agentId, collectedAt),
+            Clusters = PickNested(inc, hasIncoming, "cluster", "clusters", rawRoot, hasRaw, existing?.Clusters, ParseClusters, agentId, collectedAt),
+            StoragePools = PickNested(inc, hasIncoming, "storageRds", "storagePools", rawRoot, hasRaw, existing?.StoragePools, ParseStoragePools, agentId, collectedAt),
+            RdsSessions = PickNested(inc, hasIncoming, "storageRds", "rdsSessions", rawRoot, hasRaw, existing?.RdsSessions, ParseRdsSessions, agentId, collectedAt)
         };
 
+        // Estado escalar do host: preserva o valor já armazenado quando o sync
+        // parcial não traz storageRds (agente antigo ou coleta só de portas).
+        result.IsRdsHost = PickRdsHostFlag(inc, hasIncoming, rawRoot, hasRaw, existing?.IsRdsHost);
+        result.ServerInventoryReason = PickServerReason(inc, hasIncoming, rawRoot, hasRaw, existing?.ServerInventoryReason);
+
         return result;
+    }
+
+    /// <summary>
+    /// Merge de listas aninhadas em um objeto (<c>container.listProperty</c>),
+    /// como <c>serverHardware.raidTools</c> ou <c>hyperV.vms</c>.
+    ///
+    /// Mesma regra do <see cref="Pick"/>: payload do agent → InventoryRaw →
+    /// lista já armazenada. Existe separado porque <c>TryGetArrayProperty</c>
+    /// procura a propriedade na raiz e não desce um nível.
+    /// </summary>
+    private static List<T> PickNested<T>(
+        JsonElement incoming,
+        bool hasIncoming,
+        string containerProperty,
+        string listProperty,
+        JsonElement rawRoot,
+        bool hasRaw,
+        List<T>? existing,
+        Func<JsonElement, Guid, DateTime, List<T>> parse,
+        Guid agentId,
+        DateTime collectedAt)
+    {
+        // Descobre a listProperty dentro de um container e devolve a lista
+        // reembrulhada como raiz, no formato que os Parse* esperam.
+        static bool TryExtract(JsonElement source, string container, string list, out JsonElement wrapped)
+        {
+            wrapped = default;
+            if (!ParseJson.TryGetObjectProperty(source, out var nested, container))
+                return false;
+
+            if (!ParseJson.TryGetArrayProperty(nested, out var array, list))
+                return false;
+
+            wrapped = WrapArrayAsRoot(array, list);
+            return true;
+        }
+
+        if (hasIncoming && incoming.ValueKind == JsonValueKind.Object
+            && TryExtract(incoming, containerProperty, listProperty, out var fromPayload))
+        {
+            return parse(fromPayload, agentId, collectedAt);
+        }
+
+        if (hasRaw && TryExtract(rawRoot, containerProperty, listProperty, out var fromRaw))
+            return parse(fromRaw, agentId, collectedAt);
+
+        return existing ?? [];
+    }
+
+    /// <summary>flag rdsHost (storageRds.rdsHost), preservando o valor anterior.</summary>
+    private static bool? PickRdsHostFlag(JsonElement incoming, bool hasIncoming, JsonElement rawRoot, bool hasRaw, bool? existing)
+    {
+        if (hasIncoming && ParseJson.TryGetObjectProperty(incoming, out var fromPayload, "storageRds"))
+        {
+            var flag = ParseJson.GetNullableBool(fromPayload, "rdsHost");
+            if (flag is not null)
+                return flag;
+        }
+
+        if (hasRaw && ParseJson.TryGetObjectProperty(rawRoot, out var fromRaw, "storageRds"))
+            return ParseJson.GetNullableBool(fromRaw, "rdsHost");
+
+        return existing;
+    }
+
+    /// <summary>Motivo da coleta de servidor, preservando o valor anterior.</summary>
+    private static string? PickServerReason(JsonElement incoming, bool hasIncoming, JsonElement rawRoot, bool hasRaw, string? existing)
+    {
+        if (hasIncoming && incoming.ValueKind == JsonValueKind.Object)
+        {
+            var reason = ParseJson.GetString(incoming, "serverInventoryReason");
+            if (!string.IsNullOrWhiteSpace(reason))
+                return Truncate(reason, 1000);
+        }
+
+        if (hasRaw)
+        {
+            var reason = ParseJson.GetString(rawRoot, "serverInventoryReason");
+            if (!string.IsNullOrWhiteSpace(reason))
+                return Truncate(reason, 1000);
+        }
+
+        return existing;
+    }
+
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Windows Server: roles, RAID/BMC, Hyper-V, cluster, Storage/RDS.
+    //
+    // Estes dados só chegam quando a máquina é Windows Server (o agente faz
+    // gate por IsServer). Em estações e agentes antigos as chaves estão
+    // ausentes — todos os parseadores abaixo devolvem lista vazia sem lançar.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static List<AgentWindowsRole> ParseWindowsRoles(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentWindowsRole>();
+        if (!ParseJson.TryGetArrayProperty(root, out var roles, "osRoles"))
+            return result;
+
+        foreach (var item in roles.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = ParseJson.GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new AgentWindowsRole
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = Truncate(name, 200),
+                DisplayName = Truncate(ParseJson.GetString(item, "displayName"), 300),
+                Installed = ParseJson.GetBool(item, "installed"),
+                InstallState = Truncate(ParseJson.GetString(item, "installState"), 50),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// RAID/BMC: lê <c>serverHardware.raidTools[]</c>. Cada ferramenta vira uma
+    /// linha, inclusive quando falhou (Ok=false + Error) — o site precisa
+    /// distinguir "sem RAID" de "não conseguiu ler o RAID".
+    /// </summary>
+    private static List<AgentRaidController> ParseRaidControllers(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentRaidController>();
+        if (!ParseJson.TryGetObjectProperty(root, out var serverHardware, "serverHardware"))
+            return result;
+
+        if (!ParseJson.TryGetArrayProperty(serverHardware, out var tools, "raidTools"))
+            return result;
+
+        foreach (var item in tools.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = ParseJson.GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new AgentRaidController
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = Truncate(name, 200),
+                Vendor = Truncate(ParseJson.GetString(item, "vendor"), 200),
+                Path = Truncate(ParseJson.GetString(item, "path"), 500),
+                Ok = ParseJson.GetBool(item, "ok"),
+                Error = Truncate(ParseJson.GetString(item, "error"), 1000),
+                Controllers = ParseJson.GetNullableInt(item, "controllers"),
+                VirtualDisks = ParseJson.GetNullableInt(item, "virtualDisks"),
+                PhysicalDisks = ParseJson.GetNullableInt(item, "physicalDisks"),
+                DegradedJson = ParseJson.SerializeArrayProperty(item, "degraded"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static List<AgentVirtualMachine> ParseVirtualMachines(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentVirtualMachine>();
+        if (!ParseJson.TryGetObjectProperty(root, out var hyperV, "hyperV"))
+            return result;
+
+        if (!ParseJson.TryGetArrayProperty(hyperV, out var vms, "vms"))
+            return result;
+
+        foreach (var item in vms.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = ParseJson.GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new AgentVirtualMachine
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = Truncate(name, 200),
+                State = Truncate(ParseJson.GetString(item, "state"), 50),
+                StateCode = ParseJson.GetNullableInt(item, "stateCode"),
+                MemoryAssignedMb = ParseJson.GetNullableLong(item, "memoryAssignedMb"),
+                UptimeSeconds = ParseJson.GetNullableLong(item, "uptimeSeconds"),
+                Generation = ParseJson.GetNullableInt(item, "generation"),
+                IntegrationServicesVersion = Truncate(ParseJson.GetString(item, "integrationServicesVersion"), 100),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Clusters de failover. Nós e recursos ficam em colunas JSON (listas
+    /// aninhadas, sem consulta relacional própria).
+    /// </summary>
+    private static List<AgentCluster> ParseClusters(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentCluster>();
+        if (!ParseJson.TryGetObjectProperty(root, out var cluster, "cluster"))
+            return result;
+
+        if (!ParseJson.TryGetArrayProperty(cluster, out var clusters, "clusters"))
+            return result;
+
+        foreach (var item in clusters.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = ParseJson.GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new AgentCluster
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = Truncate(name, 200),
+                NodesJson = ParseJson.SerializeArrayProperty(item, "nodes"),
+                ResourcesJson = ParseJson.SerializeArrayProperty(item, "resources"),
+                QuorumType = Truncate(ParseJson.GetString(item, "quorumType"), 100),
+                QuorumResource = Truncate(ParseJson.GetString(item, "quorumResource"), 300),
+                DegradedResources = ParseJson.GetNullableInt(item, "degradedResources"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static List<AgentStoragePool> ParseStoragePools(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentStoragePool>();
+        if (!ParseJson.TryGetObjectProperty(root, out var storageRds, "storageRds"))
+            return result;
+
+        if (!ParseJson.TryGetArrayProperty(storageRds, out var pools, "storagePools"))
+            return result;
+
+        foreach (var item in pools.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var name = ParseJson.GetString(item, "name")?.Trim();
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new AgentStoragePool
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Name = Truncate(name, 200),
+                HealthStatus = Truncate(ParseJson.GetString(item, "healthStatus"), 50),
+                OperationalStatus = Truncate(ParseJson.GetString(item, "operationalStatus"), 100),
+                SizeGb = ParseJson.GetNullableLong(item, "sizeGb"),
+                AllocatedGb = ParseJson.GetNullableLong(item, "allocatedGb"),
+                DiskCount = ParseJson.GetNullableInt(item, "diskCount"),
+                IsPrimordial = ParseJson.GetBool(item, "isPrimordial"),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    private static List<AgentRdsSession> ParseRdsSessions(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentRdsSession>();
+        if (!ParseJson.TryGetObjectProperty(root, out var storageRds, "storageRds"))
+            return result;
+
+        if (!ParseJson.TryGetArrayProperty(storageRds, out var sessions, "rdsSessions"))
+            return result;
+
+        foreach (var item in sessions.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var sessionId = ParseJson.GetNullableInt(item, "sessionId");
+            if (sessionId is null)
+                continue;
+
+            result.Add(new AgentRdsSession
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                SessionId = sessionId.Value,
+                Username = Truncate(ParseJson.GetString(item, "username"), 200),
+                State = Truncate(ParseJson.GetString(item, "state"), 50),
+                SessionType = Truncate(ParseJson.GetString(item, "sessionType"), 50),
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>Corta o valor no limite da coluna para não estourar o INSERT.</summary>
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return value;
+
+        return value.Length <= maxLength ? value : value[..maxLength];
     }
 
     private static List<T> Pick<T>(

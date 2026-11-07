@@ -56,6 +56,37 @@ public class AgentHardwareInfo
     public string? OsBuild { get; set; }
     public string? OsArchitecture { get; set; }
 
+    // Identidade do SO (Windows Server x estação de trabalho / domínio).
+    // Todas NULLABLE de propósito: agentes antigos não enviam estes campos e
+    // NULL significa "não reportado" — nunca "não é servidor". Consumidores
+    // (site, filtros, relatórios) só devem tratar IsServer != null como
+    // informação confiável.
+    /// <summary>Edição do SO reportada pelo agente (ex.: "Windows Server 2022 Datacenter").</summary>
+    public string? OsEdition { get; set; }
+
+    /// <summary>
+    /// true quando o SO é uma edição de servidor (Windows Server). Derivado no
+    /// agente; no servidor é aceito como booleano ou como texto
+    /// ("true"/"false"/"1"/"0") para tolerar payloads de diferentes versões.
+    /// </summary>
+    public bool? IsServer { get; set; }
+
+    /// <summary>
+    /// ProductType bruto do Windows (1 = Workstation, 2 = DomainController,
+    /// 3 = Server/NT). Guardado como texto para não perder o valor original
+    /// nem quebrar quando o agente enviar rótulos em vez de números.
+    /// </summary>
+    public string? ProductType { get; set; }
+
+    /// <summary>Domínio AD ao qual o host está associado (null quando fora de domínio).</summary>
+    public string? Domain { get; set; }
+
+    /// <summary>Grupo de trabalho do host (null quando o host está em domínio).</summary>
+    public string? Workgroup { get; set; }
+
+    /// <summary>true quando o host é membro de um domínio AD (PartOfDomain).</summary>
+    public bool? PartOfDomain { get; set; }
+
     public DateTime CollectedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

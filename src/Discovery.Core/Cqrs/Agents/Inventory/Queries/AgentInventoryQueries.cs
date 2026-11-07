@@ -81,7 +81,16 @@ public sealed record AgentHardwareDto(
     string? OsName,
     string? OsVersion,
     string? OsBuild,
-    string? OsArchitecture
+    string? OsArchitecture,
+    // Identidade do SO para o site (ícone de Windows Server, filtros e
+    // relatórios). Nullable: agentes antigos não reportam e NULL significa
+    // "não reportado", nunca "não é servidor".
+    string? OsEdition = null,
+    bool? IsServer = null,
+    string? ProductType = null,
+    string? Domain = null,
+    string? Workgroup = null,
+    bool? PartOfDomain = null
 );
 
 /// <summary>
@@ -96,8 +105,86 @@ public sealed record AgentHardwareReportDto(
     List<AgentHardwareDiskDto> Disks,
     List<AgentHardwareNetworkAdapterDto> NetworkAdapters,
     List<AgentHardwareMemoryModuleDto> MemoryModules,
-    DateTime? CollectedAt
+    DateTime? CollectedAt,
+    // Windows Server (roles, RAID/BMC, Hyper-V, cluster, Storage/RDS).
+    // Null em estações/agentes antigos.
+    AgentServerInventoryDto? ServerInventory = null
 );
+
+/// <summary>
+/// Dados tipados de Windows Server de um agente: roles, RAID/BMC, Hyper-V,
+/// cluster de failover e Storage/RDS. Vazio em estações de trabalho e agentes
+/// antigos (o agente só coleta esses blocos quando a máquina é Windows Server).
+/// </summary>
+public sealed record AgentServerInventoryDto(
+    List<AgentWindowsRoleDto> Roles,
+    List<AgentRaidControllerDto> RaidControllers,
+    List<AgentVirtualMachineDto> VirtualMachines,
+    List<AgentClusterDto> Clusters,
+    List<AgentStoragePoolDto> StoragePools,
+    List<AgentRdsSessionDto> RdsSessions,
+    /// <summary>true quando o host é RDS Host; null quando não reportado.</summary>
+    bool? IsRdsHost,
+    /// <summary>Motivo de a coleta de servidor ter sido omitida/falhado.</summary>
+    string? Reason
+);
+
+public sealed record AgentWindowsRoleDto(
+    string Name,
+    string? DisplayName,
+    bool Installed,
+    string? InstallState
+);
+
+public sealed record AgentRaidControllerDto(
+    string Name,
+    string? Vendor,
+    string? Path,
+    bool Ok,
+    string? Error,
+    int? Controllers,
+    int? VirtualDisks,
+    int? PhysicalDisks,
+    /// <summary>Discos/volumes degradados em JSON cru.</summary>
+    string? DegradedJson
+);
+
+public sealed record AgentVirtualMachineDto(
+    string Name,
+    string? State,
+    int? StateCode,
+    long? MemoryAssignedMb,
+    long? UptimeSeconds,
+    int? Generation,
+    string? IntegrationServicesVersion
+);
+
+public sealed record AgentClusterDto(
+    string Name,
+    string? NodesJson,
+    string? ResourcesJson,
+    string? QuorumType,
+    string? QuorumResource,
+    int? DegradedResources
+);
+
+public sealed record AgentStoragePoolDto(
+    string Name,
+    string? HealthStatus,
+    string? OperationalStatus,
+    long? SizeGb,
+    long? AllocatedGb,
+    int? DiskCount,
+    bool IsPrimordial
+);
+
+public sealed record AgentRdsSessionDto(
+    int SessionId,
+    string? Username,
+    string? State,
+    string? SessionType
+);
+
 public sealed record AgentSoftwareItemDto(
     Guid InventoryId,
     string Name,

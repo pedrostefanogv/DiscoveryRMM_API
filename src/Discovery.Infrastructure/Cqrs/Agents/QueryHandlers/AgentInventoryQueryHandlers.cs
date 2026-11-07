@@ -43,7 +43,13 @@ public sealed class GetAgentHardwareQueryHandler(
             hardware.OsName,
             hardware.OsVersion,
             hardware.OsBuild,
-            hardware.OsArchitecture
+            hardware.OsArchitecture,
+            hardware.OsEdition,
+            hardware.IsServer,
+            hardware.ProductType,
+            hardware.Domain,
+            hardware.Workgroup,
+            hardware.PartOfDomain
         ));
     }
 }
@@ -85,7 +91,9 @@ public sealed class GetAgentHardwareReportQueryHandler(
                 hardware.GpuModel,
                 hardware.GpuMemoryBytes,
                 hardware.OsName,
-                hardware.OsVersion, hardware.OsBuild, hardware.OsArchitecture
+                hardware.OsVersion, hardware.OsBuild, hardware.OsArchitecture,
+                hardware.OsEdition, hardware.IsServer, hardware.ProductType,
+                hardware.Domain, hardware.Workgroup, hardware.PartOfDomain
             );
         }
 
@@ -121,8 +129,57 @@ public sealed class GetAgentHardwareReportQueryHandler(
                 mm.CapacityBytes, mm.SpeedMhz, mm.MemoryType,
                 mm.Slot, null, null
             )).ToList(),
-            CollectedAt: hardware?.InventoryCollectedAt
+            CollectedAt: hardware?.InventoryCollectedAt,
+            ServerInventory: BuildServerInventory(components)
         ));
+    }
+
+    /// <summary>
+    /// Projeta o inventário de Windows Server. Devolve null quando não há
+    /// NENHUM dado de servidor — assim o site distingue "estação de trabalho /
+    /// agente antigo" (null) de "é servidor, mas não achei nada" (objetos com
+    /// listas vazias e Reason preenchido).
+    /// </summary>
+    private static AgentServerInventoryDto? BuildServerInventory(AgentHardwareComponents components)
+    {
+        var hasAny = components.WindowsRoles.Count > 0
+            || components.RaidControllers.Count > 0
+            || components.VirtualMachines.Count > 0
+            || components.Clusters.Count > 0
+            || components.StoragePools.Count > 0
+            || components.RdsSessions.Count > 0
+            || components.IsRdsHost is not null
+            || !string.IsNullOrWhiteSpace(components.ServerInventoryReason);
+
+        if (!hasAny)
+            return null;
+
+        return new AgentServerInventoryDto(
+            components.WindowsRoles.Select(role => new AgentWindowsRoleDto(
+                role.Name, role.DisplayName, role.Installed, role.InstallState
+            )).ToList(),
+            components.RaidControllers.Select(raid => new AgentRaidControllerDto(
+                raid.Name, raid.Vendor, raid.Path, raid.Ok, raid.Error,
+                raid.Controllers, raid.VirtualDisks, raid.PhysicalDisks, raid.DegradedJson
+            )).ToList(),
+            components.VirtualMachines.Select(vm => new AgentVirtualMachineDto(
+                vm.Name, vm.State, vm.StateCode, vm.MemoryAssignedMb,
+                vm.UptimeSeconds, vm.Generation, vm.IntegrationServicesVersion
+            )).ToList(),
+            components.Clusters.Select(cluster => new AgentClusterDto(
+                cluster.Name, cluster.NodesJson, cluster.ResourcesJson,
+                cluster.QuorumType, cluster.QuorumResource, cluster.DegradedResources
+            )).ToList(),
+            components.StoragePools.Select(pool => new AgentStoragePoolDto(
+                pool.Name, pool.HealthStatus, pool.OperationalStatus,
+                pool.SizeGb, pool.AllocatedGb, pool.DiskCount, pool.IsPrimordial
+            )).ToList(),
+            components.RdsSessions.Select(session => new AgentRdsSessionDto(
+                session.SessionId, session.Username, session.State, session.SessionType
+            )).ToList(),
+            components.IsRdsHost,
+            components.ServerInventoryReason
+        );
     }
 }
 

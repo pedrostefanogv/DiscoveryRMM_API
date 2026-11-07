@@ -16,6 +16,14 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AgentCommand> AgentCommands => Set<AgentCommand>();
     public DbSet<AgentHardwareInfo> AgentHardwareInfos => Set<AgentHardwareInfo>();
     public DbSet<AgentToken> AgentTokens => Set<AgentToken>();
+
+    // Inventário de Windows Server (roles, RAID/BMC, Hyper-V, cluster, Storage/RDS).
+    public DbSet<AgentWindowsRole> AgentWindowsRoles => Set<AgentWindowsRole>();
+    public DbSet<AgentRaidController> AgentRaidControllers => Set<AgentRaidController>();
+    public DbSet<AgentVirtualMachine> AgentVirtualMachines => Set<AgentVirtualMachine>();
+    public DbSet<AgentCluster> AgentClusters => Set<AgentCluster>();
+    public DbSet<AgentStoragePool> AgentStoragePools => Set<AgentStoragePool>();
+    public DbSet<AgentRdsSession> AgentRdsSessions => Set<AgentRdsSession>();
     public DbSet<ConfigurationAudit> ConfigurationAudits => Set<ConfigurationAudit>();
     public DbSet<ClientConfiguration> ClientConfigurations => Set<ClientConfiguration>();
     public DbSet<DeployToken> DeployTokens => Set<DeployToken>();

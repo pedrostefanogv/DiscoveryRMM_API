@@ -48,6 +48,12 @@ public sealed class GetAgentHardwareQueryHandler(
                 osVersion = hardware.OsVersion,
                 osBuild = hardware.OsBuild,
                 osArchitecture = hardware.OsArchitecture,
+                osEdition = hardware.OsEdition,
+                osIsServer = hardware.IsServer,
+                osProductType = hardware.ProductType,
+                osDomain = hardware.Domain,
+                osWorkgroup = hardware.Workgroup,
+                osPartOfDomain = hardware.PartOfDomain,
                 machineScore = hardware.MachineScore
             };
         }
@@ -180,6 +186,28 @@ public sealed class ReportAgentHardwareCommandHandler(
             if (hw.TryGetProperty("osVersion", out var ov)) hardwareInfo.OsVersion = ov.GetString();
             if (hw.TryGetProperty("osBuild", out var ob)) hardwareInfo.OsBuild = ob.GetString();
             if (hw.TryGetProperty("osArchitecture", out var oa)) hardwareInfo.OsArchitecture = oa.GetString();
+
+            // Identidade do SO (Windows Server x estação / domínio). Aceita o
+            // envelope Web sem distinção de caixa (osEdition, osIsServer, ...).
+            var reportedEdition = ReadOsString(hw, "osEdition");
+            if (reportedEdition is not null) hardwareInfo.OsEdition = Truncate(reportedEdition, 100);
+
+            var reportedIsServer = ReadOsBool(hw, "osIsServer", ["isServer", "osServer"]);
+            if (reportedIsServer is not null) hardwareInfo.IsServer = reportedIsServer;
+
+            // ProductType bruto do Windows: 1=Workstation, 2=DomainController,
+            // 3=Server/NT. Guardado como texto para preservar o valor original.
+            var reportedProductType = ReadOsString(hw, "osProductType", ["productType", "osProductTypeName"]);
+            if (reportedProductType is not null) hardwareInfo.ProductType = Truncate(reportedProductType, 50);
+
+            var reportedDomain = ReadOsString(hw, "osDomain", ["domain"]);
+            if (reportedDomain is not null) hardwareInfo.Domain = Truncate(reportedDomain, 255);
+
+            var reportedWorkgroup = ReadOsString(hw, "osWorkgroup", ["workgroup"]);
+            if (reportedWorkgroup is not null) hardwareInfo.Workgroup = Truncate(reportedWorkgroup, 255);
+
+            var reportedPartOfDomain = ReadOsBool(hw, "osPartOfDomain", ["partOfDomain", "osIsDomainJoined"]);
+            if (reportedPartOfDomain is not null) hardwareInfo.PartOfDomain = reportedPartOfDomain;
         }
 
         // MachineScore: enviado pelo agent no nível raiz do envelope (cmd.MachineScore),
@@ -195,16 +223,21 @@ public sealed class ReportAgentHardwareCommandHandler(
 
         if (cmd.Hardware is not null && hardwareInfo.MachineScore is null)
         {
-            // Fallback: try to deserialize from object
+            // Fallback: deserializa o objeto cru para completar o que o parse
+            // explícito acima não cobriu (ex.: campos sem bloco próprio).
+            //
+            // IMPORTANTE: o fallback PREENCHE LACUNAS, nunca substitui o
+            // hardwareInfo já montado. Substituir apagava silenciosamente todo
+            // campo cujo nome JSON difere do nome da propriedade C# — era o
+            // caso de osIsServer/osProductType/osDomain/osPartOfDomain, que o
+            // parse explícito lia e o fallback descartava logo em seguida
+            // (só sobrevivia o que casava por nome, como osEdition).
             try
             {
                 var json = JsonSerializer.Serialize(cmd.Hardware, JsonOptions);
                 var parsed = JsonSerializer.Deserialize<AgentHardwareInfo>(json, JsonOptions);
                 if (parsed is not null)
-                {
-                    parsed.AgentId = cmd.AgentId;
-                    hardwareInfo = parsed;
-                }
+                    FillMissingHardwareFields(hardwareInfo, parsed);
             }
             catch { /* keep defaults */ }
         }
@@ -244,4 +277,126 @@ public sealed class ReportAgentHardwareCommandHandler(
 
         return Result<VoidResult>.Success(VoidResult.Value);
     }
+
+    /// <summary>
+    /// Preenche <paramref name="target"/> apenas com os campos que ainda estão
+    /// null, vindos de <paramref name="source"/> (o objeto cru desserializado).
+    ///
+    /// Usado pelo fallback de MachineScore. O comportamento anterior — trocar o
+    /// objeto inteiro — perdia todo campo cujo nome JSON não casasse com o nome
+    /// da propriedade C# (osIsServer, osProductType, osDomain, osPartOfDomain),
+    /// mesmo depois de o parse explícito tê-los lido corretamente.
+    /// </summary>
+    private static void FillMissingHardwareFields(AgentHardwareInfo target, AgentHardwareInfo source)
+    {
+        target.InventorySchemaVersion ??= source.InventorySchemaVersion;
+        target.InventoryCollectedAt ??= source.InventoryCollectedAt;
+
+        target.Manufacturer ??= source.Manufacturer;
+        target.Model ??= source.Model;
+        target.SerialNumber ??= source.SerialNumber;
+        target.MotherboardManufacturer ??= source.MotherboardManufacturer;
+        target.MotherboardModel ??= source.MotherboardModel;
+        target.MotherboardSerialNumber ??= source.MotherboardSerialNumber;
+
+        target.Processor ??= source.Processor;
+        target.ProcessorCores ??= source.ProcessorCores;
+        target.ProcessorThreads ??= source.ProcessorThreads;
+        target.ProcessorArchitecture ??= source.ProcessorArchitecture;
+        target.ProcessorTdpWatts ??= source.ProcessorTdpWatts;
+        target.ProcessorSocket ??= source.ProcessorSocket;
+        target.ProcessorFrequencyGhz ??= source.ProcessorFrequencyGhz;
+        target.ProcessorReleaseDate ??= source.ProcessorReleaseDate;
+
+        target.TotalMemoryBytes ??= source.TotalMemoryBytes;
+
+        target.GpuModel ??= source.GpuModel;
+        target.GpuMemoryBytes ??= source.GpuMemoryBytes;
+        target.GpuDriverVersion ??= source.GpuDriverVersion;
+
+        target.TotalDisksCount ??= source.TotalDisksCount;
+
+        target.BiosVersion ??= source.BiosVersion;
+        target.BiosManufacturer ??= source.BiosManufacturer;
+        target.BiosDate ??= source.BiosDate;
+        target.BiosSerialNumber ??= source.BiosSerialNumber;
+
+        target.MachineScore ??= source.MachineScore;
+
+        target.OsName ??= source.OsName;
+        target.OsVersion ??= source.OsVersion;
+        target.OsBuild ??= source.OsBuild;
+        target.OsArchitecture ??= source.OsArchitecture;
+
+        // Identidade do SO (Windows Server / domínio).
+        target.OsEdition ??= source.OsEdition;
+        target.IsServer ??= source.IsServer;
+        target.ProductType ??= source.ProductType;
+        target.Domain ??= source.Domain;
+        target.Workgroup ??= source.Workgroup;
+        target.PartOfDomain ??= source.PartOfDomain;
+    }
+
+    /// <summary>
+    /// Lê uma string do objeto "hardware" tentando a chave principal e as
+    /// variações aceitas. Devolve null quando a chave não existe, é nula ou é
+    /// vazia — assim um sync parcial NUNCA apaga o valor já persistido.
+    /// Números também são aceitos (ex.: productType vindo como 3 e não "3").
+    /// </summary>
+    private static string? ReadOsString(JsonElement hw, string key, params string[] alternates)
+    {
+        foreach (var candidate in new[] { key }.Concat(alternates))
+        {
+            if (!hw.TryGetProperty(candidate, out var value))
+                continue;
+
+            var text = value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => null
+            };
+
+            if (!string.IsNullOrWhiteSpace(text))
+                return text.Trim();
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Lê um booleano do objeto "hardware". Aceita booleano JSON nativo e, por
+    /// tolerância, as formas textuais "true"/"false"/"1"/"0"/"sim"/"nao".
+    /// Retorna null quando a chave está ausente ou ilegível, distinguindo
+    /// "não reportado" (null) de "reportado como false".
+    /// </summary>
+    private static bool? ReadOsBool(JsonElement hw, string key, params string[] alternates)
+    {
+        foreach (var candidate in new[] { key }.Concat(alternates))
+        {
+            if (!hw.TryGetProperty(candidate, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.True) return true;
+            if (value.ValueKind == JsonValueKind.False) return false;
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+                return number != 0;
+
+            if (value.ValueKind == JsonValueKind.String)
+            {
+                var text = value.GetString()?.Trim().ToLowerInvariant();
+                if (text is "true" or "1" or "sim" or "yes") return true;
+                if (text is "false" or "0" or "nao" or "não" or "no") return false;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Corta o valor no limite da coluna para não estourar o INSERT.</summary>
+    private static string Truncate(string value, int maxLength)
+        => value.Length <= maxLength ? value : value[..maxLength];
 }

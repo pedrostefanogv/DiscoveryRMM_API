@@ -50,7 +50,20 @@ public sealed record AgentDto(
     /// <summary>Motivos do reinício pendente (JSON array).</summary>
     string? PendingRebootReasons = null,
     /// <summary>Instante da última sonda de reinício.</summary>
-    DateTime? PendingRebootCheckedAt = null
+    DateTime? PendingRebootCheckedAt = null,
+    /// <summary>
+    /// Windows Server? Vem de <c>agent_hardware_info.os_is_server</c> (migration M272).
+    /// <c>null</c> = NÃO REPORTADO (agente antigo ou inventário de hardware ainda não
+    /// recebido) — nunca significa "não é servidor". O site deve cair para heurística
+    /// nesse caso; é o mesmo princípio de <c>Domain</c>/<c>ProductType</c>.
+    /// </summary>
+    bool? IsServer = null,
+    /// <summary>
+    /// <c>ProductType</c> canônico do Windows: "WinNT" (cliente), "ServerNT" (servidor
+    /// membro), "LanmanNT" (controlador de domínio). Único jeito de distinguir DC de
+    /// membro; <c>null</c> = não reportado.
+    /// </summary>
+    string? ProductType = null
 );
 
 /// <summary>Página de agentes na lixeira (soft-deleted), com o clientId já resolvido.</summary>

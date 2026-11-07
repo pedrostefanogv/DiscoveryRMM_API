@@ -84,6 +84,16 @@ public class AgentPurgeService : IAgentPurgeService
         "patch_approvals",
         "patch_approval_audits",
         "patch_os_states",
+        // Inventário de Windows Server (M273): snapshot corrente do host, sem
+        // valor histórico após a exclusão do agente. O guard
+        // PurgeTableLists_CoverEveryMappedAgentReference exige que toda tabela
+        // com agent_id esteja listada aqui ou em DetachedTables.
+        "agent_windows_roles",
+        "agent_raid_controllers",
+        "agent_virtual_machines",
+        "agent_clusters",
+        "agent_storage_pools",
+        "agent_rds_sessions",
     ];
 
     /// <summary>

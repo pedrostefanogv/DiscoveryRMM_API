@@ -295,6 +295,22 @@ public partial class DiscoveryDbContext
             entity.Property(info => info.OsArchitecture)
                 .HasColumnName("os_architecture")
                 .HasMaxLength(20);
+            // Identidade do SO (Windows Server / domínio). Todos opcionais: linhas
+            // antigas ficam NULL até o próximo sync do agente.
+            entity.Property(info => info.OsEdition)
+                .HasColumnName("os_edition")
+                .HasMaxLength(100);
+            entity.Property(info => info.IsServer).HasColumnName("os_is_server");
+            entity.Property(info => info.ProductType)
+                .HasColumnName("os_product_type")
+                .HasMaxLength(50);
+            entity.Property(info => info.Domain)
+                .HasColumnName("os_domain")
+                .HasMaxLength(255);
+            entity.Property(info => info.Workgroup)
+                .HasColumnName("os_workgroup")
+                .HasMaxLength(255);
+            entity.Property(info => info.PartOfDomain).HasColumnName("os_part_of_domain");
             entity.Property(info => info.ProcessorTdpWatts).HasColumnName("processor_tdp_watts");
             entity.Property(info => info.ProcessorSocket)
                 .HasColumnName("processor_socket")
@@ -323,6 +339,218 @@ public partial class DiscoveryDbContext
                 .WithMany()
                 .HasForeignKey(info => info.AgentId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+
+        // ── Inventário de Windows Server ────────────────────────────────────
+        // Tabelas filhas de agents, uma por tipo de dado de servidor. Todas
+        // com FK para agents(id) e índice por agent_id (o acesso é sempre
+        // "tudo deste agente"). Ver M273_AddWindowsServerInventory.
+        modelBuilder.Entity<AgentWindowsRole>(entity =>
+        {
+            entity.ToTable("agent_windows_roles");
+            entity.HasKey(role => role.Id);
+            entity.HasIndex(role => role.AgentId)
+                .HasDatabaseName("ix_agent_windows_roles_agent_id");
+
+            entity.Property(role => role.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(role => role.AgentId).HasColumnName("agent_id");
+            entity.Property(role => role.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(role => role.DisplayName)
+                .HasColumnName("display_name")
+                .HasMaxLength(300);
+            entity.Property(role => role.Installed).HasColumnName("installed");
+            entity.Property(role => role.InstallState)
+                .HasColumnName("install_state")
+                .HasMaxLength(50);
+            entity.Property(role => role.CollectedAt)
+                .HasColumnName("collected_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(role => role.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentRaidController>(entity =>
+        {
+            entity.ToTable("agent_raid_controllers");
+            entity.HasKey(raid => raid.Id);
+            entity.HasIndex(raid => raid.AgentId)
+                .HasDatabaseName("ix_agent_raid_controllers_agent_id");
+
+            entity.Property(raid => raid.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(raid => raid.AgentId).HasColumnName("agent_id");
+            entity.Property(raid => raid.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(raid => raid.Vendor)
+                .HasColumnName("vendor")
+                .HasMaxLength(200);
+            entity.Property(raid => raid.Path)
+                .HasColumnName("path")
+                .HasMaxLength(500);
+            entity.Property(raid => raid.Ok).HasColumnName("ok");
+            entity.Property(raid => raid.Error)
+                .HasColumnName("error")
+                .HasMaxLength(1000);
+            entity.Property(raid => raid.Controllers).HasColumnName("controllers");
+            entity.Property(raid => raid.VirtualDisks).HasColumnName("virtual_disks");
+            entity.Property(raid => raid.PhysicalDisks).HasColumnName("physical_disks");
+            entity.Property(raid => raid.DegradedJson)
+                .HasColumnName("degraded_json")
+                .HasColumnType("jsonb");
+            entity.Property(raid => raid.CollectedAt)
+                .HasColumnName("collected_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(raid => raid.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentVirtualMachine>(entity =>
+        {
+            entity.ToTable("agent_virtual_machines");
+            entity.HasKey(vm => vm.Id);
+            entity.HasIndex(vm => vm.AgentId)
+                .HasDatabaseName("ix_agent_virtual_machines_agent_id");
+
+            entity.Property(vm => vm.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(vm => vm.AgentId).HasColumnName("agent_id");
+            entity.Property(vm => vm.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(vm => vm.State)
+                .HasColumnName("state")
+                .HasMaxLength(50);
+            entity.Property(vm => vm.StateCode).HasColumnName("state_code");
+            entity.Property(vm => vm.MemoryAssignedMb).HasColumnName("memory_assigned_mb");
+            entity.Property(vm => vm.UptimeSeconds).HasColumnName("uptime_seconds");
+            entity.Property(vm => vm.Generation).HasColumnName("generation");
+            entity.Property(vm => vm.IntegrationServicesVersion)
+                .HasColumnName("integration_services_version")
+                .HasMaxLength(100);
+            entity.Property(vm => vm.CollectedAt)
+                .HasColumnName("collected_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(vm => vm.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentCluster>(entity =>
+        {
+            entity.ToTable("agent_clusters");
+            entity.HasKey(cluster => cluster.Id);
+            entity.HasIndex(cluster => cluster.AgentId)
+                .HasDatabaseName("ix_agent_clusters_agent_id");
+
+            entity.Property(cluster => cluster.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(cluster => cluster.AgentId).HasColumnName("agent_id");
+            entity.Property(cluster => cluster.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(cluster => cluster.NodesJson)
+                .HasColumnName("nodes_json")
+                .HasColumnType("jsonb");
+            entity.Property(cluster => cluster.ResourcesJson)
+                .HasColumnName("resources_json")
+                .HasColumnType("jsonb");
+            entity.Property(cluster => cluster.QuorumType)
+                .HasColumnName("quorum_type")
+                .HasMaxLength(100);
+            entity.Property(cluster => cluster.QuorumResource)
+                .HasColumnName("quorum_resource")
+                .HasMaxLength(300);
+            entity.Property(cluster => cluster.DegradedResources).HasColumnName("degraded_resources");
+            entity.Property(cluster => cluster.CollectedAt)
+                .HasColumnName("collected_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(cluster => cluster.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentStoragePool>(entity =>
+        {
+            entity.ToTable("agent_storage_pools");
+            entity.HasKey(pool => pool.Id);
+            entity.HasIndex(pool => pool.AgentId)
+                .HasDatabaseName("ix_agent_storage_pools_agent_id");
+
+            entity.Property(pool => pool.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(pool => pool.AgentId).HasColumnName("agent_id");
+            entity.Property(pool => pool.Name)
+                .HasColumnName("name")
+                .HasMaxLength(200);
+            entity.Property(pool => pool.HealthStatus)
+                .HasColumnName("health_status")
+                .HasMaxLength(50);
+            entity.Property(pool => pool.OperationalStatus)
+                .HasColumnName("operational_status")
+                .HasMaxLength(100);
+            entity.Property(pool => pool.SizeGb).HasColumnName("size_gb");
+            entity.Property(pool => pool.AllocatedGb).HasColumnName("allocated_gb");
+            entity.Property(pool => pool.DiskCount).HasColumnName("disk_count");
+            entity.Property(pool => pool.IsPrimordial).HasColumnName("is_primordial");
+            entity.Property(pool => pool.CollectedAt)
+                .HasColumnName("collected_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(pool => pool.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentRdsSession>(entity =>
+        {
+            entity.ToTable("agent_rds_sessions");
+            entity.HasKey(session => session.Id);
+            entity.HasIndex(session => session.AgentId)
+                .HasDatabaseName("ix_agent_rds_sessions_agent_id");
+
+            entity.Property(session => session.Id)
+                .HasColumnName("id")
+                .ValueGeneratedNever();
+            entity.Property(session => session.AgentId).HasColumnName("agent_id");
+            entity.Property(session => session.SessionId).HasColumnName("session_id");
+            entity.Property(session => session.Username)
+                .HasColumnName("username")
+                .HasMaxLength(200);
+            entity.Property(session => session.State)
+                .HasColumnName("state")
+                .HasMaxLength(50);
+            entity.Property(session => session.SessionType)
+                .HasColumnName("session_type")
+                .HasMaxLength(50);
+            entity.Property(session => session.CollectedAt)
+                .HasColumnName("collected_at")
+                .HasColumnType("timestamptz");
+
+            entity.HasOne<Agent>()
+                .WithMany()
+                .HasForeignKey(session => session.AgentId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<LogEntry>(entity =>
