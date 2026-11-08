@@ -204,6 +204,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
         var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
+        var updatesTab = ResolveValue("UpdatesTabEnabled", blocked, site?.UpdatesTabEnabled, client?.UpdatesTabEnabled, server.UpdatesTabEnabled);
         var zeroTouch = ResolveValue("ZeroTouchEnabled", blocked, site?.ZeroTouchEnabled, client?.ZeroTouchEnabled, server.ZeroTouchEnabled);
         var homeTab = ResolveStringValue("AgentHomeTab", blocked, site?.AgentHomeTab, client?.AgentHomeTab, server.AgentHomeTab);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
@@ -242,6 +243,7 @@ public class ConfigurationResolver : IConfigurationResolver
             SupportEnabled = support.Value,
             ChatAIEnabled = chatAi.Value,
             KnowledgeBaseEnabled = knowledge.Value,
+            UpdatesTabEnabled = updatesTab.Value,
             ZeroTouchEnabled = zeroTouch.Value,
             AgentHomeTab = AgentHomeTabCatalog.Normalize(homeTab.Value),
             AppStorePolicy = appStore.Value,
@@ -267,6 +269,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
+        resolved.Inheritance["UpdatesTabEnabled"] = (int)updatesTab.Source;
         resolved.Inheritance["ZeroTouchEnabled"] = (int)zeroTouch.Source;
         resolved.Inheritance["AgentHomeTab"] = (int)homeTab.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;

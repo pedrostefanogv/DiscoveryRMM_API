@@ -24,6 +24,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
+            entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int>();
@@ -94,6 +95,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
+            entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
@@ -137,6 +139,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
+            entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();

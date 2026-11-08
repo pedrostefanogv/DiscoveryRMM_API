@@ -512,6 +512,25 @@ public static class PatchDtoMapper
         policy.UpdatedAt,
         policy.DeferralDays,
         policy.DeadlineDays,
-        Discovery.Core.Helpers.PatchSourcePolicy.EffectiveSources(policy.Sources),
+        // D22: eco FIEL do que está gravado. Antes passava por
+        // PatchSourcePolicy.EffectiveSources, que cai para ["os"] quando a
+        // lista está vazia — o cliente não conseguia distinguir "os explícito"
+        // de "não configurado" e o round-trip do formulário mentia.
+        // EffectiveSources segue valendo para RESOLUÇÃO/consentimento.
+        ParseSources(policy.Sources),
         policy.AllowThirdPartyApps);
+
+    /// <summary>
+    /// Eco fiel das origens gravadas (D22): só valores conhecidos
+    /// (os/third_party), minúsculos, sem duplicatas e NA ORDEM gravada. Lista
+    /// vazia/ausente devolve <c>[]</c> — nunca inventa "os". Quem precisa do
+    /// valor EFETIVO (fallback "os" + consentimento) usa
+    /// <see cref="Discovery.Core.Helpers.PatchSourcePolicy.EffectiveSources"/>.
+    /// </summary>
+    private static IReadOnlyList<string> ParseSources(string? sourcesJson) =>
+        PatchJson.ParseStringArray(sourcesJson)
+            .Where(value => Discovery.Core.Helpers.PatchSourcePolicy.Known.Contains(value))
+            .Select(value => value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 }

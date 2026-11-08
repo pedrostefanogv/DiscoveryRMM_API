@@ -38,6 +38,16 @@ public class ServerConfiguration
     public bool KnowledgeBaseEnabled { get; set; } = false;
 
     /// <summary>
+    /// Kill switch da aba "Atualizações" do painel do agent (apps pendentes de
+    /// update via winget/chocolatey). Default TRUE: todas as demais abas já têm
+    /// seu gate (appStoreEnabled/chatAIEnabled/supportEnabled/knowledgeBaseEnabled)
+    /// e a "Atualizações" ficava sempre visível — o default true preserva o
+    /// comportamento atual no rollout. Global — pode ser sobrescrita por cliente
+    /// e por site (null = herda).
+    /// </summary>
+    public bool UpdatesTabEnabled { get; set; } = true;
+
+    /// <summary>
     /// Página inicial do agent: id da aba que o painel abre ao iniciar
     /// (ver <see cref="AgentHomeTabCatalog"/>). Global — pode ser sobrescrita por
     /// cliente e por site; quando a aba está desabilitada para o agent, ele cai

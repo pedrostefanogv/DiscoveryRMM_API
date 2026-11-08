@@ -86,6 +86,10 @@ public sealed class GetAgentConfigurationHandler(
             ["supportEnabled"] = siteConfig?.SupportEnabled ?? clientConfig?.SupportEnabled ?? serverConfig.SupportEnabled,
             ["knowledgeBaseEnabled"] = siteConfig?.KnowledgeBaseEnabled ?? clientConfig?.KnowledgeBaseEnabled ?? serverConfig.KnowledgeBaseEnabled,
             ["chatAIEnabled"] = siteConfig?.ChatAIEnabled ?? clientConfig?.ChatAIEnabled ?? serverConfig.ChatAIEnabled,
+            // Kill switch da aba "Atualizações" (apps pendentes de update). Default
+            // global true: ausência do campo no payload NÃO desliga a aba — o agent
+            // só esconde quando recebe explicitamente false.
+            ["updatesTabEnabled"] = siteConfig?.UpdatesTabEnabled ?? clientConfig?.UpdatesTabEnabled ?? serverConfig.UpdatesTabEnabled,
 
             // Página inicial do agent (herdada; vazio cai para o default "status")
             ["agentHomeTab"] = AgentHomeTabCatalog.Normalize(

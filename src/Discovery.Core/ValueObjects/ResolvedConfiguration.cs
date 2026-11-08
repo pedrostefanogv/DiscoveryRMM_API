@@ -24,6 +24,13 @@ public class ResolvedConfiguration
 
     public bool ChatAIEnabled { get; set; }
     public bool KnowledgeBaseEnabled { get; set; }
+
+    /// <summary>
+    /// Kill switch da aba "Atualizações" do painel do agent já resolvido
+    /// (servidor → cliente → site). Default global = true.
+    /// </summary>
+    public bool UpdatesTabEnabled { get; set; }
+
     public bool ZeroTouchEnabled { get; set; }
 
     /// <summary>

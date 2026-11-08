@@ -51,6 +51,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.SupportEnabled = config.SupportEnabled;
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
+        existingConfig.UpdatesTabEnabled = config.UpdatesTabEnabled;
         existingConfig.AgentHomeTab = config.AgentHomeTab;
         existingConfig.ZeroTouchEnabled = config.ZeroTouchEnabled;
         existingConfig.AppStorePolicy = config.AppStorePolicy;

@@ -1528,6 +1528,10 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             return policy;
         }
 
+        // Copia TODOS os campos persistidos da política recebida para a linha
+        // existente. Antes só um subconjunto era copiado e Sources,
+        // AllowThirdPartyApps, DeferralDays e DeadlineDays eram descartados em
+        // silêncio (PUT devolvia 200 mas o valor antigo permanecia no banco).
         existing.EnforcementMode = policy.EnforcementMode;
         existing.AutoApproveClassifications = policy.AutoApproveClassifications;
         existing.AutoApproveSeverities = policy.AutoApproveSeverities;
@@ -1535,8 +1539,16 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         existing.MaintenanceWindowJson = policy.MaintenanceWindowJson;
         existing.RebootPolicy = policy.RebootPolicy;
         existing.RebootAllowed = policy.RebootAllowed;
+        existing.DeferralDays = policy.DeferralDays;
+        existing.DeadlineDays = policy.DeadlineDays;
+        existing.Sources = policy.Sources;
+        existing.AllowThirdPartyApps = policy.AllowThirdPartyApps;
         existing.MaxInstallsPerRun = policy.MaxInstallsPerRun;
         existing.HideDeniedUpdates = policy.HideDeniedUpdates;
+        // Escopo é a chave da linha (não muda). CreatedAt preserva a criação
+        // original; UpdatedAt/UpdatedBy refletem a última edição.
+        existing.ClientId = policy.ClientId;
+        existing.SiteId = policy.SiteId;
         existing.UpdatedBy = policy.UpdatedBy;
         existing.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);

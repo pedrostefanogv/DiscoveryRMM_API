@@ -36,6 +36,12 @@ public class ClientConfiguration
     public bool? KnowledgeBaseEnabled { get; set; }
 
     /// <summary>
+    /// Kill switch da aba "Atualizações" do painel do agent para este cliente.
+    /// null = herda do servidor (default global true). Sobrescrevível por site.
+    /// </summary>
+    public bool? UpdatesTabEnabled { get; set; }
+
+    /// <summary>
     /// Página inicial do agent para este cliente (null/vazio = herda servidor).
     /// Ids aceitos em <see cref="AgentHomeTabCatalog"/>.
     /// </summary>
