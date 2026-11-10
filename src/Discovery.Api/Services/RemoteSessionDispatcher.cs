@@ -29,6 +29,51 @@ public class RemoteSessionDispatcher
     }
 
     /// <summary>
+    /// Resolve o teto (kbps) que o START publica para o gate do agent.
+    ///
+    /// O bloco `bandwidth` do start e o MESMO contrato consumido em runtime pela
+    /// ação "bandwidth" (ver ChangeRemoteSessionBandwidthCommandHandler), e o
+    /// agente trata os dois no mesmo ponto (SessionScreen.ConfigureBandwidth).
+    /// Logo o campo `ceilingKbps` precisa significar a MESMA coisa nos dois:
+    ///
+    ///   - manual -> ManualDefaultKbps (teto fixo padrão);
+    ///   - auto   -> AutoStartKbps (ponto de PARTIDA da escada automática);
+    ///   - hd     -> 0 (HD não tem teto próprio).
+    ///
+    /// BUG CORRIGIDO (2026-11-10): antes enviava-se ManualDefaultKbps em QUALQUER
+    /// modo. Com DefaultMode="auto", a sessão que NASCIA em auto publicava
+    /// ceilingKbps=8000 (o default MANUAL) e nunca usava AutoStartKbps — que virava
+    /// configuração morta. E como o agente faz SetMode(auto, c), esse 8000 virava
+    /// o teto inicial da escada automática por coincidência de valor (ambos são
+    /// 8000 por padrão), mascarando o defeito: bastava um operador configurar
+    /// AutoStartKbps != ManualDefaultKbps para o modo auto começar no lugar errado.
+    /// A troca para auto em runtime já foi corrigida para enviar AutoStartKbps
+    /// (RemoteSessionCommandHandlers.cs); este método fecha a outra metade, para que
+    /// "entrar na sessão em auto" e "trocar para auto durante a sessão" partam do
+    /// mesmo teto.
+    /// </summary>
+    internal static int ResolveStartCeilingKbps(RemoteAccessBandwidthOptions bandwidth)
+    {
+        var mode = (bandwidth.DefaultMode ?? string.Empty).Trim().ToLowerInvariant();
+
+        // ServerMaxKbps é o teto ABSOLUTO do servidor (qualquer modo): o valor
+        // publicado já sai capado, para o backend ser autoritativo em vez de
+        // depender só do applyServerCap do agente.
+        return mode switch
+        {
+            "hd" => ClampToServerMax(0, bandwidth.ServerMaxKbps),
+            "manual" => ClampToServerMax(bandwidth.ManualDefaultKbps, bandwidth.ServerMaxKbps),
+            _ => ClampToServerMax(
+                    Math.Clamp(bandwidth.AutoStartKbps, bandwidth.AutoMinKbps, Math.Max(bandwidth.AutoMinKbps, bandwidth.AutoMaxKbps)),
+                    bandwidth.ServerMaxKbps)
+        };
+    }
+
+    /// <summary>Aplica o teto absoluto do servidor (0 = sem restrição).</summary>
+    private static int ClampToServerMax(int value, int serverMaxKbps)
+        => serverMaxKbps > 0 && value > serverMaxKbps ? serverMaxKbps : value;
+
+    /// <summary>
     /// Envia comando RemoteSessionStart para o agent.
     /// </summary>
     public async Task DispatchStartAsync(
@@ -51,7 +96,7 @@ public class RemoteSessionDispatcher
         object? bandwidthBlock = bandwidth is null ? null : new
         {
             mode = bandwidth.DefaultMode,
-            ceilingKbps = bandwidth.ManualDefaultKbps,
+            ceilingKbps = ResolveStartCeilingKbps(bandwidth),
             autoMinKbps = bandwidth.AutoMinKbps,
             autoMaxKbps = bandwidth.AutoMaxKbps,
             autoStepKbps = bandwidth.AutoStepKbps,

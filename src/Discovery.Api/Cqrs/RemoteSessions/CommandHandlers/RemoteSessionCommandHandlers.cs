@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
@@ -737,15 +738,50 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
 ///
 /// Publica a acao 'bandwidth' no canal de comando do agent. O agent valida de
 /// novo (defesa em profundidade) e aplica no gate de captura. Campos nulos sao
-/// omitidos logicamente: o agent preserva o valor corrente do que nao vier, o
-/// que permite ao viewer trocar so o modo sem reenviar a politica inteira.
+/// OMITIDOS do JSON: o agent preserva o valor corrente do que nao vier, o que
+/// permite ao viewer trocar so o modo sem reenviar a politica inteira.
+///
+/// O contrato "null/ausente = preserva" e literal no wire (ver
+/// <see cref="PayloadJsonOptions"/>). Antes o serializador emitia
+/// `"autoMinKbps":null` e o contrato dependia de como cada implementacao do
+/// agent interpretava null — funcionava por acidente.
+///
+/// Semantica de teto (quem manda o que):
+///   - O SERVIDOR e a fonte da verdade da POLITICA: AutoMin/AutoMax/AutoStep/
+///     ServerMax saem de <see cref="RemoteAccessBandwidthOptions"/>; o cliente
+///     que os mandar e CLAMPADO contra a config do servidor (nunca pode
+///     AFROUXAR a politica — ex.: autoMax=999999 para furar o teto do servidor).
+///   - O CLIENTE so precisa trocar o MODO. Para os campos que ele nao mandar,
+///     enviamos o valor do servidor explicitamente, e nao confiamos no
+///     "preserva o corrente" do agent: o gate do agent e POR SESSAO e o valor
+///     corrente pode ter sido alterado por um comando anterior desta mesma
+///     sessao. Isso vale inclusive para o PARAMETRO DE ENTRADA do modo
+///     (AutoStartKbps / ManualDefaultKbps) — ver `ceilingForPayload` abaixo.
+///   - ServerMaxKbps=0 significa "sem restricao"; nesse caso qualquer valor do
+///     cliente e aceito (nao ha teto a respeitar).
 /// </summary>
 public sealed class ChangeRemoteSessionBandwidthCommandHandler(
     IRemoteSessionManager sessionManager,
     IAgentCommandDispatcher dispatcher,
+    IOptions<RemoteAccessOptions> options,
     ILogger<ChangeRemoteSessionBandwidthCommandHandler> logger
 ) : IRequestHandler<ChangeRemoteSessionBandwidthCommand, Result<VoidResult>>
 {
+    /// <summary>
+    /// Opcoes de serializacao do payload de banda. As instancias sao imutaveis
+    /// depois de usadas, entao uma unica instancia e cacheada em `static readonly`
+    /// em vez de alocada por request.
+    ///
+    /// <see cref="JsonIgnoreCondition.WhenWritingNull"/> e o ponto central: os
+    /// campos nulos do comando NAO aparecem no JSON. E isso que torna explicito
+    /// no wire o contrato "ausente = preserva" em vez de depender de como o Go
+    /// interpreta `null` (`toFloat(nil, -1)` -> preserva por acidente).
+    /// </summary>
+    private static readonly JsonSerializerOptions PayloadJsonOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     public async Task<Result<VoidResult>> Handle(ChangeRemoteSessionBandwidthCommand cmd, CancellationToken ct)
     {
         var session = await sessionManager.GetActiveForUserAsync(cmd.SessionId, cmd.UserId, ct);
@@ -766,34 +802,154 @@ public sealed class ChangeRemoteSessionBandwidthCommandHandler(
             || cmd.AutoStepKbps is < 0 || cmd.ServerMaxKbps is < 0)
             return Result<VoidResult>.Failure(Error.Validation("ceilingKbps", "kbps values must be non-negative."));
 
+        // autoMax < autoMin so e avaliado quando AMBOS vieram do cliente. Se um
+        // dos dois estiver ausente, o valor do servidor entra na conta antes
+        // (e o servidor ja garante AutoMax >= AutoMin na propria configuracao).
         if (cmd.AutoMinKbps is { } lo && cmd.AutoMaxKbps is { } hi && hi < lo)
             return Result<VoidResult>.Failure(Error.Validation("autoMaxKbps", "autoMaxKbps must be >= autoMinKbps."));
 
+        // Politica efetiva do servidor. NAO usamos "cmd.X ?? server.X" direto:
+        // primeiro CLAMPAMOS o que o cliente mandou contra o teto do servidor e
+        // so depois caímos para o default do servidor.
+        var serverBw = options.Value.Quality.Bandwidth;
+        var serverMax = serverBw.ServerMaxKbps;
+
+        // DECISAO DE SEMANTICA (item 2d): CLAMPAR + logar, nao rejeitar.
+        // Justificativa: a UI oferece presets (ex.: "max" = 20 Mbps) e o operador
+        // pode escolher um preset ACIMA do ServerMaxKbps configurado depois. Se
+        // rejeitassemos, a UI quebraria por uma config de servidor que ela nao
+        // conhece — o operador veria "nao foi possivel aplicar o limite" sem
+        // entender o motivo. Clampar mantem a operacao funcionando E mantem o
+        // backend autoritativo: o valor que vai no wire ja e o valor efetivo,
+        // entao o agente nao reduz silenciosamente nada (o applyServerCap do Go
+        // passa a ser defesa em profundidade, nao a unica barreira).
+        // TODOS os campos efetivos passam por ClampToServerMax, inclusive os
+        // DEFAULTS do servidor. Motivo: a config do servidor pode ser
+        // incoerente entre si (ex.: ManualDefaultKbps=8000 com
+        // ServerMaxKbps=4000, ou AutoStartKbps acima do ServerMaxKbps). Se o
+        // default entrasse depois do clamp, o ServerMaxKbps deixaria de ser o
+        // teto ABSOLUTO que a doc promete. O campo do cliente vence o default
+        // quando presente; o clamp vem DEPOIS nos dois casos.
+        var ceiling = ClampToServerMax(cmd.CeilingKbps, serverMax, "ceilingKbps");
+        var autoMin = ClampToServerMax(cmd.AutoMinKbps ?? serverBw.AutoMinKbps, serverMax, "autoMinKbps")!.Value;
+        var autoMax = ClampToServerMax(cmd.AutoMaxKbps ?? serverBw.AutoMaxKbps, serverMax, "autoMaxKbps")!.Value;
+        var autoStep = ClampToServerMax(cmd.AutoStepKbps ?? serverBw.AutoStepKbps, serverMax, "autoStepKbps")!.Value;
+
+        // Ordena o range ANTES de clampar o ponto de partida do auto: se a
+        // config tiver AutoMin > AutoMax (config errada), um clamp com as
+        // bordas invertidas daria Math.Clamp(min > max) -> ArgumentException.
+        if (autoMax < autoMin) autoMax = autoMin;
+
+        // O pc do cliente manda no serverMax? Nao: serverMaxKbps e o teto ABSOLUTO
+        // do servidor; deixar o cliente altera-lo (inclusive para 0 = sem
+        // restricao) seria escalada de privilegio por um campo de payload.
+        // Portanto IGNORAMOS cmd.ServerMaxKbps para efeito de politica — o valor
+        // publicado e SEMPRE o do servidor. A validacao de nao-negativo acima
+        // continua valendo para nao aceitar lixo.
+        var serverMaxForPayload = serverMax;
+
+        // Deriva o teto EFETIVO publicado para o gate do agent (ver
+        // bandwidth_gate.go / session_screen.go):
+        //
+        //   - hd:     SEMPRE ceilingKbps = 0. Em HD o teto PRECISA ir a zero:
+        //             se fosse nulo, o gate preservaria o teto do modo anterior
+        //             e voltar de manual para HD continuaria freando a captura.
+        //             (O ServerMaxKbps continua sendo o teto absoluto.)
+        //
+        //   - manual: teto FIXO. Se o cliente nao escolheu um preset, usamos o
+        //             ManualDefaultKbps do SERVIDOR em vez de 0: "manual sem
+        //             preset" deve significar o preset default da config, nao
+        //             "sem limite" — senao ManualDefaultKbps e config morta.
+        //
+        //   - auto:   ponto de PARTIDA da escada automatica, clampeado pelo
+        //             agente em [AutoMin,AutoMax]. Se o cliente nao manda nada,
+        //             usamos AutoStartKbps do servidor (clampeado abaixo).
+        //
+        //             POR QUE NAO DEIXAR NULO (regressao encontrada em revisao):
+        //             nulo => o Go recebe -1 => ConfigureBandwidth converte para 0
+        //             => SetMode(auto, 0) com o teto corrente <= 0 cai no PISO
+        //             AutoMin (1000 kbps), NAO no AutoStartKbps (8000).
+        //             O toggle HD -> Auto deixava a sessao com 1 Mbps e o gate
+        //             pausava a captura (engasgo logo apos voltar para Auto).
+        //             Enviando o inicio explicito, a sessao que ENTRA em auto e a
+        //             que TROCA para auto durante a sessao partem do mesmo valor,
+        //             e AutoStartKbps deixa de ser config morta.
+        //
+        // autoMin/autoMax/autoStep FORA do modo auto nao sao enviados: em hd/manual
+        // o gate nao os consulta e envia-los sugeriria uma politica que nao existe.
+        // Os defaults do servidor (ManualDefaultKbps / AutoStartKbps) tambem
+        // passam pelo cap: ServerMaxKbps e o teto ABSOLUTO de qualquer modo.
+        var manualDefault = ClampToServerMax(serverBw.ManualDefaultKbps, serverMax, "manualDefaultKbps")!.Value;
+        var autoStart = ClampToServerMax(serverBw.AutoStartKbps, serverMax, "autoStartKbps")!.Value;
+
+        int? ceilingForPayload = normalized switch
+        {
+            "hd" => 0,
+            "manual" => ceiling ?? manualDefault,
+            _ => ceiling ?? Math.Clamp(autoStart, autoMin, autoMax)
+        };
+
         var payload = JsonSerializer.Serialize(new
         {
+            // action/sessionId/mode SEMPRE presentes: o agent roteia pelo action e
+            // responde "payload sem action"/"payload sem mode" se faltarem.
             action = "bandwidth",
             sessionId = cmd.SessionId,
             mode = normalized,
-            ceilingKbps = cmd.CeilingKbps,
-            autoMinKbps = cmd.AutoMinKbps,
-            autoMaxKbps = cmd.AutoMaxKbps,
-            autoStepKbps = cmd.AutoStepKbps,
-            serverMaxKbps = cmd.ServerMaxKbps
-        });
+            ceilingKbps = ceilingForPayload,
+            autoMinKbps = normalized == "auto" ? autoMin : (int?)null,
+            autoMaxKbps = normalized == "auto" ? autoMax : (int?)null,
+            autoStepKbps = normalized == "auto" ? autoStep : (int?)null,
+            // serverMaxKbps e publicado em QUALQUER modo: e o teto absoluto do
+            // servidor (applyServerCap), inclusive em hd.
+            serverMaxKbps = serverMaxForPayload
+        }, PayloadJsonOptions);
 
         var command = new AgentCommand
         {
             AgentId = cmd.AgentId,
+            // NAO trocar para outro CommandType sem necessidade: o agent roteia o
+            // comando de runtime pelo campo `action` do payload
+            // (manager.go: HandleCommand faz switch em payload["action"]), nao pelo
+            // CommandType. O wire value do CommandType so decide COMO o comando e
+            // entregue. Este e o mesmo padrao ja usado por 'quality' e 'term.*'.
             CommandType = CommandType.RemoteSessionStart,
             Payload = payload
         };
         await dispatcher.DispatchAsync(command, ct);
 
         logger.LogInformation(
-            "Remote session {SessionId} bandwidth policy -> mode={Mode} ceiling={Ceiling} kbps",
-            cmd.SessionId, normalized, cmd.CeilingKbps);
+            "Remote session {SessionId} bandwidth policy -> mode={Mode} ceiling={Ceiling} kbps (serverMax={ServerMax})",
+            cmd.SessionId, normalized, ceilingForPayload, serverMaxForPayload);
 
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+
+    /// <summary>
+    /// Aplica o teto absoluto do servidor a um valor vindo do cliente.
+    ///
+    /// Regras:
+    ///   - campo ausente (null)  -> null (deixa o caller cair para o default do servidor);
+    ///   - serverMax &lt;= 0      -> sem restricao de servidor, valor passa intacto;
+    ///   - valor &gt; serverMax   -> CLAMPA em serverMax e LOGA (ver decisao acima);
+    ///   - valor 0               -> preservado (0 = "sem teto" em manual; e um
+    ///                              valor legitimo, nao um "nao informado").
+    /// </summary>
+    private int? ClampToServerMax(int? clientValue, int serverMax, string field)
+    {
+        if (clientValue is not { } value)
+            return null;
+
+        if (serverMax > 0 && value > serverMax)
+        {
+            logger.LogWarning(
+                "Bandwidth policy: {Field}={Requested} kbps excede ServerMaxKbps={ServerMax}; clampeado. " +
+                "O cliente nao afrouxa a politica do servidor.",
+                field, value, serverMax);
+            return serverMax;
+        }
+
+        return value;
     }
 }
 
