@@ -50,6 +50,38 @@ public class ClientConfiguration
     /// <summary>Zero-touch provisioning habilitado (null = herda servidor)</summary>
     public bool? ZeroTouchEnabled { get; set; }
 
+    /// <summary>
+    /// Override do job de embeddings da base de conhecimento para este cliente
+    /// (null = herda do servidor, cujo default global é true). Sobrescrevível por site.
+    /// </summary>
+    public bool? KnowledgeEmbeddingEnabled { get; set; }
+
+    // ============ Kill switches de feature (CFG-A) — null = herda servidor ============
+
+    /// <summary>Modo observação da autorização por departamento (null = herda servidor, default true).</summary>
+    public bool? DepartmentAuthShadowMode { get; set; }
+
+    /// <summary>Notificações push habilitadas (null = herda servidor).</summary>
+    public bool? PushEnabled { get; set; }
+
+    /// <summary>Sync do catálogo winget habilitado (null = herda servidor).</summary>
+    public bool? WingetCatalogEnabled { get; set; }
+
+    /// <summary>Acesso remoto habilitado (null = herda servidor).</summary>
+    public bool? RemoteAccessEnabled { get; set; }
+
+    /// <summary>Gravação de sessões remotas (null = herda servidor).</summary>
+    public bool? RemoteAccessRecordingEnabled { get; set; }
+
+    /// <summary>Remoção automática de gravações expiradas (null = herda servidor).</summary>
+    public bool? RemoteAccessRecordingAutoDeleteExpired { get; set; }
+
+    /// <summary>Log automático habilitado (null = herda servidor).</summary>
+    public bool? AutomaticLoggingEnabled { get; set; }
+    // OpenTelemetryEnabled, MigrationsRunOnStartup e RealtimeContractMode NÃO têm
+    // override por cliente: são do servidor inteiro (pipeline de telemetria do
+    // processo, schema do banco e contrato global do dashboard).
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos (null = herda servidor)</summary>

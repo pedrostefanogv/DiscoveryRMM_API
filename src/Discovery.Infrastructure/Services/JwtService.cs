@@ -36,7 +36,9 @@ public class JwtService : IJwtService
         _audience = section.GetValue<string>("Audience", "Discovery")!;
         _accessTokenMinutes = section.GetValue<int>("AccessTokenExpirationMinutes", 30);
         _refreshTokenDays = section.GetValue<int>("RefreshTokenExpirationDays", 7);
-        _mfaTokenMinutes = section.GetValue<int>("MfaTokenExpirationMinutes", 3);
+        // 5 min (era 3): o token mfa_pending precisa sobreviver ao fluxo híbrido do Android
+        // (QR + biometria no celular), que era abortado por expiração.
+        _mfaTokenMinutes = section.GetValue<int>("MfaTokenExpirationMinutes", 5);
         _mfaSetupTokenMinutes = section.GetValue<int>("MfaSetupTokenExpirationMinutes", 30);
         _stepUpTokenMinutes = section.GetValue<int>("StepUpTokenExpirationMinutes", 5);
 

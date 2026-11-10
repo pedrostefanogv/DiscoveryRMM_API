@@ -33,6 +33,35 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Valor efetivo de <c>RemoteAccessRecordingAutoDeleteExpired</c>.
+    ///
+    /// Lê a configuração do SERVIDOR (a herança por cliente/site é resolvida por
+    /// <c>ConfigurationResolver</c> para o payload do agent, mas este serviço é
+    /// global e apaga por varredura — o nível de site não tem como ser aplicado a
+    /// uma varredura que atravessa todos os clientes). Default TRUE: sem a linha
+    /// de configuração nada muda em relação a hoje.
+    /// </summary>
+    private async Task<bool> IsAutoDeleteExpiredEnabledAsync(CancellationToken ct)
+    {
+        try
+        {
+            var value = await _db.ServerConfigurations
+                .AsNoTracking()
+                .Select(config => (bool?)config.RemoteAccessRecordingAutoDeleteExpired)
+                .FirstOrDefaultAsync(ct);
+
+            return value ?? true;
+        }
+        catch (Exception ex)
+        {
+            // Nunca derruba a manutenção: em dúvida mantém o comportamento atual (true).
+            _logger.LogWarning(ex,
+                "Não foi possível ler RemoteAccessRecordingAutoDeleteExpired; assumindo true (comportamento atual).");
+            return true;
+        }
+    }
+
     public async Task DeleteForAgentAsync(Guid agentId, CancellationToken ct = default)
     {
         var recordings = await (
@@ -56,6 +85,19 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
 
     public async Task<int> CleanupExpiredAsync(DateTime cutoffUtc, CancellationToken ct = default)
     {
+        // CFG-A: kill switch REAL de RemoteAccessRecordingAutoDeleteExpired.
+        // Antes a chave RemoteAccess:Recording:Retention:AutoDeleteExpired existia
+        // no appsettings e NÃO era lida por ninguém — desligar a remoção
+        // automática não tinha efeito nenhum. A fonte de verdade agora é a
+        // configuração do servidor (default true = comportamento atual).
+        if (!await IsAutoDeleteExpiredEnabledAsync(ct))
+        {
+            _logger.LogInformation(
+                "Remoção automática de gravações expiradas desativada " +
+                "(RemoteAccessRecordingAutoDeleteExpired=false); nada foi apagado.");
+            return 0;
+        }
+
         var expired = await _db.RemoteSessionRecordings
             .Where(r => r.RetentionExpiresAt != null && r.RetentionExpiresAt < cutoffUtc)
             .ToListAsync(ct);

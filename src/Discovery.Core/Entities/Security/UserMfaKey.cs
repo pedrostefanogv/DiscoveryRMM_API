@@ -34,6 +34,14 @@ public class UserMfaKey
     /// <summary>User handle FIDO2 (Base64-encoded).</summary>
     public string? UserHandleBase64 { get; set; }
 
+    /// <summary>
+    /// Transports suportados pela credencial (getTransports() no registro), separados por
+    /// vírgula e em minúsculas ("usb", "nfc", "ble", "hybrid", "internal"). Devolvidos em
+    /// allowCredentials para o Android receber a dica de transporte — sem eles o fluxo
+    /// híbrido (QR/caBLE) piora a descoberta da credencial. Null em registros antigos.
+    /// </summary>
+    public string? Transports { get; set; }
+
     // ─── TOTP fields (preparado) ─────────────────────────────────────────────
     /// <summary>Segredo TOTP criptografado (AES-GCM via DataProtection). Null se KeyType != Totp.</summary>
     public string? OtpSecretEncrypted { get; set; }

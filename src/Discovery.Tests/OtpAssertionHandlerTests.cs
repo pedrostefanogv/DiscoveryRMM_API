@@ -178,6 +178,19 @@ public class OtpAssertionHandlerTests
         }
 
         public Task<bool> UpdateLastUsedAsync(Guid keyId) => Task.FromResult(true);
+        public Task<bool> UpdateFido2KeyAsync(
+            Guid keyId, string credentialIdBase64, string publicKeyBase64, uint signCount,
+            string? aaguidBase64, string? userHandleBase64, string? transports)
+        {
+            if (key is null) return Task.FromResult(false);
+            key.CredentialIdBase64 = credentialIdBase64;
+            key.PublicKeyBase64 = publicKeyBase64;
+            key.SignCount = signCount;
+            key.AaguidBase64 = aaguidBase64;
+            key.UserHandleBase64 = userHandleBase64;
+            key.Transports = transports;
+            return Task.FromResult(true);
+        }
         public Task<UserMfaKey?> GetByIdAsync(Guid id) => Task.FromResult(key);
         public Task<UserMfaKey?> GetByCredentialIdAsync(string credentialIdBase64) => Task.FromResult<UserMfaKey?>(null);
         public Task<UserMfaKey> CreateAsync(UserMfaKey k) => Task.FromResult(k);

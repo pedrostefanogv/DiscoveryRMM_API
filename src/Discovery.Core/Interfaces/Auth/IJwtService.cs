@@ -7,7 +7,7 @@ public interface IJwtService
     /// <summary>Gera um access token JWT RS256 completo (15 min).</summary>
     string GenerateAccessToken(Guid userId, Guid sessionId, IEnumerable<Claim>? extraClaims = null);
 
-    /// <summary>Gera um token temporário de MFA pending (3 min). Claim: mfa_pending=true.</summary>
+    /// <summary>Gera um token temporário de MFA pending (5 min). Claim: mfa_pending=true.</summary>
     string GenerateMfaPendingToken(Guid userId);
 
     /// <summary>Gera um token temporário de MFA setup (30 min por padrão; configurável). Claim: mfa_setup=true.</summary>

@@ -27,6 +27,18 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
+            entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
+            // Kill switches de feature (CFG-A).
+            entity.Property(config => config.DepartmentAuthShadowMode).HasColumnName("department_auth_shadow_mode");
+            entity.Property(config => config.PushEnabled).HasColumnName("push_enabled");
+            entity.Property(config => config.WingetCatalogEnabled).HasColumnName("winget_catalog_enabled");
+            entity.Property(config => config.RemoteAccessEnabled).HasColumnName("remote_access_enabled");
+            entity.Property(config => config.RemoteAccessRecordingEnabled).HasColumnName("remote_access_recording_enabled");
+            entity.Property(config => config.RemoteAccessRecordingAutoDeleteExpired).HasColumnName("remote_access_recording_auto_delete_expired");
+            entity.Property(config => config.AutomaticLoggingEnabled).HasColumnName("automatic_logging_enabled");
+            entity.Property(config => config.OpenTelemetryEnabled).HasColumnName("open_telemetry_enabled");
+            entity.Property(config => config.MigrationsRunOnStartup).HasColumnName("migrations_run_on_startup");
+            entity.Property(config => config.RealtimeContractMode).HasColumnName("realtime_contract_mode").HasMaxLength(16);
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int>();
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");
             entity.Property(config => config.AgentUpdatePolicyJson).HasColumnName("agent_update_policy_json");
@@ -98,6 +110,17 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
+            entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
+            // Kill switches de feature herdáveis (CFG-A). OpenTelemetryEnabled,
+            // MigrationsRunOnStartup e RealtimeContractMode NÃO existem aqui: são
+            // do servidor inteiro.
+            entity.Property(config => config.DepartmentAuthShadowMode).HasColumnName("department_auth_shadow_mode");
+            entity.Property(config => config.PushEnabled).HasColumnName("push_enabled");
+            entity.Property(config => config.WingetCatalogEnabled).HasColumnName("winget_catalog_enabled");
+            entity.Property(config => config.RemoteAccessEnabled).HasColumnName("remote_access_enabled");
+            entity.Property(config => config.RemoteAccessRecordingEnabled).HasColumnName("remote_access_recording_enabled");
+            entity.Property(config => config.RemoteAccessRecordingAutoDeleteExpired).HasColumnName("remote_access_recording_auto_delete_expired");
+            entity.Property(config => config.AutomaticLoggingEnabled).HasColumnName("automatic_logging_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
@@ -142,6 +165,15 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
+            entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
+            // Kill switches de feature herdáveis (CFG-A) — mesmos do cliente.
+            entity.Property(config => config.DepartmentAuthShadowMode).HasColumnName("department_auth_shadow_mode");
+            entity.Property(config => config.PushEnabled).HasColumnName("push_enabled");
+            entity.Property(config => config.WingetCatalogEnabled).HasColumnName("winget_catalog_enabled");
+            entity.Property(config => config.RemoteAccessEnabled).HasColumnName("remote_access_enabled");
+            entity.Property(config => config.RemoteAccessRecordingEnabled).HasColumnName("remote_access_recording_enabled");
+            entity.Property(config => config.RemoteAccessRecordingAutoDeleteExpired).HasColumnName("remote_access_recording_auto_delete_expired");
+            entity.Property(config => config.AutomaticLoggingEnabled).HasColumnName("automatic_logging_enabled");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");

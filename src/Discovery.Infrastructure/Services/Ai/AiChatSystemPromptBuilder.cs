@@ -214,6 +214,28 @@ A interface A2UI está DESABILITADA (configuração de MCP tools) para esta máq
 
 ---
 
+---
+
+###  DIAGNOSTICO DE FALHA: LOCAL (AGENTE) x SERVIDOR (OBRIGATORIO)
+Os resultados das ferramentas podem trazer um erro ESTRUTURADO em JSON, com os campos error.code, error.scope, error.retryable e error.detail.
+Exemplo: scope pode ser ""local_agent"" ou ""remote_service"", e retryable pode ser true ou false.
+
+Leia code, scope e retryable SEMPRE que uma ferramenta retornar erro. A resposta ao usuario depende disso:
+
+1. scope = local_agent  ->  o problema esta NA MAQUINA DO USUARIO (normalmente o canal de gravacao do servico do agente; ex.: code = LOCAL_IPC_WRITE_UNAVAILABLE ou LOCAL_IPC_WRITE_BLOCKED_BY_SESSION).
+   - PROIBIDO afirmar, insinuar ou concordar que o servidor de suporte, a API, o portal ou o banco estao fora do ar, instaveis, lentos ou em manutencao. Isso e FALSO: as consultas continuam respondendo, e isso prova que o servidor esta no ar. NUNCA diga ""falha do lado do servidor"", ""o servidor esta fora"", ""tente novamente em alguns minutos"" ou ""pode ser instabilidade do sistema"".
+   - PROIBIDO repetir a chamada: nem a mesma ferramenta, nem outra ferramenta de GRAVACAO (abrir chamado, comentar, anexar arquivo, alterar configuracao, instalar/remover/atualizar programas, varrer atualizacoes). Todas falham pelo MESMO motivo local e um novo retry so faz o usuario esperar para receber o mesmo erro.
+   - PROIBIDO oferecer passos manuais (""abra o portal de suporte"", ""anexe a foto manualmente"", ""ligue para o TI""): o problema e o servico local, nao o canal do usuario com o suporte.
+   - FACA: explique em UMA frase simples que o canal de gravação do serviço local do agente não está disponível e que as consultas funcionam (por isso NÃO é o servidor); diga o que já foi possível apurar; e oriente o usuário a Reiniciar o serviço DiscoveryAgent (ou reiniciar o computador) e tentar novamente depois.
+
+2. retryable = false  ->  a chamada e DEFINITIVA. NUNCA repita a mesma ferramenta com os mesmos argumentos, nem tente contornar chamando outra ferramenta equivalente. Nao repita nem se o usuario pedir — explique o motivo.
+
+3. scope = remote_service (ou ausencia de escopo, em agentes antigos)  ->  ai sim e o lado do servidor/suporte: informe a falha no servico e que a acao pode ser tentada novamente mais tarde.
+
+4. Erro de validacao de parametros (ex.: ""parametro obrigatorio"") NAO e falha de canal: corrija os argumentos e tente novamente, sem mencionar servidor nem servico local.
+
+---
+
 ###  REGRAS PARA BOTÕES E NAVEGAÇÃO INTERNA (`build_internal_navigation_link`)
 
 - **PARCIMÔNIA EXTREMA:** NUNCA adicione links ou botões de navegação em respostas padrão, informativas ou de bate-papo casual.
@@ -317,6 +339,37 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
         // como TEXTO (DSML, blocos ```json com invokes) em vez de function
         // call nativa — esta seção reforça a instrução independentemente do
         // template configurado.
+        // P2.10 (PLANO_CORRECAO_CANAL_ADMIN_IPC.md §4/§7.1): regra de
+        // DIAGNÓSTICO para falha LOCAL do canal de gravação do agente.
+        //
+        // O prompt DEFAULT já traz esta seção (o prompt efetivo do fluxo
+        // multi-round é o do servidor — §7.1). Esta cópia existe para os
+        // templates CUSTOMIZADOS salvos no banco, que não herdam o default: sem
+        // ela, um cliente com prompt próprio volta a culpar o servidor de
+        // suporte. A guarda de duplicata abaixo evita repetir a seção no
+        // caminho default (gastaria tokens sem acrescentar informação).
+        const string localChannelDiagnosisSection = """
+
+###  DIAGNOSTICO DE FALHA: LOCAL (AGENTE) x SERVIDOR (OBRIGATORIO)
+Os resultados das ferramentas podem trazer um erro ESTRUTURADO em JSON:
+{"error":{"code":"...","scope":"local_agent"|"remote_service","retryable":true|false,"detail":"..."}}
+
+Leia code, scope e retryable SEMPRE que uma ferramenta retornar erro. A resposta depende disso:
+
+1. scope = local_agent  ->  o problema esta NA MAQUINA DO USUARIO (normalmente o canal de gravacao do servico do agente; ex.: code = LOCAL_IPC_WRITE_UNAVAILABLE ou LOCAL_IPC_WRITE_BLOCKED_BY_SESSION).
+   - PROIBIDO afirmar, insinuar ou concordar que o servidor de suporte, a API, o portal ou o banco estao fora do ar, instaveis, lentos ou em manutencao. Isso e FALSO: as consultas continuam respondendo, e isso prova que o servidor esta no ar. NUNCA diga "falha do lado do servidor", "o servidor esta fora", "tente novamente em alguns minutos" ou "pode ser instabilidade do sistema".
+   - PROIBIDO repetir a chamada: nem a mesma ferramenta, nem outra ferramenta de GRAVACAO (abrir chamado, comentar, anexar arquivo, alterar configuracao, instalar/remover/atualizar programas, varrer atualizacoes). Todas falham pelo MESMO motivo local, e um novo retry so faz o usuario esperar para receber o mesmo erro.
+   - PROIBIDO oferecer passos manuais ("abra o portal de suporte", "anexe a foto manualmente", "ligue para o TI"): o problema e o servico local, nao o canal do usuario com o suporte.
+   - FACA: explique em UMA frase simples que o canal de gravacao do servico local do agente nao esta disponivel e que as consultas funcionam (por isso NAO e o servidor); diga o que ja foi possivel apurar; e oriente o usuario a REINICIAR O SERVICO DiscoveryAgent (ou reiniciar o computador) e tentar novamente depois.
+
+2. retryable = false  ->  a chamada e DEFINITIVA. NUNCA repita a mesma ferramenta com os mesmos argumentos, nem tente contornar chamando outra ferramenta equivalente. Nao repita nem se o usuario pedir — explique o motivo.
+
+3. scope = remote_service (ou ausencia de escopo, em agentes antigos)  ->  ai sim e o lado do servidor/suporte: informe a falha no servico e que a acao pode ser tentada novamente mais tarde.
+
+4. Erro de validacao de parametros (ex.: "parametro obrigatorio") NAO e falha de canal: corrija os argumentos e tente novamente, sem mencionar servidor nem servico local.
+
+""";
+
         const string antiLeakSection = """
 
 ###  FORMATO DE CHAMADA DE FERRAMENTAS (OBRIGATÓRIO)
@@ -334,18 +387,24 @@ Ao ser questionado sobre o que você pode fazer, apresente um resumo prático e 
             ? AiChatToolOrchestrator.FormatAgentToolsDescription(agentTools)
             : "Nenhuma ferramenta do agente disponível. Oriente o usuário com passos manuais.";
 
+        // Guarda de duplicata: o prompt default já contém a seção de diagnóstico
+        // local; só os templates do banco precisam recebê-la aqui.
+        var diagnosisExtra = basePrompt.Contains("DIAGNOSTICO DE FALHA: LOCAL", StringComparison.Ordinal)
+            ? string.Empty
+            : localChannelDiagnosisSection;
+
         if (basePrompt.Contains("{{AGENT_TOOLS_SECTION}}"))
         {
-            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}", toolsText + antiLeakSection);
+            basePrompt = basePrompt.Replace("{{AGENT_TOOLS_SECTION}}", toolsText + antiLeakSection + diagnosisExtra);
         }
         else if (basePrompt.Contains("{AGENT_TOOLS_SECTION}"))
         {
-            basePrompt = basePrompt.Replace("{AGENT_TOOLS_SECTION}", toolsText + antiLeakSection);
+            basePrompt = basePrompt.Replace("{AGENT_TOOLS_SECTION}", toolsText + antiLeakSection + diagnosisExtra);
         }
         else
         {
             // Template customizado sem placeholder: anexa ferramentas + diretrizes no fim.
-            basePrompt = basePrompt + "\n\n**Ferramentas do agente (executadas no computador do usuário):**\n" + toolsText + antiLeakSection;
+            basePrompt = basePrompt + "\n\n**Ferramentas do agente (executadas no computador do usuário):**\n" + toolsText + antiLeakSection + diagnosisExtra;
             // C3: templates customizados do banco tambem recebem a secao A2UI
             // (antes so o prompt default tinha) - com guard contra duplicata.
             // Com a capacidade DESLIGADA na governança, aplica o aviso explícito.

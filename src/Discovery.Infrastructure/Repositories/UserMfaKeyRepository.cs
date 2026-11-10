@@ -50,6 +50,27 @@ public class UserMfaKeyRepository : IUserMfaKeyRepository
         return rows > 0;
     }
 
+    public async Task<bool> UpdateFido2KeyAsync(
+        Guid keyId,
+        string credentialIdBase64,
+        string publicKeyBase64,
+        uint signCount,
+        string? aaguidBase64,
+        string? userHandleBase64,
+        string? transports)
+    {
+        var rows = await _db.UserMfaKeys
+            .Where(k => k.Id == keyId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(k => k.CredentialIdBase64, credentialIdBase64)
+                .SetProperty(k => k.PublicKeyBase64, publicKeyBase64)
+                .SetProperty(k => k.SignCount, signCount)
+                .SetProperty(k => k.AaguidBase64, aaguidBase64)
+                .SetProperty(k => k.UserHandleBase64, userHandleBase64)
+                .SetProperty(k => k.Transports, transports));
+        return rows > 0;
+    }
+
     public async Task<bool> SetLastUsedStepAsync(Guid keyId, long step)
     {
         var rows = await _db.UserMfaKeys

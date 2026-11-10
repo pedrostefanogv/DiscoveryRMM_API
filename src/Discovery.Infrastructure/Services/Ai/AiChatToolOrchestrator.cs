@@ -422,7 +422,17 @@ public class AiChatToolOrchestrator
             {
                 using var doc = JsonDocument.Parse(trimmed);
                 if (doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("error", out _))
-                    return rawResult; // erro estruturado explícito — não reembrulhar
+                {
+                    // P2.9/P2.11 (PLANO_CORRECAO_CANAL_ADMIN_IPC.md §4): erro
+                    // com retryable=false é DEFINITIVO. O texto original é
+                    // preservado byte a byte (o agent já manda code/scope/detail
+                    // e o prompt precisa desses campos), mas anexamos a
+                    // orientação que proíbe o retry cego e o diagnóstico
+                    // "servidor fora do ar" — sem isso o modelo aplicava o
+                    // reflexo genérico "corrija e tente de novo" (3 × create_ticket
+                    // no incidente de 2026-10-17).
+                    return AppendNonRetryableGuidance(doc, trimmed);
+                }
             }
             catch (JsonException) { } // JSON inválido: cai nas heurísticas
             return rawResult; // JSON válido sem "error" = resultado de sucesso
@@ -446,6 +456,97 @@ public class AiChatToolOrchestrator
         }
 
         return rawResult;
+    }
+
+    // ── P2.9/P2.11: erro LOCAL de gravação do agente (não-retentável) ───────
+
+    /// <summary>
+    /// Resultado do reconhecimento do envelope de erro do agent.
+    /// <paramref name="IsLocalAgentFailure"/> marca falha NA MÁQUINA DO AGENTE;
+    /// <paramref name="Retryable"/> é <c>false</c> quando repetir a chamada é inútil.
+    /// </summary>
+    public readonly record struct AgentToolErrorInfo(
+        bool IsLocalAgentFailure,
+        bool NonRetryable,
+        string? Code,
+        string? Scope,
+        bool Retryable);
+
+    /// <summary>
+    /// Lê o envelope estruturado <c>{"error":{"code","scope","retryable","detail"}}</c>
+    /// produzido pelo agente (P2.9). Erro em texto cru (agents LEGADOS, que
+    /// mandam <c>{"error":"..."}</c>) devolve <c>default</c> — nenhuma heurística
+    /// de texto aqui: a decisão de abortar o retry não pode sair de substring.
+    /// </summary>
+    public static AgentToolErrorInfo InspectAgentToolError(string? rawResult)
+    {
+        if (string.IsNullOrWhiteSpace(rawResult)) return default;
+        var trimmed = rawResult.TrimStart();
+        if (trimmed.Length == 0 || trimmed[0] != '{') return default;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            return InspectAgentToolError(doc.RootElement);
+        }
+        catch (JsonException) { return default; }
+    }
+
+    /// <summary>Variante sobre um elemento já parseado (evita re-parse no WrapAgentToolError).</summary>
+    public static AgentToolErrorInfo InspectAgentToolError(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return default;
+        if (!root.TryGetProperty("error", out var err) || err.ValueKind != JsonValueKind.Object) return default;
+
+        var code = err.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+        var scope = err.TryGetProperty("scope", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+        // Ausente = tratado como retentável (conservador): só um retryable=false
+        // EXPLÍCITO bloqueia o retry.
+        var retryable = !(err.TryGetProperty("retryable", out var r) && r.ValueKind == JsonValueKind.False);
+        if (retryable && err.TryGetProperty("retryable", out var r2) && r2.ValueKind == JsonValueKind.True) retryable = true;
+
+        var isLocal = string.Equals(scope, AiChatHelpers.LocalAgentErrorScope, StringComparison.OrdinalIgnoreCase);
+        return new AgentToolErrorInfo(isLocal, isLocal && !retryable, code, scope, retryable);
+    }
+
+    /// <summary>
+    /// Reconhece falha LOCAL não-retentável de gravação — a condição que abre o
+    /// circuit breaker do servidor (P2.11).
+    /// </summary>
+    public static bool IsNonRetryableLocalAgentWrite(string? rawResult)
+        => InspectAgentToolError(rawResult).NonRetryable;
+
+    /// <summary>
+    /// Preserva o envelope do agent e acrescenta a orientação de tratamento
+    /// para erros <c>retryable=false</c>. O objeto "error" original NÃO é
+    /// alterado (code/scope/detail são contrato com o prompt e com os
+    /// testes); a orientação entra em um campo irmão.
+    /// </summary>
+    private static string AppendNonRetryableGuidance(JsonDocument doc, string trimmed)
+    {
+        var info = InspectAgentToolError(doc.RootElement);
+        if (!info.NonRetryable) return trimmed; // retentável ou sem envelope: intacto
+
+        try
+        {
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                writer.WriteStartObject();
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                    prop.WriteTo(writer);
+                writer.WriteBoolean("retryable", false);
+                writer.WriteString("hint", AiChatHelpers.LocalAgentWriteUnavailableNote);
+                writer.WriteEndObject();
+            }
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (Exception)
+        {
+            // Nunca falhar o turno por causa do enriquecimento: o envelope
+            // original já carrega code/scope/retryable suficientes.
+            return trimmed;
+        }
     }
 
     // ── B11: extração XML com balanceamento de chaves ──────────────────────

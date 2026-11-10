@@ -62,6 +62,92 @@ public class ServerConfiguration
     /// </summary>
     public bool ZeroTouchEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Liga/desliga o <c>KnowledgeEmbeddingJob</c> (re-chunking de artigos,
+    /// geração de embeddings em lote e consumo da fila LISTEN/NOTIFY).
+    ///
+    /// Default TRUE para preservar o comportamento atual: o job era agendado
+    /// incondicionalmente a cada 30s no Quartz, então "desligar" na configuração
+    /// não tinha efeito nenhum. Com a flag real, false = job NÃO é agendado.
+    /// Global — pode ser sobrescrita por cliente e por site (null = herda).
+    /// </summary>
+    public bool KnowledgeEmbeddingEnabled { get; set; } = true;
+
+    // ============ Kill switches de feature (CFG-A) ============
+    // Todos com DEFAULT IDÊNTICO ao valor que já estava no appsettings.json, para
+    // o rollout não mudar comportamento nenhum. As chaves do appsettings passam a
+    // ser apenas bootstrap/fallback; a fonte de verdade é esta configuração.
+
+    /// <summary>
+    /// Modo OBSERVAÇÃO da autorização por departamento. true = as negações de
+    /// tratar/fechar são registradas em log mas o acesso é concedido; false = a
+    /// regra BLOQUEIA de fato (só o time do departamento trata). Default true:
+    /// papéis existentes (Operator/Support) têm Tickets.Edit amplo e seriam
+    /// bloqueados de imediato. Equivale a Tickets:DepartmentAuth:ShadowMode.
+    /// Herdável por cliente/site.
+    /// </summary>
+    public bool DepartmentAuthShadowMode { get; set; } = true;
+
+    /// <summary>
+    /// Notificações push (WebPush) habilitadas. Equivale a Push:Enabled.
+    /// Herdável por cliente/site.
+    /// </summary>
+    public bool PushEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Sincronização do catálogo de aplicativos a partir dos manifests do winget.
+    /// Equivale a AppCatalog:Winget:Enabled. Herdável por cliente/site.
+    /// </summary>
+    public bool WingetCatalogEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Acesso remoto (tela, terminal, arquivos) habilitado. Equivale a
+    /// RemoteAccess:Enabled. Herdável por cliente/site.
+    /// </summary>
+    public bool RemoteAccessEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Gravação das sessões de acesso remoto. Equivale a
+    /// RemoteAccess:Recording:Enabled. Herdável por cliente/site.
+    /// </summary>
+    public bool RemoteAccessRecordingEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Remoção automática das gravações expiradas conforme a retenção.
+    /// Equivale a RemoteAccess:Recording:Retention:AutoDeleteExpired.
+    /// Herdável por cliente/site.
+    /// </summary>
+    public bool RemoteAccessRecordingAutoDeleteExpired { get; set; } = true;
+
+    /// <summary>
+    /// Log automático de eventos de negócio/exceções. Equivale a
+    /// AutomaticLogging:Enabled. Herdável por cliente/site.
+    /// </summary>
+    public bool AutomaticLoggingEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Exportação de telemetria (OpenTelemetry). Equivale a OpenTelemetry:Enabled.
+    /// Default false (o coletor é opcional). NÃO herda por cliente/site: o
+    /// pipeline é do processo inteiro do servidor.
+    /// </summary>
+    public bool OpenTelemetryEnabled { get; set; } = false;
+
+    /// <summary>
+    /// Executa as migrations FluentMigrator no boot da API. Equivale a
+    /// Migrations:RunOnStartup. ⚠️ RISCO: desligar impede a migração no boot e
+    /// deixa o schema dessincronizado em instalações novas. NÃO herda por
+    /// cliente/site (o schema é do banco inteiro).
+    /// </summary>
+    public bool MigrationsRunOnStartup { get; set; } = true;
+
+    /// <summary>
+    /// Modo do contrato de eventos de realtime: "auto" (default), "strict" ou
+    /// "legacy". Equivale a RealtimeContract:Mode. ⚠️ RISCO: "strict" pode
+    /// rejeitar emissores legados e quebrar o dashboard em tempo real.
+    /// NÃO herda por cliente/site (é o contrato global do dashboard).
+    /// </summary>
+    public string RealtimeContractMode { get; set; } = "auto";
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos</summary>

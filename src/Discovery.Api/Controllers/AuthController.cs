@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.Auth.Commands;
 using Discovery.Core.Cqrs.Auth.Queries;
+using Discovery.Core.Cqrs.Mfa;
 using Discovery.Core.DTOs.Auth;
 using Discovery.Core.DTOs.Mfa;
 using Discovery.Core.Interfaces.Auth;
@@ -163,6 +164,23 @@ public class AuthController(IMediator mediator, IUserAuthService userAuth) : Con
                     new { errors = errors.Select(e => new { e.Code, e.Message }) }),
                 _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
             });
+    }
+
+    /// <summary>
+    /// Etapa 2c — telemetria: registra no log a falha WebAuthn que aconteceu no navegador.
+    /// O relatório do Android mostrou que a maioria das falhas morre no cliente; sem este
+    /// endpoint o caso não deixa rastro. Nunca falha para o chamador (sempre 204).
+    /// </summary>
+    [HttpPost("mfa/fido2/client-error")]
+    [AllowAnonymous]
+    [RequireMfaPending]
+    public async Task<IActionResult> ReportFido2ClientError([FromBody] Fido2ClientErrorDto dto)
+    {
+        var userId = HttpContext.Items["UserId"] as Guid?;
+        var userAgent = HttpContext.Request.Headers.UserAgent.ToString();
+        await _mediator.Send(new ReportFido2ClientErrorCommand(
+            userId ?? Guid.Empty, dto?.ErrorName, dto?.ErrorMessage, dto?.Stage, userAgent));
+        return NoContent();
     }
 
     // ── MFA OTP/TOTP (CQRS via MediatR) ──────────────────────────────────

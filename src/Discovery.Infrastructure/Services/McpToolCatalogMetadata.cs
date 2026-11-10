@@ -90,6 +90,12 @@ public static class McpToolCatalogMetadata
             ["get_agent_metrics_history"] = new("Diagnóstico/histórico",
                 "Use para tendência e picos de CPU/memória/disco (histórico de eventos de monitoramento). Complementa get_performance_snapshot, que mostra só o instante atual. Payload limitado a 200 eventos por chamada.",
                 60, true),
+            ["get_agent_sensors"] = new("Sensores",
+                "Use para saber QUAIS sensores a máquina tem e como estão agora (status e severidade já avaliados pelo servidor; a tool não recalcula limiar). Somente leitura e exige contexto de máquina. Sem sensores definidos responde hasSensors=false — não é erro. Não confundir com get_agent_metrics_history, que lê alertas de monitoramento.",
+                30, true),
+            ["get_agent_sensor_history"] = new("Sensores",
+                "Use para a SÉRIE HISTÓRICA e a timeline de eventos de UM sensor da máquina (retenção de 90 dias). Somente leitura; 'sensorId' é obrigatório (descubra-o com get_agent_sensors). Sensor que não se aplica a esta máquina devolve resposta vazia, nunca dados de outro agente.",
+                60, true),
 
             // ── Software (winget) ────────────────────────────────────────────
             ["search_packages"] = new("Software",

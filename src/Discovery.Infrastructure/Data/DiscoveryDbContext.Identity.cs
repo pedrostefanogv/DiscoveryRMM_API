@@ -137,6 +137,8 @@ public partial class DiscoveryDbContext
             e.Property(k => k.SignCount).HasColumnName("sign_count");
             e.Property(k => k.AaguidBase64).HasColumnName("aaguid_base64").HasMaxLength(64);
             e.Property(k => k.UserHandleBase64).HasColumnName("user_handle_base64").HasMaxLength(128);
+            // Coluna criada pela M284; transports em CSV dos nomes WebAuthn ("internal,hybrid").
+            e.Property(k => k.Transports).HasColumnName("transports").HasMaxLength(256);
             e.Property(k => k.OtpSecretEncrypted).HasColumnName("otp_secret_encrypted").HasMaxLength(512);
             e.Property(k => k.BackupCodeHashes).HasColumnName("backup_code_hashes").HasColumnType("text[]");
             e.Property(k => k.LastUsedStep).HasColumnName("last_used_step");

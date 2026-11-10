@@ -56,11 +56,23 @@ public static class QuartzServiceCollectionExtensions
                 .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromMinutes(15)).RepeatForever())
                 .WithDescription("Clean stale P2P presence and recalculate seed plans"));
 
-            // ── Knowledge Embedding: every 30 seconds ────────────────────
-            q.ScheduleJob<KnowledgeEmbeddingJob>(trigger => trigger
-                .WithIdentity(KnowledgeEmbeddingJob.Key.Name, KnowledgeEmbeddingJob.Key.Group)
-                .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromSeconds(30)).RepeatForever())
-                .WithDescription("Re-chunk articles, generate embeddings in batch, process LISTEN/NOTIFY queue"));
+            // ── Knowledge Embedding: every N seconds (30 por padrão) ─────
+            // Kill switch REAL: antes o job era agendado incondicionalmente e a
+            // chave BackgroundJobs:KnowledgeEmbeddingEnabled do appsettings.json
+            // (que dizia "false") não era lida por ninguém — o flag mentia. Agora
+            // false = job NÃO agendado. DEFAULT true para preservar o comportamento
+            // atual da frota. O toggle equivalente e herdável por cliente/site é
+            // ServerConfiguration.KnowledgeEmbeddingEnabled (ver ConfigurationResolver).
+            var knowledgeEmbeddingEnabled = configuration.GetValue<bool?>("BackgroundJobs:KnowledgeEmbeddingEnabled") ?? true;
+            if (knowledgeEmbeddingEnabled)
+            {
+                var knowledgeEmbeddingIntervalSeconds = Math.Max(5, configuration.GetValue<int?>("BackgroundJobs:KnowledgeEmbedding:IntervalSeconds") ?? 30);
+
+                q.ScheduleJob<KnowledgeEmbeddingJob>(trigger => trigger
+                    .WithIdentity(KnowledgeEmbeddingJob.Key.Name, KnowledgeEmbeddingJob.Key.Group)
+                    .WithSimpleSchedule(s => s.WithInterval(TimeSpan.FromSeconds(knowledgeEmbeddingIntervalSeconds)).RepeatForever())
+                    .WithDescription("Re-chunk articles, generate embeddings in batch, process LISTEN/NOTIFY queue"));
+            }
 
             // ── Embeddings das respostas do questionário (busca semântica): a cada N segundos ──
             var answerEmbeddingEnabled = configuration.GetValue<bool?>("BackgroundJobs:TicketAnswerEmbedding:Enabled") ?? true;

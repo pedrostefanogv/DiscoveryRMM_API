@@ -115,6 +115,49 @@ internal static class AiChatHelpers
         "com as opções EXATAMENTE neste formato, uma por linha: \"- Continuar\" e \"- Parar\". " +
         "NÃO repita o que você já escreveu e NÃO solicite ferramentas.";
 
+    /// <summary>
+    /// Código do erro LOCAL de canal de gravação do agente (P2.9 do
+    /// PLANO_CORRECAO_CANAL_ADMIN_IPC.md). O agente emite este código quando o
+    /// named pipe admin — o único que MUTA dados — não está disponível NA
+    /// MÁQUINA dele. Precisa bater com
+    /// <c>IPCErrorCodeWriteUnavailable</c> em Discovery/src/app/ipc_channel_error.go.
+    /// </summary>
+    public const string LocalAgentWriteUnavailableCode = "LOCAL_IPC_WRITE_UNAVAILABLE";
+
+    /// <summary>Código do circuit breaker do agente (P2.11): falha local já registrada nesta sessão.</summary>
+    public const string LocalAgentWriteBlockedBySessionCode = "LOCAL_IPC_WRITE_BLOCKED_BY_SESSION";
+
+    /// <summary>
+    /// Escopo que marca "a falha é da máquina do agente, não do servidor de
+    /// suporte". É a chave da regra anti-diagnóstico-errado do prompt (P2.10).
+    /// </summary>
+    public const string LocalAgentErrorScope = "local_agent";
+
+    /// <summary>
+    /// Nota injetada no round seguinte a uma falha LOCAL não-retentável de
+    /// gravação (P2.11 no servidor).
+    ///
+    /// O caso real (2026-10-17): o pipe admin não existia, o erro chegou sem
+    /// código/escopo e o modelo concluiu "servidor de suporte fora do ar" e
+    /// repetiu create_ticket 3 vezes (~38s). Com o envelope estruturado o
+    /// servidor passa a RECONHECER a condição e a proibir explicitamente o
+    /// retry e o diagnóstico errado — antes, quem mandava era o reflexo genérico
+    /// do WrapAgentToolError ("corrija o problema e tente novamente").
+    /// </summary>
+    public const string LocalAgentWriteUnavailableNote =
+        "[SISTEMA] A última ferramenta FALHOU por indisponibilidade LOCAL do canal de gravação do agente " +
+        "(erro com scope=\"local_agent\" e retryable=false). Isso significa que o problema está NA MÁQUINA DO USUÁRIO — " +
+        "o serviço do agente não está aceitando operações de escrita — e NÃO no servidor de suporte, na API ou no portal, " +
+        "que continuam no ar (as consultas funcionaram, o que comprova isso). " +
+        "PROIBIDO: (a) afirmar ou insinuar que o servidor de suporte está fora do ar, instável ou em manutenção; " +
+        "(b) repetir a mesma chamada de ferramenta de gravação ou tentar outra ferramenta de gravação " +
+        "(criar chamado, comentar, anexar, alterar configuração, instalar/remover programas) — todas vão falhar pelo mesmo motivo; " +
+        "(c) oferecer passos manuais no portal de suporte. " +
+        "FAÇA: explique em linguagem simples que o canal de gravação do serviço local não está disponível, " +
+        "diga que as consultas continuam funcionando (por isso o problema NÃO é do servidor), " +
+        "e oriente o usuário a REINICIAR O SERVIÇO DiscoveryAgent (ou reiniciar o computador) e tentar novamente. " +
+        "Se o usuário já tiver dados coletados, resuma o que foi possível apurar.";
+
     /// <summary>Injetada quando o LLM não produziu conteúdo visível.</summary>
     public const string EmptyContentNote =
         "[SISTEMA] Você não forneceu uma resposta visível ao usuário. Forneça uma resposta direta e útil à última pergunta do usuário.";

@@ -15,18 +15,23 @@ public class RemoteRecordingService : IRemoteRecordingService
     private readonly IRemoteSessionRepository _sessionRepo;
     private readonly ITerminalRecordingService _terminalRecordings;
     private readonly RemoteAccessOptions _options;
+    private readonly IConfigurationResolver? _configurationResolver;
     private readonly ILogger<RemoteRecordingService> _logger;
 
     public RemoteRecordingService(
         IRemoteSessionRepository sessionRepo,
         ITerminalRecordingService terminalRecordings,
         IOptions<RemoteAccessOptions> options,
-        ILogger<RemoteRecordingService> logger)
+        ILogger<RemoteRecordingService> logger,
+        IConfigurationResolver? configurationResolver = null)
     {
         _sessionRepo = sessionRepo;
         _terminalRecordings = terminalRecordings;
         _options = options.Value;
         _logger = logger;
+        // Opcional para não quebrar as construções diretas já existentes (testes e
+        // o registro antigo de DI): sem resolvedor vale o default true.
+        _configurationResolver = configurationResolver;
     }
 
     public async Task<RemoteSessionRecording> StartRecordingAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
@@ -36,6 +41,20 @@ public class RemoteRecordingService : IRemoteRecordingService
 
         if (session.Status != "active")
             throw new InvalidOperationException($"Session {sessionId} is not active.");
+
+        // CFG-A: kill switch REAL de RemoteAccessRecordingEnabled, resolvido com
+        // heranca servidor -> cliente -> site da sessao. Antes a chave
+        // RemoteAccess:Recording:Enabled existia no appsettings e nao era lida por
+        // ninguem. O gate e no INICIO da gravacao de proposito: uma gravacao ja em
+        // andamento e encerrada normalmente por StopRecordingAsync.
+        if (!await IsRecordingAllowedAsync(session, ct))
+        {
+            _logger.LogWarning(
+                "Gravação negada para a sessão {SessionId}: RemoteAccessRecordingEnabled=false no escopo.",
+                sessionId);
+            throw new InvalidOperationException(
+                "Recording is disabled by server configuration for this scope.");
+        }
 
         if (session.RecordingEnabled)
             throw new InvalidOperationException($"Session {sessionId} already has recording active.");
@@ -65,6 +84,36 @@ public class RemoteRecordingService : IRemoteRecordingService
             recording.Id, sessionId, userId);
 
         return recording;
+    }
+
+    /// <summary>
+    /// Avalia <c>RemoteAccessRecordingEnabled</c> no escopo da sessão
+    /// (site -> cliente -> servidor). Sem resolvedor ou sem valor configurado
+    /// mantém o comportamento atual (gravacão ligada).
+    /// </summary>
+    private async Task<bool> IsRecordingAllowedAsync(RemoteSession session, CancellationToken ct)
+    {
+        if (_configurationResolver is null)
+            return true;
+
+        try
+        {
+            // GetEffectiveValueAsync<bool> devolve bool NÃO-anulável: quando o
+            // campo não existe/site não resolve, o default do tipo já é false.
+            // Por isso consultamos o site e, se não houver valor explícito,
+            // recorremos ao servidor — mantendo o comportamento atual (true).
+            var resolved = await _configurationResolver.GetEffectiveValueAsync<bool>(
+                "Site", nameof(ServerConfiguration.RemoteAccessRecordingEnabled), session.SiteId);
+
+            return resolved;
+        }
+        catch (Exception ex)
+        {
+            // Nunca impede a gravacao por falha de leitura da configuracao.
+            _logger.LogWarning(ex,
+                "Não foi possível resolver RemoteAccessRecordingEnabled; assumindo true (comportamento atual).");
+            return true;
+        }
     }
 
     public async Task<RemoteSessionRecording> StopRecordingAsync(Guid sessionId, Guid userId, CancellationToken ct = default)

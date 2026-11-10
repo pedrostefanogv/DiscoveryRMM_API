@@ -35,3 +35,16 @@ public sealed record DeleteMfaKeyCommand(
     Guid KeyId,
     Guid UserId
 ) : ICommand<Result<VoidResult>>;
+
+/// <summary>
+/// Telemetria da falha WebAuthn ocorrida no CLIENTE (DOMException). A investigação do Android
+/// mostrou que a maioria das falhas acontece no navegador antes de chegar ao servidor — sem
+/// este canal o caso simplesmente não aparece em log nenhum.
+/// </summary>
+public sealed record ReportFido2ClientErrorCommand(
+    Guid UserId,
+    string? ErrorName,
+    string? ErrorMessage,
+    string? Stage,
+    string? UserAgent
+) : ICommand<Result<VoidResult>>;

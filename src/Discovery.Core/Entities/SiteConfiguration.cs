@@ -48,6 +48,35 @@ public class SiteConfiguration
     /// <summary>Zero-touch provisioning habilitado (null = herda cliente/servidor)</summary>
     public bool? ZeroTouchEnabled { get; set; }
 
+    /// <summary>
+    /// Override do job de embeddings da base de conhecimento neste site
+    /// (null = herda cliente/servidor; default global = true).
+    /// </summary>
+    public bool? KnowledgeEmbeddingEnabled { get; set; }
+
+    // ============ Kill switches de feature (CFG-A) — null = herda cliente/servidor ============
+
+    /// <summary>Modo observação da autorização por departamento (null = herda).</summary>
+    public bool? DepartmentAuthShadowMode { get; set; }
+
+    /// <summary>Notificações push habilitadas (null = herda).</summary>
+    public bool? PushEnabled { get; set; }
+
+    /// <summary>Sync do catálogo winget habilitado (null = herda).</summary>
+    public bool? WingetCatalogEnabled { get; set; }
+
+    /// <summary>Acesso remoto habilitado (null = herda).</summary>
+    public bool? RemoteAccessEnabled { get; set; }
+
+    /// <summary>Gravação de sessões remotas (null = herda).</summary>
+    public bool? RemoteAccessRecordingEnabled { get; set; }
+
+    /// <summary>Remoção automática de gravações expiradas (null = herda).</summary>
+    public bool? RemoteAccessRecordingAutoDeleteExpired { get; set; }
+
+    /// <summary>Log automático habilitado (null = herda).</summary>
+    public bool? AutomaticLoggingEnabled { get; set; }
+
     // ============ Loja de aplicativos ============
 
     /// <summary>Política de acesso à loja de aplicativos (null = herda cliente/servidor)</summary>

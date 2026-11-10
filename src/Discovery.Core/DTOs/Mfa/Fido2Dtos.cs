@@ -11,6 +11,12 @@ public class Fido2CredentialResult
     public string? AaguidBase64 { get; set; }
     public string? UserHandleBase64 { get; set; }
 
+    /// <summary>
+    /// Transports informados pelo autenticador (getTransports()), em base64url igual ao que
+    /// o navegador envia. Persistidos na chave e devolvidos em allowCredentials.
+    /// </summary>
+    public List<string> TransportsBase64Url { get; set; } = [];
+
     public static Fido2CredentialResult Fail(string error) =>
         new() { Success = false, ErrorMessage = error };
 }
@@ -63,4 +69,21 @@ public class CompleteOtpAssertionDto
 {
     /// <summary>Código TOTP de 6 dígitos.</summary>
     public string Code { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Falha WebAuthn ocorrida no navegador (DOMException), reportada pelo cliente para ficar
+/// visível no log do servidor — é o único jeito de enxergar o caso do Android, em que a
+/// cerimônia morre no celular e nenhuma requisição de MFA chega a ser feita.
+/// </summary>
+public class Fido2ClientErrorDto
+{
+    /// <summary>Nome do DOMException (ex.: "NotAllowedError", "SecurityError").</summary>
+    public string? ErrorName { get; set; }
+
+    /// <summary>Mensagem do navegador.</summary>
+    public string? ErrorMessage { get; set; }
+
+    /// <summary>Etapa em que falhou (ex.: "mfa-assert-begin", "mfa-assert-complete").</summary>
+    public string? Stage { get; set; }
 }

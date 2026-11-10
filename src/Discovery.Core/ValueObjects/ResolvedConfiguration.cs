@@ -34,6 +34,44 @@ public class ResolvedConfiguration
     public bool ZeroTouchEnabled { get; set; }
 
     /// <summary>
+    /// Job de embeddings da base de conhecimento já resolvido (servidor → cliente → site).
+    /// Default global = true; false = o <c>KnowledgeEmbeddingJob</c> não é agendado no Quartz.
+    /// </summary>
+    public bool KnowledgeEmbeddingEnabled { get; set; }
+
+    // ============ Kill switches de feature (CFG-A) ============
+
+    /// <summary>Modo observação da autorização por departamento (true = só observa).</summary>
+    public bool DepartmentAuthShadowMode { get; set; }
+
+    /// <summary>Notificações push habilitadas.</summary>
+    public bool PushEnabled { get; set; }
+
+    /// <summary>Sync do catálogo winget habilitado.</summary>
+    public bool WingetCatalogEnabled { get; set; }
+
+    /// <summary>Acesso remoto habilitado.</summary>
+    public bool RemoteAccessEnabled { get; set; }
+
+    /// <summary>Gravação de sessões remotas habilitada.</summary>
+    public bool RemoteAccessRecordingEnabled { get; set; }
+
+    /// <summary>Remoção automática de gravações expiradas.</summary>
+    public bool RemoteAccessRecordingAutoDeleteExpired { get; set; }
+
+    /// <summary>Log automático habilitado.</summary>
+    public bool AutomaticLoggingEnabled { get; set; }
+
+    /// <summary>Telemetria OpenTelemetry (servidor inteiro; não herda).</summary>
+    public bool OpenTelemetryEnabled { get; set; }
+
+    /// <summary>Migrations no boot (servidor inteiro; não herda). ⚠️ desligar dessincroniza o schema.</summary>
+    public bool MigrationsRunOnStartup { get; set; }
+
+    /// <summary>Modo do contrato de realtime: "auto" | "strict" | "legacy" (não herda).</summary>
+    public string RealtimeContractMode { get; set; } = RealtimeContractModes.Auto;
+
+    /// <summary>
     /// Aba inicial do agent já resolvida (servidor → cliente → site). Sempre um id
     /// válido de <see cref="AgentHomeTabCatalog"/>; o agent cai para "status" se a
     /// aba estiver desabilitada para ele.

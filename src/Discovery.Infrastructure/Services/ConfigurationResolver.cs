@@ -206,6 +206,25 @@ public class ConfigurationResolver : IConfigurationResolver
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
         var updatesTab = ResolveValue("UpdatesTabEnabled", blocked, site?.UpdatesTabEnabled, client?.UpdatesTabEnabled, server.UpdatesTabEnabled);
         var zeroTouch = ResolveValue("ZeroTouchEnabled", blocked, site?.ZeroTouchEnabled, client?.ZeroTouchEnabled, server.ZeroTouchEnabled);
+        var knowledgeEmbedding = ResolveValue("KnowledgeEmbeddingEnabled", blocked, site?.KnowledgeEmbeddingEnabled, client?.KnowledgeEmbeddingEnabled, server.KnowledgeEmbeddingEnabled);
+
+        // Kill switches de feature (CFG-A) — herdáveis servidor → cliente → site.
+        var departmentAuthShadow = ResolveValue("DepartmentAuthShadowMode", blocked, site?.DepartmentAuthShadowMode, client?.DepartmentAuthShadowMode, server.DepartmentAuthShadowMode);
+        var push = ResolveValue("PushEnabled", blocked, site?.PushEnabled, client?.PushEnabled, server.PushEnabled);
+        var wingetCatalog = ResolveValue("WingetCatalogEnabled", blocked, site?.WingetCatalogEnabled, client?.WingetCatalogEnabled, server.WingetCatalogEnabled);
+        var remoteAccess = ResolveValue("RemoteAccessEnabled", blocked, site?.RemoteAccessEnabled, client?.RemoteAccessEnabled, server.RemoteAccessEnabled);
+        var remoteAccessRecording = ResolveValue("RemoteAccessRecordingEnabled", blocked, site?.RemoteAccessRecordingEnabled, client?.RemoteAccessRecordingEnabled, server.RemoteAccessRecordingEnabled);
+        var remoteAccessRecordingAutoDelete = ResolveValue("RemoteAccessRecordingAutoDeleteExpired", blocked, site?.RemoteAccessRecordingAutoDeleteExpired, client?.RemoteAccessRecordingAutoDeleteExpired, server.RemoteAccessRecordingAutoDeleteExpired);
+        var automaticLogging = ResolveValue("AutomaticLoggingEnabled", blocked, site?.AutomaticLoggingEnabled, client?.AutomaticLoggingEnabled, server.AutomaticLoggingEnabled);
+
+        // Kill switches do SERVIDOR INTEIRO (CFG-A): sem override por cliente/site
+        // (pipeline de telemetria do processo, schema do banco e contrato global do
+        // dashboard). Passam por ResolveValue com site/client nulos para que o
+        // bloqueio (lockedFieldsJson) continue sendo reportado em Inheritance.
+        var openTelemetry = ResolveValue("OpenTelemetryEnabled", blocked, (bool?)null, (bool?)null, server.OpenTelemetryEnabled);
+        var migrationsRunOnStartup = ResolveValue("MigrationsRunOnStartup", blocked, (bool?)null, (bool?)null, server.MigrationsRunOnStartup);
+        var realtimeContractModeRaw = ResolveStringValue("RealtimeContractMode", blocked, null, null, server.RealtimeContractMode);
+        var realtimeContractMode = (RealtimeContractModes.Normalize(realtimeContractModeRaw.Value), realtimeContractModeRaw.Source);
         var homeTab = ResolveStringValue("AgentHomeTab", blocked, site?.AgentHomeTab, client?.AgentHomeTab, server.AgentHomeTab);
         var appStore = ResolveValue("AppStorePolicy", blocked, site?.AppStorePolicy, client?.AppStorePolicy, server.AppStorePolicy);
         var inventory = ResolveValue("InventoryIntervalHours", blocked, site?.InventoryIntervalHours, client?.InventoryIntervalHours, server.InventoryIntervalHours);
@@ -245,6 +264,17 @@ public class ConfigurationResolver : IConfigurationResolver
             KnowledgeBaseEnabled = knowledge.Value,
             UpdatesTabEnabled = updatesTab.Value,
             ZeroTouchEnabled = zeroTouch.Value,
+            KnowledgeEmbeddingEnabled = knowledgeEmbedding.Value,
+            DepartmentAuthShadowMode = departmentAuthShadow.Value,
+            PushEnabled = push.Value,
+            WingetCatalogEnabled = wingetCatalog.Value,
+            RemoteAccessEnabled = remoteAccess.Value,
+            RemoteAccessRecordingEnabled = remoteAccessRecording.Value,
+            RemoteAccessRecordingAutoDeleteExpired = remoteAccessRecordingAutoDelete.Value,
+            AutomaticLoggingEnabled = automaticLogging.Value,
+            OpenTelemetryEnabled = openTelemetry.Value,
+            MigrationsRunOnStartup = migrationsRunOnStartup.Value,
+            RealtimeContractMode = realtimeContractMode.Item1,
             AgentHomeTab = AgentHomeTabCatalog.Normalize(homeTab.Value),
             AppStorePolicy = appStore.Value,
             InventoryIntervalHours = inventory.Value,
@@ -271,6 +301,17 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
         resolved.Inheritance["UpdatesTabEnabled"] = (int)updatesTab.Source;
         resolved.Inheritance["ZeroTouchEnabled"] = (int)zeroTouch.Source;
+        resolved.Inheritance["KnowledgeEmbeddingEnabled"] = (int)knowledgeEmbedding.Source;
+        resolved.Inheritance["DepartmentAuthShadowMode"] = (int)departmentAuthShadow.Source;
+        resolved.Inheritance["PushEnabled"] = (int)push.Source;
+        resolved.Inheritance["WingetCatalogEnabled"] = (int)wingetCatalog.Source;
+        resolved.Inheritance["RemoteAccessEnabled"] = (int)remoteAccess.Source;
+        resolved.Inheritance["RemoteAccessRecordingEnabled"] = (int)remoteAccessRecording.Source;
+        resolved.Inheritance["RemoteAccessRecordingAutoDeleteExpired"] = (int)remoteAccessRecordingAutoDelete.Source;
+        resolved.Inheritance["AutomaticLoggingEnabled"] = (int)automaticLogging.Source;
+        resolved.Inheritance["OpenTelemetryEnabled"] = (int)openTelemetry.Source;
+        resolved.Inheritance["MigrationsRunOnStartup"] = (int)migrationsRunOnStartup.Source;
+        resolved.Inheritance["RealtimeContractMode"] = (int)realtimeContractMode.Item2;
         resolved.Inheritance["AgentHomeTab"] = (int)homeTab.Source;
         resolved.Inheritance["AppStorePolicy"] = (int)appStore.Source;
         resolved.Inheritance["InventoryIntervalHours"] = (int)inventory.Source;

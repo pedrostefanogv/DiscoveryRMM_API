@@ -29,13 +29,28 @@ public class McpToolServerContextTests
     private static readonly Guid ContextClientId = Guid.Parse("22222222-2222-2222-2222-222222222222");
     private static readonly Guid ContextSiteId = Guid.Parse("33333333-3333-3333-3333-333333333333");
 
+    // As tools de sensor (get_agent_sensors/get_agent_sensor_history) recebem
+    // fakes próprios; o comportamento delas é coberto em McpToolSensorToolsTests.
     private static McpToolExecutor BuildExecutor(FakeMediator mediator, FakePolicyRepository? policies = null)
+        => BuildExecutor(
+            mediator,
+            policies,
+            new McpToolSensorToolsTests.FakeSensorReadService(),
+            new McpToolSensorToolsTests.FakeSensorSeriesService());
+
+    private static McpToolExecutor BuildExecutor(
+        FakeMediator mediator,
+        FakePolicyRepository? policies,
+        ISensorReadService sensorRead,
+        ISensorSeriesService sensorSeries)
         => new(
             policies ?? new FakePolicyRepository(),
             new ThrowingKnowledgeMcpTool(),
             new ThrowingKnowledgeListMcpTool(),
             new ThrowingMessageRepository(),
             mediator,
+            sensorRead,
+            sensorSeries,
             NullLogger<McpToolExecutor>.Instance);
 
     private static Task<string> Execute(

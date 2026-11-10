@@ -32,14 +32,45 @@ public sealed class StartRemoteSessionCommandHandler(
     IClientRepository clientRepo,
     IOptions<RemoteAccessOptions> options,
     IScopeContext scopeContext,
+    IConfigurationResolver configurationResolver,
     ILogger<StartRemoteSessionCommandHandler> logger
 ) : IRequestHandler<StartRemoteSessionCommand, Result<RemoteSessionResponseDto>>
 {
     public async Task<Result<RemoteSessionResponseDto>> Handle(StartRemoteSessionCommand cmd, CancellationToken ct)
     {
-        // S4: Validar feature flag
+        // S4: Validar feature flag (bootstrap do appsettings: RemoteAccess:Enabled).
+        // Continua valendo como kill switch de boot; o gate de RUNTIME logo abaixo
+        // le a configuracao do servidor (editavel na UI), que e a fonte de verdade.
         if (!options.Value.Enabled)
             return Result<RemoteSessionResponseDto>.Failure(Error.Forbidden("Remote access is disabled."));
+
+        // CFG-A: kill switch REAL de RemoteAccessEnabled, resolvido com heranca
+        // (servidor -> cliente -> site do AGENTE alvo). Antes a chave
+        // RemoteAccess:Enabled existia no appsettings e nao era lida em lugar
+        // nenhum: desligar o acesso remoto pela UI nao tinha efeito.
+        //
+        // O gate e na CRIACAO da sessao de proposito: sessoes ja em andamento
+        // continuam funcionando e o encerramento nunca e bloqueado (negar o stop
+        // deixaria a sessao aberta para sempre).
+        {
+            var agentForGate = await agentRepo.GetByIdAsync(cmd.AgentId);
+            if (agentForGate is not null)
+            {
+                var effective = await configurationResolver.GetEffectiveValueAsync<bool>(
+                    "Site", nameof(ServerConfiguration.RemoteAccessEnabled), agentForGate.SiteId);
+
+                // Sem valor resolvido (configuracao ausente) mantem o comportamento
+                // atual: o gate do appsettings acima ja decidiu.
+                if (effective is false)
+                {
+                    logger.LogWarning(
+                        "Sessão remota negada: RemoteAccessEnabled=false no escopo do site {SiteId}.",
+                        agentForGate.SiteId);
+                    return Result<RemoteSessionResponseDto>.Failure(
+                        Error.Forbidden("Remote access is disabled for this scope."));
+                }
+            }
+        }
 
         // S5: Validar enums
         if (!Enum.IsDefined(cmd.Kind))

@@ -12,7 +12,7 @@ public class LoginRequestDto
 public class LoginResponseDto
 {
     /// <summary>
-    /// JWT de curta duração (3min) com claim mfa_pending=true.
+    /// JWT de curta duração (5min) com claim mfa_pending=true.
     /// Deve ser enviado no header Authorization: Bearer {mfaToken} nos endpoints de MFA.
     /// </summary>
     public string MfaToken { get; set; } = string.Empty;

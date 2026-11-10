@@ -89,26 +89,16 @@ public sealed class CompleteFido2RegistrationCommandHandler(
             if (!result.Success)
                 return Result<CompleteFido2RegistrationResult>.Failure(Error.Unauthorized(result.ErrorMessage ?? "Registro FIDO2 inválido."));
 
-            var key = new UserMfaKey
-            {
-                Id = IdGenerator.NewId(),
-                UserId = cmd.UserId,
-                KeyType = MfaKeyType.Fido2,
-                Name = keyName,
-                IsActive = true,
-                CredentialIdBase64 = result.CredentialIdBase64,
-                PublicKeyBase64 = result.PublicKeyBase64,
-                SignCount = result.SignCount,
-                AaguidBase64 = result.AaguidBase64,
-                UserHandleBase64 = result.UserHandleBase64,
-                CreatedAt = DateTime.UtcNow
-            };
+            // A chave já foi gravada por Fido2AuthService (nome temporário): a checagem de
+            // unicidade de credential id no LOGIN consulta o banco, e sem a linha a credencial
+            // recém-registrada seria recusada como "não reconhecida". Aqui só confirmamos o
+            // nome escolhido pelo usuário — e, se a gravação preventiva falhou, criamos agora.
+            var keyId = await CompletePersistedKeyAsync(cmd.UserId, keyName, result);
 
-            var created = await mfaKeyRepo.CreateAsync(key);
             await userRepo.SetMfaConfiguredAsync(cmd.UserId, true);
 
             return Result<CompleteFido2RegistrationResult>.Success(
-                new CompleteFido2RegistrationResult(created.Id, "Chave FIDO2 registrada com sucesso."));
+                new CompleteFido2RegistrationResult(keyId, "Chave FIDO2 registrada com sucesso."));
         }
         catch (Exception ex) when (RuntimeStaleFailure.IsRuntimeStale(ex))
         {
@@ -122,6 +112,68 @@ public sealed class CompleteFido2RegistrationCommandHandler(
             return Result<CompleteFido2RegistrationResult>.Failure(
                 Error.Internal("Não foi possível concluir o registro da chave de segurança."));
         }
+    }
+
+    /// <summary>
+    /// Finaliza a persistência da credencial: renomeia a linha criada por
+    /// <see cref="Fido2AuthService"/> no complete. Se ela não existir (gravação preventiva
+    /// falhou, ou credencial registrada por uma versão anterior desta correção), cria a chave
+    /// aqui — o comportamento antigo — para o registro não se perder.
+    /// </summary>
+    private async Task<Guid> CompletePersistedKeyAsync(
+        Guid userId, string keyName, Discovery.Core.DTOs.Mfa.Fido2CredentialResult result)
+    {
+        var pending = (await mfaKeyRepo.GetActiveByUserIdAsync(userId))
+            .Where(k => k.KeyType == MfaKeyType.Fido2)
+            .FirstOrDefault(k => !string.IsNullOrWhiteSpace(k.CredentialIdBase64)
+                                 && CredentialIdMatches(k.CredentialIdBase64!, result.CredentialIdBase64));
+
+        if (pending is not null)
+        {
+            await mfaKeyRepo.RenameAsync(pending.Id, userId, keyName);
+            logger.LogInformation(
+                "Chave FIDO2 {KeyId} do usuário {UserId} finalizada com o nome informado.", pending.Id, userId);
+            return pending.Id;
+        }
+
+        var key = new UserMfaKey
+        {
+            Id = IdGenerator.NewId(),
+            UserId = userId,
+            KeyType = MfaKeyType.Fido2,
+            Name = keyName,
+            IsActive = true,
+            CredentialIdBase64 = result.CredentialIdBase64,
+            PublicKeyBase64 = result.PublicKeyBase64,
+            SignCount = result.SignCount,
+            AaguidBase64 = result.AaguidBase64,
+            UserHandleBase64 = result.UserHandleBase64,
+            Transports = result.TransportsBase64Url.Count == 0
+                ? null
+                : string.Join(",", result.TransportsBase64Url.Select(DecodeTransportName)),
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var created = await mfaKeyRepo.CreateAsync(key);
+        logger.LogInformation(
+            "Chave FIDO2 {KeyId} criada no complete do registro (gravação preventiva ausente) para o usuário {UserId}.",
+            created.Id, userId);
+        return created.Id;
+    }
+
+    /// <summary>Compara credential ids pelos bytes: o banco pode ter base64url (novo) ou base64 padrão (legado).</summary>
+    private static bool CredentialIdMatches(string storedValue, string returnedValue)
+    {
+        var stored = Fido2AuthService.DecodeBase64AnyFormat(storedValue);
+        var returned = Fido2AuthService.DecodeBase64AnyFormat(returnedValue);
+        return stored is not null && returned is not null && stored.AsSpan().SequenceEqual(returned);
+    }
+
+    /// <summary>Converte o base64url devolvido pelo serviço no nome WebAuthn minúsculo ("internal").</summary>
+    private static string DecodeTransportName(string base64UrlValue)
+    {
+        var bytes = Fido2AuthService.DecodeBase64AnyFormat(base64UrlValue);
+        return bytes is null ? base64UrlValue : System.Text.Encoding.UTF8.GetString(bytes).ToLowerInvariant();
     }
 }
 
@@ -230,6 +282,30 @@ public sealed class CompleteTotpRegistrationCommandHandler(
             return Result<CompleteTotpRegistrationResult>.Failure(
                 Error.Internal("Não foi possível concluir o registro do OTP."));
         }
+    }
+}
+
+/// <summary>
+/// Recebe a falha WebAuthn do cliente e a encaminha ao serviço, que a registra no log.
+/// Sempre responde sucesso: é telemetria, e um erro aqui não pode virar erro na tela de MFA.
+/// </summary>
+public sealed class ReportFido2ClientErrorCommandHandler(
+    IFido2Service fido2Service,
+    ILogger<ReportFido2ClientErrorCommandHandler> logger
+) : IRequestHandler<ReportFido2ClientErrorCommand, Result<VoidResult>>
+{
+    public Task<Result<VoidResult>> Handle(ReportFido2ClientErrorCommand cmd, CancellationToken ct)
+    {
+        try
+        {
+            fido2Service.LogClientError(cmd.UserId, cmd.ErrorName, cmd.ErrorMessage, cmd.Stage, cmd.UserAgent);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Não foi possível registrar a falha WebAuthn do cliente (user {UserId}).", cmd.UserId);
+        }
+
+        return Task.FromResult(Result<VoidResult>.Success(VoidResult.Value));
     }
 }
 

@@ -54,6 +54,21 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.UpdatesTabEnabled = config.UpdatesTabEnabled;
         existingConfig.AgentHomeTab = config.AgentHomeTab;
         existingConfig.ZeroTouchEnabled = config.ZeroTouchEnabled;
+        existingConfig.KnowledgeEmbeddingEnabled = config.KnowledgeEmbeddingEnabled;
+        // CFG-A: Modo observação da autorização por departamento (lido pelo ConfigurationResolver).
+        existingConfig.DepartmentAuthShadowMode = config.DepartmentAuthShadowMode;
+        // CFG-A: Notificações push (lido pelo ConfigurationResolver).
+        existingConfig.PushEnabled = config.PushEnabled;
+        // CFG-A: Sync do catálogo winget (lido pelo ConfigurationResolver).
+        existingConfig.WingetCatalogEnabled = config.WingetCatalogEnabled;
+        // CFG-A: Acesso remoto (lido pelo ConfigurationResolver).
+        existingConfig.RemoteAccessEnabled = config.RemoteAccessEnabled;
+        // CFG-A: Gravação de sessão remota (lido pelo ConfigurationResolver).
+        existingConfig.RemoteAccessRecordingEnabled = config.RemoteAccessRecordingEnabled;
+        // CFG-A: Remoção automática de gravações expiradas (lido pelo ConfigurationResolver).
+        existingConfig.RemoteAccessRecordingAutoDeleteExpired = config.RemoteAccessRecordingAutoDeleteExpired;
+        // CFG-A: Log automático (lido pelo ConfigurationResolver).
+        existingConfig.AutomaticLoggingEnabled = config.AutomaticLoggingEnabled;
         existingConfig.AppStorePolicy = config.AppStorePolicy;
         existingConfig.AIIntegrationSettingsJson = config.AIIntegrationSettingsJson;
         existingConfig.InventoryIntervalHours = config.InventoryIntervalHours;

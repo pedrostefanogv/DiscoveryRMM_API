@@ -42,6 +42,13 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
     private readonly IScopeContext _scopeContext;
     private readonly ILogger<TicketAccessPolicy>? _logger;
 
+    /// <summary>
+    /// Bootstrap do appsettings (<c>Tickets:DepartmentAuth:ShadowMode</c>). É o
+    /// FALLBACK: só vale enquanto a configuração do banco não foi lida com
+    /// sucesso (ou em testes que constroem a política sem repositório).
+    /// </summary>
+    private readonly bool _shadowModeBootstrap;
+
     public TicketAccessPolicy(
         DiscoveryDbContext db,
         IDepartmentTeamResolver teamResolver,
@@ -54,22 +61,98 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
         _scopeContext = scopeContext;
         _logger = logger;
 
-        // Ligado por configuração (chave Tickets:DepartmentAuth:ShadowMode).
+        // Bootstrap pelo appsettings (chave Tickets:DepartmentAuth:ShadowMode).
         // O padrão é TRUE de propósito: papéis existentes (Operator/Support) têm
         // Tickets.Edit amplo e seriam bloqueados de imediato se a regra entrasse
         // valendo. Assim a regra pode ser LIGADA sem quebrar a operação, medindo
         // primeiro quem seria barrado.
-        ShadowMode = configuration?.GetValue(
+        _shadowModeBootstrap = configuration?.GetValue(
             "Tickets:DepartmentAuth:ShadowMode", defaultValue: true) ?? true;
+
+        ShadowMode = _shadowModeBootstrap;
     }
 
     /// <summary>
-    /// Modo de observação (padrão TRUE, vindo de <c>Tickets:DepartmentAuth:ShadowMode</c>).
-    /// Em shadow as negações de tratar/fechar são REGISTRADAS mas não aplicadas.
-    /// Definir como false passa a BLOQUEAR de fato — é o "liga a regra".
-    /// A propriedade tem setter público para os testes alternarem sem recriar o serviço.
+    /// Modo de observação. Em shadow as negações de tratar/fechar são REGISTRADAS
+    /// mas não aplicadas. Definir como false passa a BLOQUEAR de fato — é o
+    /// "liga a regra".
+    ///
+    /// A propriedade tem setter público para os testes alternarem sem recriar o
+    /// serviço.
+    ///
+    /// FONTE DE VERDADE (CFG-A): a configuração do servidor
+    /// (<c>ServerConfiguration.DepartmentAuthShadowMode</c>, editável na UI e
+    /// herdável por cliente/site). O valor do appsettings é apenas o BOOTSTRAP:
+    /// vale enquanto o banco não foi lido (ver <see cref="RefreshShadowModeAsync"/>).
     /// </summary>
     public bool ShadowMode { get; set; } = true;
+
+    /// <summary>
+    /// Relê o modo de observação da configuração do SERVIDOR (fonte de verdade).
+    ///
+    /// O appsettings continua sendo o bootstrap — se a leitura falhar (banco
+    /// indisponível, tabela ainda não migrada em ambiente novo) mantém-se o valor
+    /// atual em vez de derrubar a autorização de chamados.
+    /// </summary>
+    public Task RefreshShadowModeAsync(CancellationToken ct = default)
+    {
+        InvalidateShadowModeCache();
+        _ = ResolveShadowModeCached();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Valor do bootstrap do appsettings, exposto para diagnóstico/testes.</summary>
+    public bool ShadowModeBootstrap => _shadowModeBootstrap;
+
+    private bool? _resolvedShadowMode;
+
+    /// <summary>
+    /// Modo efetivo com leitura PREGUIÇOSA e única da configuração do servidor.
+    ///
+    /// O serviço é registrado como singleton no auto-registro, então não dá para
+    /// injetar um escopo de DbContext no construtor sem virar captive dependency.
+    /// A leitura é feita sob demanda, na primeira negação, e memorizada por
+    /// instância; um banco indisponível cai para o bootstrap do appsettings.
+    ///
+    /// Leitura SÍNCRONA de propósito: <see cref="ApplyShadow"/> está no contrato
+    /// síncrono da interface e é chamado no meio de decisões já assíncronas —
+    /// torná-lo async mudaria a assinatura pública e todos os chamadores.
+    /// </summary>
+    private bool ResolveShadowModeCached()
+    {
+        if (_resolvedShadowMode.HasValue)
+            return _resolvedShadowMode.Value;
+
+        var value = _shadowModeBootstrap;
+        try
+        {
+            // Projeção mínima + AsNoTracking: uma linha singleton, custo desprezível.
+            var row = _db.ServerConfigurations
+                .AsNoTracking()
+                .Select(config => (bool?)config.DepartmentAuthShadowMode)
+                .FirstOrDefault();
+
+            if (row.HasValue)
+                value = row.Value;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex,
+                "Não foi possível ler DepartmentAuthShadowMode da configuração do servidor; " +
+                "mantendo o bootstrap do appsettings (ShadowMode={ShadowMode}).",
+                value);
+        }
+
+        _resolvedShadowMode = value;
+        ShadowMode = value;
+        return value;
+    }
+
+    /// <summary>
+    /// Descarta o valor memorizado — usado por <see cref="RefreshShadowModeAsync"/>
+    /// e pelos testes que alternam a configuração sem recriar o serviço.
+    /// </summary>
+    public void InvalidateShadowModeCache() => _resolvedShadowMode = null;
 
     public async Task<bool> HasGlobalTicketAccessAsync(Guid? userId, CancellationToken ct = default)
     {
@@ -270,7 +353,13 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
     /// </summary>
     public TicketAccessDecision ApplyShadow(TicketAccessDecision decision, Guid? userId, Guid ticketId, string action)
     {
-        if (decision.Allowed || !ShadowMode)
+        // Uma decisão PERMITIDA não passa pelo shadow: não precisa nem resolver a
+        // configuração. Só quando há negação é que o modo importa — e é aí que
+        // lemos o valor efetivo do banco (cacheado por escopo, ver abaixo).
+        if (decision.Allowed)
+            return decision;
+
+        if (!ResolveShadowModeCached())
             return decision;
 
         _logger?.LogWarning(

@@ -1026,6 +1026,10 @@ public class AiChatStreamingOrchestrator
             // messages: intercalar mensagens user entre tool messages pode ser
             // rejeitado por provedores OpenAI-compatible.
             var toolImageMessages = new List<LlmMessage>();
+            // P2.11: alguma tool deste lote falhou por indisponibilidade LOCAL
+            // não-retentável (canal de gravação do agente fora). Ver a marcação
+            // dentro do foreach.
+            var localWriteUnavailable = false;
             foreach (var tr in toolResults)
             {
                 // "a2ui_action" é a sentinela de interação com surfaces (não é
@@ -1037,6 +1041,22 @@ public class AiChatStreamingOrchestrator
                     _logger.LogWarning("[{TraceId}] ToolResult rejeitado (não corresponde a tool call pendente): CallId={CallId}, Name={Name}, SessionId={SessionId}",
                         traceId, tr.CallId, tr.Name, session.Id);
                     continue;
+                }
+
+                // P2.11 (PLANO_CORRECAO_CANAL_ADMIN_IPC.md §4): falha LOCAL
+                // não-retentável do canal de gravação do agente. Diferente das
+                // demais falhas, esta NÃO pode virar novo round de ferramenta:
+                // o serviço do agente está em modo somente-leitura e qualquer
+                // outra mutação repetiria o mesmo erro (3 × create_ticket no
+                // incidente de 2026-10-17, ~38s). A flag sobrevive ao foreach
+                // para abortar o loop DEPOIS de fechar as tool messages (um
+                // break no meio deixaria tool_call sem tool message → HTTP 400).
+                if (AiChatToolOrchestrator.IsNonRetryableLocalAgentWrite(tr.Result))
+                {
+                    localWriteUnavailable = true;
+                    _logger.LogWarning(
+                        "[{TraceId}] Falha LOCAL não-retentável do canal de gravação do agente na tool {ToolName} — abortando o loop de ferramentas deste turno",
+                        traceId, tr.Name);
                 }
 
                 var wrapped = AiChatToolOrchestrator.WrapAgentToolError(tr.Result, tr.Name);
@@ -1071,6 +1091,20 @@ public class AiChatStreamingOrchestrator
                 toolMsgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = toolMessageContent, ToolCallId = tr.CallId, ToolName = tr.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId });
             }
             llmMessages.AddRange(toolImageMessages);
+
+            // P2.11: canal de gravação local indisponível. Injeta a regra no
+            // MESMO turno (o prompt do sistema é reconstruído a cada round, mas
+            // esta nota fica colada ao tool result que originou a falha) e
+            // encerra a cadeia: sem isso o modelo pedia outra mutação e o
+            // usuário esperava mais um round inteiro para receber o mesmo erro.
+            if (localWriteUnavailable)
+            {
+                llmMessages.Add(new LlmMessage("system", AiChatHelpers.LocalAgentWriteUnavailableNote));
+                _logger.LogWarning(
+                    "[{TraceId}] Canal de gravação local indisponível (retryable=false) — nota anti-retry injetada e loop de ferramentas encerrado para SessionId={SessionId}",
+                    traceId, session.Id);
+            }
+
             try { await _messageRepository.CreateBatchAsync(toolMsgs, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir tool results", traceId); }
         }
@@ -1217,6 +1251,11 @@ public class AiChatStreamingOrchestrator
             // Calls do agent suprimidas por orçamento esgotado: fechadas com
             // tool message sintético para o round de síntese não receber 400.
             var agentToolCallsPending = new List<LlmAssistantToolCall>();
+            // P2.11: o round cujo PRÓPRIO tool call voltou com falha local
+            // não-retentável é o último. A nota anti-retry já foi injetada no
+            // bloco de tool results (que roda antes do while); aqui só
+            // interrompemos a cadeia, deixando o round de síntese responder.
+            var localWriteStop = false;
             providerError = null;
 
             if (roundTools.Count > 0)
@@ -1293,6 +1332,13 @@ public class AiChatStreamingOrchestrator
                                 }
                                 var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson,
                                     session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, session.Id, ct);
+                                if (AiChatToolOrchestrator.IsNonRetryableLocalAgentWrite(toolResult))
+                                {
+                                    localWriteStop = true;
+                                    _logger.LogWarning(
+                                        "[{TraceId}] Tool {ToolName} falhou por indisponibilidade LOCAL do canal de gravação (retryable=false) — encerrando o loop de ferramentas do turno",
+                                        traceId, tc.Name);
+                                }
                                 yield return new AiChatStreamChunk(Type: "tool_result", ToolCallId: tc.Id, ToolResult: toolResult);
                                 llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));
                                 // B14: sucesso reseta o contador de erros da tool.
@@ -1305,6 +1351,22 @@ public class AiChatStreamingOrchestrator
                                     llmMessages.Add(new LlmMessage("system", AiChatHelpers.KbExhaustedNote));
                                 }
                             }
+                        }
+
+                        // P2.11: canal de gravação local indisponível — o tool
+                        // message já foi adicionado no foreach (pareamento
+                        // tool_call/tool_message preservado) e a nota anti-retry
+                        // já está no contexto. Encerra a cadeia deste turno: o
+                        // modelo responde SEM tools, com o diagnóstico correto.
+                        // Sem este corte o LLM pedia outra mutação e o usuário
+                        // esperava outro round só para ver o mesmo erro.
+                        if (localWriteStop)
+                        {
+                            budgetExhausted = true;
+                            _logger.LogWarning(
+                                "[{TraceId}] Loop de ferramentas encerrado no round {Round}: canal de gravação local indisponível (retryable=false)",
+                                traceId, turnRound);
+                            break;
                         }
 
                         if (hasAgentToolCall)

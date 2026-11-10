@@ -158,6 +158,9 @@ public class TotpRegistrationHandlerTests
         public Task<UserMfaKey?> GetByCredentialIdAsync(string credentialIdBase64) => Task.FromResult<UserMfaKey?>(null);
         public Task<bool> UpdateSignCountAsync(Guid keyId, uint newSignCount) => Task.FromResult(true);
         public Task<bool> UpdateLastUsedAsync(Guid keyId) => Task.FromResult(true);
+        public Task<bool> UpdateFido2KeyAsync(
+            Guid keyId, string credentialIdBase64, string publicKeyBase64, uint signCount,
+            string? aaguidBase64, string? userHandleBase64, string? transports) => Task.FromResult(true);
         public Task<bool> SetLastUsedStepAsync(Guid keyId, long step) => Task.FromResult(true);
         public Task<bool> UpdateBackupCodeHashesAsync(Guid keyId, string[] hashes) => Task.FromResult(true);
         public Task<bool> DeactivateAsync(Guid keyId, Guid userId) => Task.FromResult(true);

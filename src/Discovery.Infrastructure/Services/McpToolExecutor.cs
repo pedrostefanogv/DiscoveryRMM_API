@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.Cqrs.Alerts.Queries;
 using Discovery.Core.Cqrs.MonitoringEvents.Queries;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
@@ -91,6 +92,8 @@ public class McpToolExecutor : IMcpToolExecutor
     private readonly IKnowledgeListMcpTool _knowledgeListMcpTool;
     private readonly IAiChatMessageRepository _messageRepo;
     private readonly IMediator _mediator;
+    private readonly ISensorReadService _sensorReadService;
+    private readonly ISensorSeriesService _sensorSeriesService;
     private readonly ILogger<McpToolExecutor> _logger;
     private readonly ConcurrentDictionary<string, Func<McpToolCallContext, Task<string>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _rateLimitCounters = new(StringComparer.OrdinalIgnoreCase);
@@ -101,6 +104,8 @@ public class McpToolExecutor : IMcpToolExecutor
         IKnowledgeListMcpTool knowledgeListMcpTool,
         IAiChatMessageRepository messageRepo,
         IMediator mediator,
+        ISensorReadService sensorReadService,
+        ISensorSeriesService sensorSeriesService,
         ILogger<McpToolExecutor> logger)
     {
         _policyRepo = policyRepo;
@@ -108,6 +113,8 @@ public class McpToolExecutor : IMcpToolExecutor
         _knowledgeListMcpTool = knowledgeListMcpTool;
         _messageRepo = messageRepo;
         _mediator = mediator;
+        _sensorReadService = sensorReadService;
+        _sensorSeriesService = sensorSeriesService;
         _logger = logger;
 
         // Handlers padrão da KB: busca por assunto + catálogo.
@@ -123,6 +130,12 @@ public class McpToolExecutor : IMcpToolExecutor
         RegisterHandler("get_agent_alerts", HandleGetAgentAlertsAsync);
         RegisterHandler("get_agent_labels", HandleGetAgentLabelsAsync);
         RegisterHandler("get_agent_metrics_history", HandleGetAgentMetricsHistoryAsync);
+
+        // Sensores da máquina (leitura). Fonte DIFERENTE de get_agent_metrics_history:
+        // aquela lê monitoring events (alertas), estas leem as definições/estado/
+        // série de sensores do agente. Exigem o seed global da M285.
+        RegisterHandler("get_agent_sensors", HandleGetAgentSensorsAsync);
+        RegisterHandler("get_agent_sensor_history", HandleGetAgentSensorHistoryAsync);
     }
 
     public void RegisterHandler(string toolName, Func<McpToolCallContext, Task<string>> handler)
@@ -279,6 +292,10 @@ public class McpToolExecutor : IMcpToolExecutor
         "get_agent_labels" => "Lê NO SERVIDOR as labels aplicadas a esta máquina (automáticas por regras do tenant e manuais), com a regra que as originou quando identificável. Use para explicar por que a máquina está marcada (ex.: PROD, NOTURNO, SEM-ANTIVIRUS) e para entender a classificação operacional antes de diagnosticar sintomas. SOMENTE LEITURA e sem parâmetros; exige contexto de máquina (agentId). Não lista regras de outros agentes nem altera labels — para isso use o console de governança.",
 
         "get_agent_metrics_history" => "Lê NO SERVIDOR o histórico de eventos de monitoramento desta máquina (alertas de CPU, memória, disco, serviços etc.), com severidade, origem, data e resumo por severidade/origem. Use para TENDÊNCIA e picos ('CPU alta ontem entre 13h e 15h'), enquanto get_performance_snapshot mostra apenas o instante atual. SOMENTE LEITURA. Parâmetros opcionais: 'limit' (1–200, padrão 50) e 'cursor' para a página seguinte. A resposta indica 'truncated' quando há mais eventos; reduza o limit ou avance o cursor em vez de presumir que a lista está completa.",
+
+        "get_agent_sensors" => "Lê NO SERVIDOR quais SENSORES esta máquina tem e como estão AGORA (estado corrente avaliado pelo servidor: status, severidade, canais numéricos e data da última amostra). Use quando o usuário perguntar 'quais sensores existem nesta máquina', 'como está o sensor de disco/serviço/ping' ou ao verificar se a máquina tem sensores definidos. SOMENTE LEITURA. Parâmetros opcionais: 'sensorType' (ex.: DiskSpace, Cpu, Service, Ping, Script, BitLocker, DefenderStatus), 'status' (Pending, Passing, Warning, Failing, Unknown) e 'includeInactive' (padrão false; true inclui sensores ainda sem leitura recente). Quando a máquina NÃO tem sensores definidos, a resposta traz 'hasSensors': false e uma mensagem — diga isso ao usuário, NÃO trate como erro. Não confunda com 'get_agent_metrics_history': lá são ALERTAS de monitoramento (CPU/memória/disco), aqui são SENSORES configurados. O status/severidade já vêm decididos pelo servidor: NÃO recalcule limiar nem afirme um diagnóstico próprio.",
+
+        "get_agent_sensor_history" => "Lê NO SERVIDOR a SÉRIE HISTÓRICA de UM sensor desta máquina, com pontos ao longo do tempo e a timeline de eventos (transições de status/severidade, alertas e erros de execução). Use para TENDÊNCIA e LINHA DO TEMPO ('o disco C: encheu quando?', 'desde quando o serviço está parado?'). SOMENTE LEITURA. O parâmetro 'sensorId' é OBRIGATÓRIO — descubra-o antes com get_agent_sensors; parâmetros opcionais: 'from'/'to' (ISO 8601/UTC; padrão últimas 24h), 'channel' (um canal específico, ex.: free_percent), 'targetKey' (quando o sensor cobre vários alvos, ex.: C:) e 'limit' (1–200, padrão 50). A resposta indica 'truncated' quando a janela tem mais pontos do que o limit. Se o sensor não existir para esta máquina, a resposta vem vazia com mensagem — NÃO é erro, e o sensor pode pertencer a outra máquina (nunca presuma). O status/severidade são os que o SERVIDOR registrou: não invente limiar nem recalcule diagnóstico.",
 
         "sequential_thinking" => "Executa raciocínio estruturado multi-step para diagnosticar problemas complexos de TI. Use APENAS quando o problema exigir análise em etapas (ex: diagnosticar por que um computador está lento considerando CPU, memória, disco e rede). O parâmetro 'thought' é OBRIGATÓRIO e deve conter o raciocínio do passo atual. NÃO use para perguntas simples ou respostas diretas — apenas para diagnósticos que exigem múltiplas camadas de análise.",
 
@@ -699,7 +716,305 @@ public class McpToolExecutor : IMcpToolExecutor
         }
     }
 
+// ── Sensores do agente (servidor, leitura) ──────────────────────────────
+    //
+    // Fonte de dados DIFERENTE da get_agent_metrics_history: lá são monitoring
+    // events (alertas), aqui são as definições/estado/série de SENSORES.
+    //
+    // Regras de segurança (as mesmas das tools de contexto acima):
+    //  • o escopo (clientId/siteId/agentId) vem SEMPRE de McpToolCallContext;
+    //    o 'sensorId' é validado contra o agente do contexto pelo próprio
+    //    serviço (ResolveApplicableAsync), então um sensor de OUTRA máquina
+    //    devolve resposta vazia em vez de vazar dados;
+    //  • exigem ctx.AgentId e devolvem erro claro quando a conversa não tem
+    //    contexto de máquina;
+    //  • NÃO recalculam status/severidade: devolvem o que o servidor já decidiu;
+    //  • nenhuma exceção escapa (exceto OperationCanceledException, repassada
+    //    para o executor converter no erro padrão de timeout).
+
+    private async Task<string> HandleGetAgentSensorsAsync(McpToolCallContext ctx)
+    {
+        if (!ctx.AgentId.HasValue)
+            return ErrorJson("Sensores da máquina só estão disponíveis no contexto de um agente (agentId ausente).");
+
+        try
+        {
+            var root = ctx.Arguments.RootElement;
+
+            var sensorType = GetStringArg(root, "sensorType");
+            if (!string.IsNullOrWhiteSpace(sensorType)
+                && !Enum.TryParse<SensorType>(sensorType, ignoreCase: true, out _))
+            {
+                // Tipo desconhecido não é erro fatal: devolvemos a mensagem com a
+                // lista de tipos válidos em vez de estourar o parse.
+                var valid = string.Join(", ", Enum.GetNames<SensorType>());
+                return ErrorJson($"'sensorType' inválido. Use um destes: {valid}.");
+            }
+
+            var status = GetStringArg(root, "status");
+            if (!string.IsNullOrWhiteSpace(status)
+                && !Enum.TryParse<SensorStatus>(status, ignoreCase: true, out _))
+            {
+                return ErrorJson("'status' inválido. Use Pending, Passing, Warning, Failing ou Unknown.");
+            }
+
+            var includeInactive = GetBoolArg(root, "includeInactive", false);
+
+            var payload = await _sensorReadService.GetForAgentAsync(ctx.AgentId.Value, ctx.CancellationToken);
+
+            // GetForAgentAsync devolve null quando o agente não existe (ou não é
+            // visível). Não é um erro de tool: a resposta é vazia e explicativa.
+            if (payload is null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    hasSensors = false,
+                    agentId = ctx.AgentId,
+                    count = 0,
+                    sensors = Array.Empty<object>(),
+                    message = "Máquina não encontrada no escopo desta conversa."
+                });
+            }
+
+            IEnumerable<SensorItemDto> items = payload.Items;
+
+            if (!string.IsNullOrWhiteSpace(sensorType) && Enum.TryParse<SensorType>(sensorType, ignoreCase: true, out var parsedType))
+                items = items.Where(i => i.SensorType == parsedType);
+
+            if (!string.IsNullOrWhiteSpace(status) && Enum.TryParse<SensorStatus>(status, ignoreCase: true, out var parsedStatus))
+                items = items.Where(i => i.Status == parsedStatus);
+
+            // includeInactive=false (padrão): esconde os sensores que ainda não
+            // têm leitura recente (Pending / desatualizados), que só poluem a
+            // resposta do chat.
+            if (!includeInactive)
+                items = items.Where(i => i.Status != SensorStatus.Pending && !i.IsStale);
+
+            var sensors = items.Select(item => new
+            {
+                sensorId = item.SensorId,
+                key = item.Key,
+                name = item.Name,
+                type = item.SensorType.ToString(),
+                target = item.Target,
+                targetKey = item.TargetKey,
+                currentStatus = item.Status.ToString(),
+                statusSince = item.LastStatusChangedAt,
+                lastSampleAt = item.LastRunAt,
+                isStale = item.IsStale,
+                // Severidade JÁ decidida pelo servidor; nunca recalculada aqui.
+                severity = item.Severity?.ToString(),
+                message = item.Message,
+                channels = item.CurrentChannels,
+                primaryChannel = item.PrimaryChannel,
+                primaryValue = item.PrimaryValue,
+                isInherited = item.IsInherited,
+                sourceScope = item.SourceScope?.ToString()
+            }).ToList();
+
+            return JsonSerializer.Serialize(new
+            {
+                hasSensors = payload.Items.Count > 0,
+                agentId = payload.AgentId,
+                generatedAt = payload.GeneratedAt,
+                count = sensors.Count,
+                totalForAgent = payload.Items.Count,
+                sensors,
+                counts = new
+                {
+                    total = payload.Counts.Total,
+                    passing = payload.Counts.Passing,
+                    warning = payload.Counts.Warning,
+                    failing = payload.Counts.Failing,
+                    pending = payload.Counts.Pending,
+                    unknown = payload.Counts.Unknown,
+                    stale = payload.Counts.Stale
+                },
+                synced = payload.UpToDate,
+                scope = "agente desta conversa",
+                message = payload.Items.Count == 0
+                    ? "Esta máquina não tem sensores definidos."
+                    : (sensors.Count == 0
+                        ? "A máquina tem sensores, mas nenhum casa com os filtros informados."
+                        : null),
+                note = "Status e severidade são avaliados pelo servidor; não recalcule limiares. " +
+                       "Para tendência ao longo do tempo use get_agent_sensor_history."
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Erro ao consultar sensores via MCP para AgentId={AgentId}", ctx.AgentId);
+            return ErrorJson("Não foi possível consultar os sensores da máquina agora.");
+        }
+    }
+
+    private async Task<string> HandleGetAgentSensorHistoryAsync(McpToolCallContext ctx)
+    {
+        if (!ctx.AgentId.HasValue)
+            return ErrorJson("Histórico de sensores só está disponível no contexto de um agente (agentId ausente).");
+
+        try
+        {
+            var root = ctx.Arguments.RootElement;
+
+            var sensorIdRaw = GetStringArg(root, "sensorId");
+            if (string.IsNullOrWhiteSpace(sensorIdRaw) || !Guid.TryParse(sensorIdRaw, out var sensorId))
+            {
+                return ErrorJson(
+                    "Informe 'sensorId' com o GUID do sensor desta máquina (use get_agent_sensors para descobrir os IDs).");
+            }
+
+            var channel = GetStringArg(root, "channel");
+            var targetKey = GetStringArg(root, "targetKey");
+            // Teto de 200 pontos: acima disso o payload degrada o contexto do chat.
+            var limit = Math.Clamp(GetIntArg(root, "limit", 50), 1, 200);
+
+            var to = ParseDateArg(root, "to") ?? DateTime.UtcNow;
+            var from = ParseDateArg(root, "from") ?? to.AddHours(-24);
+            if (from >= to)
+                return ErrorJson("'from' precisa ser anterior a 'to'.");
+
+            var channels = string.IsNullOrWhiteSpace(channel) ? null : new[] { channel };
+
+            // O SensorSeriesService valida que o sensor se APLICA ao agente
+            // (ResolveApplicableAsync) e devolve null caso contrário — é o guard
+            // de escopo que impede ler histórico de sensor de outra máquina.
+            var series = await _sensorSeriesService.GetSeriesAsync(
+                ctx.AgentId.Value, sensorId, targetKey, from, to, channels, ctx.CancellationToken);
+
+            // Curto-circuito ANTES de consultar os eventos: quando o sensor não se
+            // aplica ao agente do contexto (sensor inexistente/de outra máquina) a
+            // resposta é vazia e não há por que tocar a tabela de eventos. O
+            // GetSeriesAsync já fez o guard de escopo via ResolveApplicableAsync.
+            if (series is null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    hasData = false,
+                    sensorId,
+                    targetKey,
+                    channels = Array.Empty<object>(),
+                    points = Array.Empty<object>(),
+                    events = Array.Empty<object>(),
+                    message = "Este sensor não existe (ou não se aplica) para esta máquina. " +
+                              "Confirme os IDs com get_agent_sensors."
+                });
+            }
+
+            var events = await _sensorSeriesService.GetEventsAsync(
+                ctx.AgentId.Value, sensorId, targetKey, cursor: null, limit, ctx.CancellationToken);
+
+            // Achata os canais em pontos { at, value | channels } respeitando o
+            // teto de limit: a série pode ter centenas de pontos por canal.
+            var channelList = series.Channels.ToList();
+            var points = new List<object>();
+            var maxPoints = channelList.Count == 0 ? 0 : channelList.Max(c => c.Points.Count);
+            // Pega os ÚLTIMOS pontos (mais recentes) quando a série for maior que o limit.
+            var skip = Math.Max(0, maxPoints - limit);
+
+            for (var i = skip; i < maxPoints; i++)
+            {
+                DateTime at = default;
+                var values = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                var found = false;
+
+                foreach (var ch in channelList)
+                {
+                    if (i >= ch.Points.Count) continue;
+                    var point = ch.Points[i];
+                    if (!found)
+                    {
+                        at = point.T;
+                        found = true;
+                    }
+
+                    if (point.V.HasValue)
+                        values[ch.Key] = point.V.Value;
+                }
+
+                if (!found) continue;
+
+                points.Add(new
+                {
+                    at,
+                    // Um único canal => 'value' (contrato simples do plano);
+                    // vários canais => mapa completo.
+                    value = values.Count == 1 ? values.Values.First() : (double?)null,
+                    channels = values
+                });
+            }
+
+            var eventItems = events.Items.Select(evt => new
+            {
+                at = evt.OccurredAt,
+                kind = evt.Kind.ToString(),
+                status = evt.Status.ToString(),
+                severity = evt.Severity?.ToString(),
+                previousStatus = evt.PreviousStatus?.ToString(),
+                message = evt.Message
+            }).ToList();
+
+            return JsonSerializer.Serialize(new
+            {
+                hasData = points.Count > 0 || eventItems.Count > 0,
+                sensorId,
+                targetKey = series.TargetKey,
+                from = series.From,
+                to = series.To,
+                resolution = series.Resolution,
+                stepSeconds = series.StepSeconds,
+                channels = channelList.Select(c => new
+                {
+                    key = c.Key,
+                    label = c.Label,
+                    unit = c.Unit.ToString(),
+                    stats = new
+                    {
+                        min = c.Stats.Min,
+                        avg = c.Stats.Avg,
+                        max = c.Stats.Max,
+                        p95 = c.Stats.P95,
+                        last = c.Stats.Last,
+                        count = c.Stats.Count
+                    }
+                }),
+                points,
+                count = points.Count,
+                limit,
+                events = eventItems,
+                eventCount = eventItems.Count,
+                nextEventCursor = events.NextCursor,
+                truncated = maxPoints > limit,
+                // Limiares são INFORMATIVOS: quem decide status é o servidor.
+                thresholds = new
+                {
+                    warning = series.WarningThreshold,
+                    critical = series.CriticalThreshold,
+                    unit = series.ThresholdUnit.ToString(),
+                    comparison = series.Comparison.ToString()
+                },
+                scope = "agente desta conversa",
+                note = "Pontos e status vêm do servidor (retenção de 90 dias). " +
+                       "Não recalcule limiar nem afirme severidade própria."
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Erro ao consultar histórico de sensores via MCP para AgentId={AgentId}", ctx.AgentId);
+            return ErrorJson("Não foi possível consultar o histórico do sensor agora.");
+        }
+    }
+
     private static string ErrorJson(string message) => JsonSerializer.Serialize(new { error = message });
+
 
     /// <summary>Extrai string de argumento tolerando tipo errado enviado pelo LLM.</summary>
     private static string? GetStringArg(JsonElement root, string name)
@@ -714,6 +1029,46 @@ public class McpToolExecutor : IMcpToolExecutor
            && prop.TryGetInt32(out var value)
             ? value
             : fallback;
+
+    /// <summary>
+    /// Extrai booleano de argumento tolerando tipo errado enviado pelo LLM
+    /// (ex.: "includeInactive": "true" ou 1). Sem a tolerância, o parse estoura
+    /// e a tool inteira vira erro interno.
+    /// </summary>
+    private static bool GetBoolArg(JsonElement root, string name, bool fallback)
+    {
+        if (!root.TryGetProperty(name, out var prop))
+            return fallback;
+
+        return prop.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String => bool.TryParse(prop.GetString(), out var parsed) ? parsed : fallback,
+            JsonValueKind.Number => prop.TryGetDouble(out var number) ? number != 0 : fallback,
+            _ => fallback
+        };
+    }
+
+    /// <summary>
+    /// Extrai data ISO 8601 de um argumento opcional. Aceita texto e devolve
+    /// SEMPRE UTC (a série é consultada em UTC); valor inválido ou ausente cai
+    /// no default do chamador em vez de derrubar a tool.
+    /// </summary>
+    private static DateTime? ParseDateArg(JsonElement root, string name)
+    {
+        var raw = GetStringArg(root, name);
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        return DateTime.TryParse(
+            raw,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal,
+            out var parsed)
+            ? parsed
+            : null;
+    }
 
     /// <summary>Mascara e-mails em textos livres (títulos de alerta) antes de expor ao LLM.</summary>
     private static string RedactPii(string? text)
