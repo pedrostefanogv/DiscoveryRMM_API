@@ -204,6 +204,49 @@ public class HeartbeatCacheService : IHeartbeatCacheService
         }
     }
 
+    /// <summary>
+    /// Lê o heartbeat dos ids informados lendo a CHAVE INDIVIDUAL de cada agente
+    /// (heartbeat:agent:{id:N}), em paralelo e uma única vez por chamada.
+    ///
+    /// <para>
+    /// POR QUE não usar GetActiveHeartbeatsAsync aqui: aquela varredura depende de
+    /// SCAN por prefixo e do conjunto heartbeat:online:agents, que em produção está
+    /// vazio. Para uma página de ids já conhecidos, a chave individual é a fonte de
+    /// verdade confiável — e traz o LastHeartbeatAt fresco de cada batida.
+    /// </para>
+    ///
+    /// <para>
+    /// Falha por id (Redis caiu no meio) é silenciosa: o id apenas não entra no
+    /// dicionário e quem chama degrada para o estado persistido.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyDictionary<Guid, HeartbeatCacheEntry>> GetHeartbeatsAsync(
+        IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+    {
+        if (!_redis.IsConnected)
+            return new Dictionary<Guid, HeartbeatCacheEntry>();
+
+        var ids = agentIds.Distinct().ToArray();
+        if (ids.Length == 0)
+            return new Dictionary<Guid, HeartbeatCacheEntry>();
+
+        var reads = await Task.WhenAll(ids.Select(async id =>
+        {
+            try
+            {
+                return new { AgentId = id, Entry = await GetHeartbeatAsync(id, ct) };
+            }
+            catch
+            {
+                return new { AgentId = id, Entry = (HeartbeatCacheEntry?)null };
+            }
+        }));
+
+        return reads
+            .Where(read => read.Entry is not null)
+            .ToDictionary(read => read.AgentId, read => read.Entry!);
+    }
+
     /// <summary>Retorna todos os agentes com heartbeat ativo no Redis.</summary>
     public async Task<IReadOnlyList<HeartbeatCacheEntry>> GetActiveHeartbeatsAsync(CancellationToken ct = default)
     {

@@ -837,7 +837,10 @@ public class SearchService : ISearchService
         new("Tarefas", "Automação", "Tarefas automatizadas.", "/automation/tasks", "tarefas jobs automacao", [ResourceType.Automation]),
         new("Operações", "Automação", "Execuções operacionais.", "/automation/operations", "operacoes runs execucoes", [ResourceType.Automation]),
         new("Auditoria", "Automação", "Auditoria das automações.", "/automation/audit", "auditoria automation", [ResourceType.Automation]),
-        new("Labels Automáticas", "Configurações", "Gerenciamento de labels automáticas.", "/settings/agent-labels", "labels tags automaticas", [ResourceType.Automation]),
+        // A tela vive na seção Automação, mas quem a abre precisa de Agents.View
+        // (é a permissão do AgentLabelsController e do PermissionGate da rota). O alvo
+        // de busca usa o MESMO recurso para não oferecer um atalho que responderia 403.
+        new("Labels Automáticas", "Automação", "Gerenciamento de labels automáticas.", "/automation/agent-labels", "labels tags automaticas automacao", [ResourceType.Agents]),
         new("Templates de Relatórios", "Relatórios", "Biblioteca de templates de relatório.", "/reports/templates", "relatorios relatorios templates", [ResourceType.Reports]),
         new("Execuções de Relatórios", "Relatórios", "Histórico e status de execuções.", "/reports/executions", "relatorios execucoes processamento", [ResourceType.Reports]),
         new("Perfil e Segurança", "Identidade", "Configurações de autenticação.", "/identity/authentication", "perfil seguranca autenticacao", []),

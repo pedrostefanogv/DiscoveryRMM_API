@@ -1196,10 +1196,59 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 DeniedCount = group.Count(row => row.update.ApprovalState == PatchApprovalState.Denied),
                 PendingReboot = group.Key.PendingReboot,
                 ScanStatus = group.Key.ScanStatus,
+                // Frescor do SCAN vem do rollup; o frescor do AGENTE vem de
+                // agents.last_seen_at (coluna ao vivo), NÃO do snapshot.
                 LastScanAt = group.Key.CollectedAt,
                 LastSeenAt = group.Key.LastSeenAt
             })
             .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Estado AO VIVO (status persistido + last_seen_at) por agente, para a lista de
+    /// pendências.
+    ///
+    /// <para>
+    /// A query de pendências agrupa em SQL e não projeta as colunas de estado do
+    /// agente; buscamos aqui num ÚNICO roundtrip, só para os agentes que sobraram na
+    /// página. É o MESMO par que a tela de agentes usa, então o frescor da lista deixa
+    /// de depender do rollup de Windows Update (que pode ter dias e congela o estado
+    /// no instante em que foi gravado).
+    /// </para>
+    ///
+    /// <para>
+    /// O frescor real de "online agora" NÃO sai daqui: <c>agents.last_seen_at</c> e
+    /// <c>agents.status</c> só são escritos nas TRANSIÇÕES de heartbeat
+    /// (Offline→Online em <c>HeartbeatCacheService</c>, Online→Offline em
+    /// <c>HeartbeatExpiryBackgroundService</c>), não a cada batida — para um agente
+    /// online há horas o instante gravado marca o INÍCIO da sessão. Quem chama combina
+    /// este estado com a chave de heartbeat no Redis (fonte de verdade).
+    /// </para>
+    ///
+    /// <para>
+    /// Ids desconhecidos simplesmente não entram no dicionário — quem chama decide
+    /// o fallback (hoje Offline), sem lançar.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyDictionary<Guid, PatchAgentLiveState>> GetAgentStatusesAsync(
+        IReadOnlyCollection<Guid> agentIds,
+        CancellationToken ct = default)
+    {
+        // Lista vazia: evita um roundtrip inútil (página sem itens, por exemplo).
+        if (agentIds.Count == 0)
+            return new Dictionary<Guid, PatchAgentLiveState>();
+
+        var ids = agentIds.ToList();
+        return await db.Agents
+            .AsNoTracking()
+            .Where(agent => ids.Contains(agent.Id))
+            .Select(agent => new PatchAgentLiveState
+            {
+                AgentId = agent.Id,
+                Status = agent.Status,
+                LastSeenAt = agent.LastSeenAt
+            })
+            .ToDictionaryAsync(row => row.AgentId, row => row, ct);
     }
 
     public async Task<PatchScopeSnapshot> GetScopeSnapshotAsync(

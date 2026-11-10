@@ -21,6 +21,16 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v{version:apiVersion}/agent-labels")]
+// A tela vive na Automação (/automation/agent-labels), mas a permissão que governa
+// os dados continua sendo Agents: as labels rotulam AGENTES. O PermissionGate da rota
+// e o item de menu usam a MESMA família (Agents.View), para que ninguém veja o link e
+// receba 403.
+//
+// NÃO empilhe [RequirePermission(ResourceType.Automation, ...)] aqui: cada atributo
+// vira um filtro independente e o ASP.NET exige TODOS (AND). Isso tiraria o acesso de
+// papéis que têm apenas Agents.View (ex.: Supervisor de Cliente, Support, Técnico de
+// Acesso Remoto), que hoje enxergam a tela.
+[RequirePermission(ResourceType.Agents, ActionType.View)]
 public class AgentLabelsController(IMediator mediator, ILabelReprocessQueue reprocessQueue) : ControllerBase
 {
     [HttpGet]

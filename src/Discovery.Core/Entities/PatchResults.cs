@@ -231,6 +231,24 @@ public class PatchPendingAgentRow
     public DateTime? LastSeenAt { get; set; }
 }
 
+/// <summary>
+/// Estado AO VIVO de um agente no instante da consulta (tabela agents), usado pela
+/// lista de pendências para não herdar o estado congelado no snapshot de Windows Update.
+///
+/// <para>
+/// <see cref="Status"/> é o status PERSISTIDO (Online/Offline) e <see cref="LastSeenAt"/>
+/// é o instante gravado na última TRANSIÇÃO de heartbeat — nenhum dos dois é atualizado a
+/// cada batida, então o frescor real de "online agora" é decidido por quem chama,
+/// combinando este par com a chave de heartbeat no Redis.
+/// </para>
+/// </summary>
+public class PatchAgentLiveState
+{
+    public Guid AgentId { get; set; }
+    public AgentStatus Status { get; set; }
+    public DateTime? LastSeenAt { get; set; }
+}
+
 /// <summary>Snapshot/conformidade de patches de um escopo.</summary>
 public class PatchScopeSnapshot
 {

@@ -22,8 +22,48 @@ public interface IHeartbeatCacheService
     /// <summary>Lê o estado atual do cache. Se não existir, o agente está offline.</summary>
     Task<HeartbeatCacheEntry?> GetHeartbeatAsync(Guid agentId, CancellationToken ct = default);
 
-    /// <summary>Retorna todos os agentes com heartbeat ativo no Redis.</summary>
+    /// <summary>
+    /// Retorna todos os agentes com heartbeat ativo no Redis.
+    ///
+    /// <para>
+    /// ATENÇÃO: a implementação varre as chaves por prefixo (SCAN). O conjunto
+    /// <c>heartbeat:online:agents</c> NÃO é usado como índice e pode estar vazio, e
+    /// uma varredura pode não devolver tudo o que está vivo. Para um conjunto
+    /// CONHECIDO de ids, prefira <see cref="GetHeartbeatsAsync"/>, que lê a chave
+    /// individual de cada um.
+    /// </para>
+    /// </summary>
     Task<IReadOnlyList<HeartbeatCacheEntry>> GetActiveHeartbeatsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Lê o heartbeat dos ids informados em UMA rodada de leituras concorrentes
+    /// (uma chave por agente, sem SCAN e sem depender do conjunto de online).
+    ///
+    /// <para>
+    /// É a primitiva certa para páginas/listas com ids já conhecidos: a chave
+    /// individual <c>heartbeat:agent:{id:N}</c> é a fonte de verdade de "online
+    /// agora" e traz o <see cref="HeartbeatCacheEntry.LastHeartbeatAt"/> fresco de
+    /// cada batida. Ids sem chave simplesmente não entram no dicionário.
+    /// </para>
+    ///
+    /// <para>
+    /// Implementação padrão para não quebrar fakes de teste existentes.
+    /// </para>
+    /// </summary>
+    async Task<IReadOnlyDictionary<Guid, HeartbeatCacheEntry>> GetHeartbeatsAsync(
+        IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+    {
+        var ids = agentIds.Distinct().ToArray();
+        if (ids.Length == 0)
+            return new Dictionary<Guid, HeartbeatCacheEntry>();
+
+        var reads = await Task.WhenAll(ids.Select(async id =>
+            new { AgentId = id, Entry = await GetHeartbeatAsync(id, ct) }));
+
+        return reads
+            .Where(read => read.Entry is not null)
+            .ToDictionary(read => read.AgentId, read => read.Entry!);
+    }
 
     /// <summary>Remove heartbeat do cache. Persiste Offline no DB se houve transição Online→Offline.</summary>
     Task RemoveHeartbeatAsync(Guid agentId, CancellationToken ct = default);

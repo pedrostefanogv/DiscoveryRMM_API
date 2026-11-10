@@ -260,6 +260,22 @@ public sealed record PatchInventoryAgentsDto(
     string? NextCursor,
     bool HasMore);
 
+/// <summary>
+/// Linha da lista de pendências de atualização por agente.
+///
+/// <para>
+/// Status e LastSeenAt refletem o estado AO VIVO do agente no instante da consulta, e
+/// NÃO o que ficou congelado no snapshot/rollup de Windows Update (que pode ter dias).
+/// Status é "Online" quando a chave de heartbeat existe no Redis (fonte de verdade,
+/// TTL 180s) OU quando o status persistido é Online; LastSeenAt é o instante real do
+/// último heartbeat quando há chave viva, senão o <c>agents.last_seen_at</c> do banco.
+/// </para>
+///
+/// <para>
+/// O console ainda combina os dois para montar o indicador (mesma regra de
+/// isAgentOnlineNow no site), mas agora ambos vêm frescos do servidor.
+/// </para>
+/// </summary>
 public sealed record PatchPendingAgentDto(
     Guid AgentId,
     string Hostname,
@@ -274,7 +290,8 @@ public sealed record PatchPendingAgentDto(
     bool PendingReboot,
     string? ScanStatus,
     DateTime? LastScanAt,
-    DateTime? LastSeenAt);
+    DateTime? LastSeenAt,
+    string Status);
 
 public sealed record PatchPendingListDto(
     IReadOnlyList<PatchPendingAgentDto> Items,

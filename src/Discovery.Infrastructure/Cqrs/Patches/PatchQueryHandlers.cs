@@ -211,9 +211,16 @@ public sealed class GetPatchInventoryAgentsQueryHandler(IPatchRepository repo)
     }
 }
 
-public sealed class GetPatchPendingQueryHandler(IPatchRepository repo)
+public sealed class GetPatchPendingQueryHandler(IPatchRepository repo, IHeartbeatCacheService heartbeatCache)
     : IRequestHandler<GetPatchPendingQuery, Result<PatchPendingListDto>>
 {
+    /// <summary>
+    /// Orçamento da leitura ao vivo do Redis. Um Redis lento não pode segurar a
+    /// lista: estourou o prazo, seguimos com o estado do Postgres (degradação,
+    /// nunca erro) — mesmo padrão da busca universal.
+    /// </summary>
+    private static readonly TimeSpan LiveHeartbeatBudget = TimeSpan.FromMilliseconds(750);
+
     public async Task<Result<PatchPendingListDto>> Handle(GetPatchPendingQuery query, CancellationToken ct)
     {
         var limit = Math.Clamp(query.Limit, 1, 200);
@@ -231,23 +238,89 @@ public sealed class GetPatchPendingQueryHandler(IPatchRepository repo)
         if (hasMore && items.Count > 0)
             nextCursor = Discovery.Core.Helpers.CursorPaginationHelper.EncodeGuidCursor(items[^1].AgentId);
 
-        var dtos = items.Select(item => new PatchPendingAgentDto(
-            item.AgentId,
-            item.Hostname,
-            item.AgentDisplayName,
-            item.SiteId,
-            item.SiteName,
-            item.ClientId,
-            item.ClientName,
-            item.PendingCount,
-            item.CriticalCount,
-            item.DeniedCount,
-            item.PendingReboot,
-            item.ScanStatus,
-            item.LastScanAt,
-            item.LastSeenAt)).ToList();
+        var agentIds = items.Select(item => item.AgentId).ToList();
+
+        // POR QUE buscar o estado em separado: a query de pendências agrupa em SQL
+        // (GroupBy por agente) e o group key não carrega as colunas de estado —
+        // incluí-las custaria colunas a mais no agrupamento. Uma única chamada para
+        // a página inteira, já cortada em limit.
+        //
+        // POR QUE o Redis entra aqui: agents.status e agents.last_seen_at só são
+        // escritos nas TRANSIÇÕES de heartbeat — um agente online há horas mantém o
+        // instante do INÍCIO da sessão. A existência da chave heartbeat:agent:{id}
+        // (TTL 180s) é a fonte de verdade de "online agora".
+        var liveStates = await repo.GetAgentStatusesAsync(agentIds, ct);
+        var heartbeats = await ReadLiveHeartbeatsAsync(agentIds, ct);
+
+        var dtos = items.Select(item =>
+        {
+            var live = liveStates.GetValueOrDefault(item.AgentId);
+            heartbeats.TryGetValue(item.AgentId, out var heartbeat);
+
+            // Online se QUALQUER fonte afirmar: chave viva no Redis OU status
+            // persistido Online. Assim a página fica correta tanto quando o
+            // Postgres está defasado quanto quando o Redis está indisponível.
+            var isOnline = heartbeat is not null || live?.Status == AgentStatus.Online;
+
+            // Frescor: instante REAL do último heartbeat (Redis) → agents.last_seen_at.
+            // O último fallback é defensivo: a linha de pendências já projeta
+            // agents.last_seen_at, mas um agente fora do dicionário não pode zerar
+            // o frescor que veio do SQL.
+            var lastSeenAt = heartbeat?.LastHeartbeatAt ?? live?.LastSeenAt ?? item.LastSeenAt;
+
+            return new PatchPendingAgentDto(
+                item.AgentId,
+                item.Hostname,
+                item.AgentDisplayName,
+                item.SiteId,
+                item.SiteName,
+                item.ClientId,
+                item.ClientName,
+                item.PendingCount,
+                item.CriticalCount,
+                item.DeniedCount,
+                item.PendingReboot,
+                item.ScanStatus,
+                item.LastScanAt,
+                lastSeenAt,
+                (isOnline ? AgentStatus.Online : AgentStatus.Offline).ToString());
+        }).ToList();
 
         return Result<PatchPendingListDto>.Success(new PatchPendingListDto(dtos, nextCursor, hasMore));
+    }
+
+    /// <summary>
+    /// Heartbeats vivos (Redis) restritos aos ids da página. Falha, timeout ou
+    /// Redis fora do ar devolvem dicionário vazio: a lista cai para o estado
+    /// persistido sem quebrar nem esperar.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, HeartbeatCacheEntry>> ReadLiveHeartbeatsAsync(
+        IReadOnlyCollection<Guid> agentIds, CancellationToken ct)
+    {
+        if (agentIds.Count == 0)
+            return new Dictionary<Guid, HeartbeatCacheEntry>();
+
+        try
+        {
+            using var liveCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            liveCts.CancelAfter(LiveHeartbeatBudget);
+
+            // Leituras da CHAVE INDIVIDUAL de cada agente da página, numa única
+            // rodada concorrente. NÃO usamos a varredura por prefixo: o conjunto
+            // heartbeat:online:agents está vazio em produção e o SCAN não é
+            // confiável como fonte de "quem está online".
+            return await heartbeatCache.GetHeartbeatsAsync(agentIds, liveCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Orçamento estourado — degrada para o estado persistido.
+            return new Dictionary<Guid, HeartbeatCacheEntry>();
+        }
+        catch
+        {
+            // Redis indisponível é degradação, não erro da lista.
+            return new Dictionary<Guid, HeartbeatCacheEntry>();
+        }
     }
 }
 

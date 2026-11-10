@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs.AgentAuth.Patches;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 using NUnit.Framework;
@@ -264,6 +265,10 @@ public class ReportAgentWindowsUpdatesHandlerTests
             Guid? clientId, Guid? siteId, string? cursor, int limit, string? search,
             bool hasGlobalAccess, IReadOnlyCollection<Guid> allowedClientIds, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<PatchPendingAgentRow>>([]);
+
+        public Task<IReadOnlyDictionary<Guid, PatchAgentLiveState>> GetAgentStatusesAsync(
+            IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyDictionary<Guid, PatchAgentLiveState>>(new Dictionary<Guid, PatchAgentLiveState>());
 
         public Task<PatchScopeSnapshot> GetScopeSnapshotAsync(
             Guid? clientId, Guid? siteId, bool hasGlobalAccess,

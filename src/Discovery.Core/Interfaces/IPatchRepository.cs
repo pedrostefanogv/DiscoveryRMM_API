@@ -176,6 +176,19 @@ public interface IPatchRepository
         IReadOnlyCollection<Guid> allowedClientIds,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Estado AO VIVO por agente (status persistido + last_seen_at reais), lido num
+    /// ÚNICO roundtrip para a página inteira da lista de pendências.
+    ///
+    /// <para>
+    /// POR QUE o frescor vem daqui e não do snapshot de Windows Update: o snapshot é
+    /// um rollup que pode ter dias e congela o estado do agente no instante em que foi
+    /// gravado. Agentes ausentes do dicionário = sem estado conhecido.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, PatchAgentLiveState>> GetAgentStatusesAsync(
+        IReadOnlyCollection<Guid> agentIds, CancellationToken ct = default);
+
     Task<PatchScopeSnapshot> GetScopeSnapshotAsync(
         Guid? clientId,
         Guid? siteId,
