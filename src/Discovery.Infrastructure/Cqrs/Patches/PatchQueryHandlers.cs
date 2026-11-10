@@ -211,7 +211,10 @@ public sealed class GetPatchInventoryAgentsQueryHandler(IPatchRepository repo)
     }
 }
 
-public sealed class GetPatchPendingQueryHandler(IPatchRepository repo, IHeartbeatCacheService heartbeatCache)
+public sealed class GetPatchPendingQueryHandler(
+    IPatchRepository repo,
+    IHeartbeatCacheService heartbeatCache,
+    IRedisService redis)
     : IRequestHandler<GetPatchPendingQuery, Result<PatchPendingListDto>>
 {
     /// <summary>
@@ -250,78 +253,127 @@ public sealed class GetPatchPendingQueryHandler(IPatchRepository repo, IHeartbea
         // instante do INÍCIO da sessão. A existência da chave heartbeat:agent:{id}
         // (TTL 180s) é a fonte de verdade de "online agora".
         var liveStates = await repo.GetAgentStatusesAsync(agentIds, ct);
-        var heartbeats = await ReadLiveHeartbeatsAsync(agentIds, ct);
+
+        // REGRA DA DECISÃO (Redis confiável manda; Redis mudo cai no banco):
+        // onlineIds NÃO NULO  → o Redis respondeu por esta página. Quem está no
+        //                       conjunto está online AGORA; quem não está, não está
+        //                       — mesmo que o banco ainda diga Online (status
+        //                       defasado, gravado na transição).
+        // onlineIds NULO      → não houve resposta confiável (Redis fora do ar,
+        //                       exceção ou orçamento estourado). Não podemos pintar a
+        //                       frota inteira de Offline: vale o status PERSISTIDO.
+        var heartbeats = await TryGetLiveHeartbeatsAsync(redis, heartbeatCache, agentIds, ct);
 
         var dtos = items.Select(item =>
         {
             var live = liveStates.GetValueOrDefault(item.AgentId);
-            heartbeats.TryGetValue(item.AgentId, out var heartbeat);
 
-            // Online se QUALQUER fonte afirmar: chave viva no Redis OU status
-            // persistido Online. Assim a página fica correta tanto quando o
-            // Postgres está defasado quanto quando o Redis está indisponível.
-            var isOnline = heartbeat is not null || live?.Status == AgentStatus.Online;
+            // heartbeats NÃO NULO → o Redis respondeu por esta página. Chave viva =
+            // online AGORA; sem chave = offline AGORA, mesmo que o banco ainda diga
+            // Online (status gravado na transição e nunca reescrito a cada batida).
+            // heartbeats NULO    → não houve resposta confiável (Redis fora do ar ou
+            // orçamento estourado). Aí não podemos pintar a frota de Offline: vale o
+            // status PERSISTIDO gravado em agents.status.
+            var isOnline = heartbeats is null
+                ? StatusPersistidoEhOnline(item.Status, live)
+                : heartbeats.ContainsKey(item.AgentId);
 
             // Frescor: instante REAL do último heartbeat (Redis) → agents.last_seen_at.
             // O último fallback é defensivo: a linha de pendências já projeta
             // agents.last_seen_at, mas um agente fora do dicionário não pode zerar
             // o frescor que veio do SQL.
-            var lastSeenAt = heartbeat?.LastHeartbeatAt ?? live?.LastSeenAt ?? item.LastSeenAt;
+            var lastSeenAt = heartbeats?.GetValueOrDefault(item.AgentId)?.LastHeartbeatAt
+                             ?? live?.LastSeenAt
+                             ?? item.LastSeenAt;
 
-            return new PatchPendingAgentDto(
-                item.AgentId,
-                item.Hostname,
-                item.AgentDisplayName,
-                item.SiteId,
-                item.SiteName,
-                item.ClientId,
-                item.ClientName,
-                item.PendingCount,
-                item.CriticalCount,
-                item.DeniedCount,
-                item.PendingReboot,
-                item.ScanStatus,
-                item.LastScanAt,
-                lastSeenAt,
-                (isOnline ? AgentStatus.Online : AgentStatus.Offline).ToString());
+            // Construção ÚNICA do DTO (PatchDtoMapper.ToDto): nenhum outro ponto do
+            // repositório instancia PatchPendingAgentDto direto.
+            var dto = PatchDtoMapper.ToDto(item, isOnline) with { LastSeenAt = lastSeenAt };
+
+            // Status do payload = veredito AO VIVO da mesma consulta. Sem isso o campo
+            // continuaria defasado (o banco só o escreve na transição) e o console
+            // precisaria combinar dois sinais contraditórios na mesma linha — foi
+            // exatamente esse descompasso que produziu a frota "Offline" em produção.
+            // IsOnline é o booleano autoritativo; Status é o mesmo veredito em texto.
+            return dto with { Status = isOnline ? nameof(AgentStatus.Online) : nameof(AgentStatus.Offline) };
         }).ToList();
 
         return Result<PatchPendingListDto>.Success(new PatchPendingListDto(dtos, nextCursor, hasMore));
     }
 
     /// <summary>
-    /// Heartbeats vivos (Redis) restritos aos ids da página. Falha, timeout ou
-    /// Redis fora do ar devolvem dicionário vazio: a lista cai para o estado
-    /// persistido sem quebrar nem esperar.
+    /// Heartbeats VIVOS da página (chave individual de cada agente), ou <c>null</c>
+    /// quando NÃO houve resposta confiável do Redis (desconectado, exceção ou
+    /// orçamento estourado).
+    ///
+    /// <para>
+    /// O <c>null</c> é o ponto central do contrato: um dicionário VAZIO significa
+    /// "ninguém desta página está online", e o Redis caído devolve exatamente isso
+    /// (HeartbeatCacheService devolve cedo quando <c>IRedisService.IsConnected</c> é
+    /// false). Confundir os dois pintaria a frota inteira de Offline — por isso a
+    /// AUSÊNCIA de resposta é <c>null</c>, e quem chama cai para o status persistido.
+    /// Também é por isso que <see cref="IRedisService.IsConnected"/> é checado ANTES
+    /// da leitura: sem ele não há como distinguir "cache vazio" de "cache fora do ar".
+    /// </para>
+    ///
+    /// <para>
+    /// CUSTO — por que a chave INDIVIDUAL e não a varredura por prefixo
+    /// (GetActiveHeartbeatsAsync): a varredura faz SCAN de <c>heartbeat:agent:*</c> e
+    /// depende do conjunto <c>heartbeat:online:agents</c>, que em produção está VAZIO
+    /// (e pode não devolver tudo o que está vivo). Além disso ela traria a frota
+    /// INTEIRA para filtrar uma página de no máximo 200 ids — trabalho proporcional ao
+    /// parque, não à página, para uma chave que pode expirar no meio da varredura.
+    /// A leitura por id é proporcional à página, devolve o LastHeartbeatAt fresco por
+    /// agente e é um único roundtrip em rodada concorrente.
+    /// </para>
     /// </summary>
-    private async Task<IReadOnlyDictionary<Guid, HeartbeatCacheEntry>> ReadLiveHeartbeatsAsync(
-        IReadOnlyCollection<Guid> agentIds, CancellationToken ct)
+    private static async Task<IReadOnlyDictionary<Guid, HeartbeatCacheEntry>?> TryGetLiveHeartbeatsAsync(
+        IRedisService redis,
+        IHeartbeatCacheService heartbeatCache,
+        IReadOnlyCollection<Guid> agentIds,
+        CancellationToken ct)
     {
+        // Página vazia: nada a perguntar ao Redis. Devolvemos o dicionário vazio (e
+        // não null) porque aqui a resposta É conhecida: não há agente online na página.
         if (agentIds.Count == 0)
             return new Dictionary<Guid, HeartbeatCacheEntry>();
+
+        // Sem conexão não existe resposta confiável — e insistir só faria a lista
+        // esperar pelo timeout de cada chave para chegar à mesma conclusão.
+        if (!redis.IsConnected)
+            return null;
 
         try
         {
             using var liveCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             liveCts.CancelAfter(LiveHeartbeatBudget);
 
-            // Leituras da CHAVE INDIVIDUAL de cada agente da página, numa única
-            // rodada concorrente. NÃO usamos a varredura por prefixo: o conjunto
-            // heartbeat:online:agents está vazio em produção e o SCAN não é
-            // confiável como fonte de "quem está online".
             return await heartbeatCache.GetHeartbeatsAsync(agentIds, liveCts.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // Orçamento estourado — degrada para o estado persistido.
-            return new Dictionary<Guid, HeartbeatCacheEntry>();
+            // Orçamento estourado — SEM resposta confiável: degrada para o persistido.
+            return null;
         }
         catch
         {
             // Redis indisponível é degradação, não erro da lista.
-            return new Dictionary<Guid, HeartbeatCacheEntry>();
+            return null;
         }
     }
+
+    /// <summary>
+    /// Fallback do Redis mudo: o status PERSISTIDO do agente é Online?
+    ///
+    /// <para>
+    /// Lê as duas projeções do mesmo estado (a string do row e o enum do estado ao
+    /// vivo) porque uma delas pode não vir preenchida dependendo do caminho da query;
+    /// qualquer uma afirmando Online basta. Agente sem estado conhecido é Offline.
+    /// </para>
+    /// </summary>
+    private static bool StatusPersistidoEhOnline(string? statusDoRow, PatchAgentLiveState? live)
+        => string.Equals(statusDoRow, nameof(AgentStatus.Online), StringComparison.OrdinalIgnoreCase)
+           || live?.Status == AgentStatus.Online;
 }
 
 public sealed class GetPatchSnapshotQueryHandler(IPatchRepository repo)

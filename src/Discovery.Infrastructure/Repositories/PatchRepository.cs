@@ -1175,7 +1175,14 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 row.snapshot.ScanStatus,
                 row.snapshot.CollectedAt,
                 row.agent.PendingReboot,
-                row.agent.LastSeenAt
+                row.agent.LastSeenAt,
+                // Status PERSISTIDO do agente entra na CHAVE do agrupamento: dentro de um
+                // grupo ele é constante (todas as linhas são do mesmo agente), então o
+                // EF projeta group.Key.Status sem precisar de agregado. É o sinal de
+                // retaguarda da lista — o status só muda nas TRANSIÇÕES de heartbeat,
+                // logo não há risco de perder a última transição por "escolher" uma
+                // linha do grupo: todas carregam o mesmo valor.
+                row.agent.Status
             })
             .OrderBy(group => group.Key.Id)
             .Take(safeLimit)
@@ -1199,7 +1206,10 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 // Frescor do SCAN vem do rollup; o frescor do AGENTE vem de
                 // agents.last_seen_at (coluna ao vivo), NÃO do snapshot.
                 LastScanAt = group.Key.CollectedAt,
-                LastSeenAt = group.Key.LastSeenAt
+                LastSeenAt = group.Key.LastSeenAt,
+                // String do enum persistido ("Online"/"Offline"), o mesmo vocabulário do
+                // contrato do DTO. Vem junto com a página, SEM roundtrip extra.
+                Status = group.Key.Status.ToString()
             })
             .ToListAsync(ct);
     }

@@ -41,11 +41,49 @@ public class PatchPendingHandlerDependencyTests
             => Task.FromResult<string?>(null);
     }
 
+    /// <summary>
+    /// Redis de mentira para o container: o handler só precisa que a interface exista,
+    /// com IsConnected = true (o fake de heartbeat acima responde vazio).
+    /// </summary>
+    private sealed class StubRedisService : IRedisService
+    {
+        public bool IsConnected => true;
+
+        public Task<string?> GetAsync(string key) => Task.FromResult<string?>(null);
+
+        public Task<long> IncrementAsync(string key) => Task.FromResult(0L);
+
+        public Task<long> IncrementByAsync(string key, long amount) => Task.FromResult(0L);
+
+        public Task SetAsync(string key, string value, int expirySeconds = 3600) => Task.CompletedTask;
+
+        public Task<bool> SetExpiryAsync(string key, int expirySeconds) => Task.FromResult(false);
+
+        public Task<int> GetTtlSecondsAsync(string key) => Task.FromResult(0);
+
+        public Task DeleteAsync(string key) => Task.CompletedTask;
+
+        public Task DeleteByPrefixAsync(string prefix) => Task.CompletedTask;
+
+        public Task PublishAsync(string channel, string message) => Task.CompletedTask;
+
+        public Task SubscribeAsync(string channel, Action<string, string> handler) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds)
+            => Task.FromResult(false);
+    }
+
     [Test]
     public void Handler_DeveSerConstruivel_ComAsDependenciasRegistradas()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IHeartbeatCacheService, StubHeartbeatCache>();
+        // O handler consulta IRedisService.IsConnected antes de ler o cache — sem este
+        // registro a lista de /patches/pending para de resolver no request.
+        services.AddSingleton<IRedisService, StubRedisService>();
         services.AddScoped<IPatchRepository>(_ => new PatchRepository(BoardTestDbContext.NewContext()));
         services.AddScoped<GetPatchPendingQueryHandler>();
 

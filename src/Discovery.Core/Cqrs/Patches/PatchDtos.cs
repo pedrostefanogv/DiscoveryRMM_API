@@ -264,16 +264,30 @@ public sealed record PatchInventoryAgentsDto(
 /// Linha da lista de pendências de atualização por agente.
 ///
 /// <para>
-/// Status e LastSeenAt refletem o estado AO VIVO do agente no instante da consulta, e
-/// NÃO o que ficou congelado no snapshot/rollup de Windows Update (que pode ter dias).
-/// Status é "Online" quando a chave de heartbeat existe no Redis (fonte de verdade,
-/// TTL 180s) OU quando o status persistido é Online; LastSeenAt é o instante real do
-/// último heartbeat quando há chave viva, senão o <c>agents.last_seen_at</c> do banco.
+/// <see cref="Status"/> e <see cref="LastSeenAt"/> são o ÚLTIMO estado PERSISTIDO do
+/// agente: <c>agents.status</c> e <c>agents.last_seen_at</c> só são gravados nas
+/// TRANSIÇÕES de heartbeat (Offline→Online em HeartbeatCacheService, Online→Offline
+/// em HeartbeatExpiryBackgroundService), nunca a cada batida. Por design eles podem
+/// estar defasados — um agente que pulsa a cada ~60s passa a maior parte do tempo com
+/// Status "Offline" e LastSeenAt velho no banco. Não use nenhum dos dois isolado para
+/// decidir se o agente está online agora.
 /// </para>
 ///
 /// <para>
-/// O console ainda combina os dois para montar o indicador (mesma regra de
-/// isAgentOnlineNow no site), mas agora ambos vêm frescos do servidor.
+/// <see cref="IsOnline"/> é a resposta AUTORITATIVA de "online agora", lida da chave de
+/// heartbeat no Redis (<see cref="Discovery.Core.Interfaces.IHeartbeatCacheService"/>,
+/// a mesma fonte de verdade usada pelo DashboardService), e NÃO existe no row do
+/// repositório — por isso quem monta o DTO passa o valor pelo
+/// <see cref="PatchDtoMapper.ToDto(PatchPendingAgentRow, bool)"/>. Quando o Redis está
+/// mudo (fora do ar ou estourou o orçamento), <see cref="IsOnline"/> cai para o status
+/// persistido (Status == "Online"), que é o sinal de retaguarda.
+/// </para>
+///
+/// <para>
+/// LastSeenAt continua sendo o instante REAL do último heartbeat quando há chave viva
+/// no Redis, senão o <c>agents.last_seen_at</c> do banco. O console usa IsOnline como
+/// indicador principal e mantém o frescor como apoio (mesma regra de isAgentOnlineNow
+/// no site).
 /// </para>
 /// </summary>
 public sealed record PatchPendingAgentDto(
@@ -291,7 +305,16 @@ public sealed record PatchPendingAgentDto(
     string? ScanStatus,
     DateTime? LastScanAt,
     DateTime? LastSeenAt,
-    string Status);
+    string Status,
+    bool IsOnline);
+
+/// <summary>
+/// Contexto de montagem do <see cref="PatchPendingAgentDto"/>: carrega o que o row do
+/// repositório NÃO tem — hoje só o status ONLINE autoritativo (Redis). Existe para que
+/// o mapeador receba esse dado de forma explícita, em vez de cada handler inventar a
+/// sua própria regra de "online agora".
+/// </summary>
+public sealed record PatchPendingAgentDtoBuildContext(bool IsOnline);
 
 public sealed record PatchPendingListDto(
     IReadOnlyList<PatchPendingAgentDto> Items,
@@ -425,6 +448,37 @@ public static class PatchDtoMapper
             NextAttemptAt = update.NextAttemptAt
         };
     }
+
+    /// <summary>
+    /// Monta a linha da lista de pendências a partir do row do repositório e do status
+    /// ONLINE autoritativo (Redis). É a ÚNICA construção de
+    /// <see cref="PatchPendingAgentDto"/> no repositório: sem isso um handler novo
+    /// voltaria a decidir "online" só pelo banco e ressuscitaria o bug de produção.
+    ///
+    /// <para>
+    /// <paramref name="isOnline"/> já chega RESOLVIDO por quem chamou (Redis confiável
+    /// manda; Redis mudo cai no status persistido). Aqui só normalizamos o
+    /// <see cref="PatchPendingAgentRow.Status"/>, que vem NULL quando o agente não tem
+    /// linha conhecida — o contrato do DTO é "Online"/"Offline", nunca vazio.
+    /// </para>
+    /// </summary>
+    public static PatchPendingAgentDto ToDto(PatchPendingAgentRow item, bool isOnline) => new(
+        item.AgentId,
+        item.Hostname,
+        item.AgentDisplayName,
+        item.SiteId,
+        item.SiteName,
+        item.ClientId,
+        item.ClientName,
+        item.PendingCount,
+        item.CriticalCount,
+        item.DeniedCount,
+        item.PendingReboot,
+        item.ScanStatus,
+        item.LastScanAt,
+        item.LastSeenAt,
+        string.IsNullOrWhiteSpace(item.Status) ? "Offline" : item.Status,
+        isOnline);
 
     public static AgentWindowsUpdateSnapshotDto ToSnapshotDto(
         Guid agentId,

@@ -212,7 +212,17 @@ public class PatchInventoryAgentRow
     public DateTime LastSeenAt { get; set; }
 }
 
-/// <summary>Agente na visão de pendências da frota.</summary>
+/// <summary>
+/// Agente na visão de pendências da frota.
+///
+/// <para>
+/// <see cref="Status"/> é o status PERSISTIDO (Online/Offline) do agente no instante da
+/// consulta, projetado pela MESMA query agrupada da página. Pode vir NULL para um agente
+/// sem linha conhecida — o mapeador normaliza para "Offline". Como o banco só é escrito
+/// nas TRANSIÇÕES de heartbeat, este campo é SINAL DE RETAGUARDA: quem decide "online
+/// agora" é a chave de heartbeat no Redis.
+/// </para>
+/// </summary>
 public class PatchPendingAgentRow
 {
     public Guid AgentId { get; set; }
@@ -229,6 +239,13 @@ public class PatchPendingAgentRow
     public string? ScanStatus { get; set; }
     public DateTime? LastScanAt { get; set; }
     public DateTime? LastSeenAt { get; set; }
+
+    /// <summary>
+    /// Status PERSISTIDO do agente ("Online"/"Offline"), vem de agents.status. Só muda
+    /// nas transições de heartbeat, então pode estar defasado — é o fallback quando o
+    /// Redis não responde, nunca a fonte de verdade.
+    /// </summary>
+    public string? Status { get; set; }
 }
 
 /// <summary>

@@ -25,6 +25,44 @@ namespace Discovery.Tests;
 public class PatchPendingFreshnessTests
 {
     /// <summary>
+    /// Conexão de mentira com o Redis. O handler consulta
+    /// <see cref="IRedisService.IsConnected"/> ANTES de ler o cache: um cache vazio e um
+    /// cache fora do ar respondem a mesma coisa (ninguém online), e sem esse flag seria
+    /// impossível dizer se aquilo é RESPOSTA ou SILÊNCIO — o silêncio tem de cair para o
+    /// estado persistido, nunca pintar a frota de Offline.
+    /// </summary>
+    private sealed class FakeRedisService(bool isConnected) : IRedisService
+    {
+        public bool IsConnected { get; } = isConnected;
+
+        public Task<string?> GetAsync(string key) => Task.FromResult<string?>(null);
+
+        public Task<long> IncrementAsync(string key) => Task.FromResult(0L);
+
+        public Task<long> IncrementByAsync(string key, long amount) => Task.FromResult(0L);
+
+        public Task SetAsync(string key, string value, int expirySeconds = 3600) => Task.CompletedTask;
+
+        public Task<bool> SetExpiryAsync(string key, int expirySeconds) => Task.FromResult(false);
+
+        public Task<int> GetTtlSecondsAsync(string key) => Task.FromResult(0);
+
+        public Task DeleteAsync(string key) => Task.CompletedTask;
+
+        public Task DeleteByPrefixAsync(string prefix) => Task.CompletedTask;
+
+        public Task PublishAsync(string channel, string message) => Task.CompletedTask;
+
+        public Task SubscribeAsync(string channel, Action<string, string> handler) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds)
+            => Task.FromResult(false);
+    }
+
+    /// <summary>
     /// Dublê do cache de heartbeat: responde pela CHAVE INDIVIDUAL dos ids vivos.
     ///
     /// <para>
@@ -147,7 +185,11 @@ public class PatchPendingFreshnessTests
         Guid agentId, AgentStatus persistedStatus, DateTime? persistedLastSeenAt, IHeartbeatCacheService cache)
     {
         var db = await SeedAgentAsync(agentId, persistedStatus, persistedLastSeenAt);
-        var handler = new GetPatchPendingQueryHandler(new PatchRepository(db), cache);
+        // Redis CONECTADO: estas fixtures querem medir o veredito ao vivo. O caminho de
+        // Redis mudo (IsConnected = false) é coberto por
+        // PatchPendingOnlineStatusTests.RedisIndisponivel*.
+        var handler = new GetPatchPendingQueryHandler(
+            new PatchRepository(db), cache, new FakeRedisService(isConnected: true));
         var result = await handler.Handle(
             new GetPatchPendingQuery(PatchScope.Global, null, null, 25, null, true, []), default);
 
@@ -204,10 +246,12 @@ public class PatchPendingFreshnessTests
     [Test]
     public async Task LastSeenAtAntigoComStatusPersistidoOnline_NaoInverteParaOffline()
     {
-        // Regra especificada: a chave do Redis MANDA quando existe; quando NÃO
-        // existe, vale o status persistido. Um agente marcado Online no banco cujo
-        // last_seen_at é antigo NÃO é rebaixado para Offline aqui — quem corrige o
-        // banco é a expiração (HeartbeatExpiryBackgroundService), não a lista.
+        // Redis RESPONDEU (conectado) e o agente NÃO tem chave: ele está offline AGORA.
+        // O status persistido Online é defasado — foi gravado na transição de entrada e
+        // nunca reescrito a cada batida. Quem o corrige no banco é a expiração
+        // (HeartbeatExpiryBackgroundService), mas a lista não pode esperar por isso:
+        // exibir Online aqui é justamente o sintoma de produção (agente cai e a tela só
+        // corrige no F5).
         var agentId = Guid.NewGuid();
         var staleSeenAt = DateTime.UtcNow.AddHours(-5);
 
@@ -215,7 +259,9 @@ public class PatchPendingFreshnessTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(item.Status, Is.EqualTo("Online"));
+            Assert.That(item.Status, Is.EqualTo("Offline"));
+            // Sem chave viva não existe frescor do Redis: devolvemos o último instante
+            // PERSISTIDO, que é o último sinal real que temos do agente.
             Assert.That(item.LastSeenAt, Is.EqualTo(staleSeenAt));
         });
     }
@@ -223,8 +269,10 @@ public class PatchPendingFreshnessTests
     [Test]
     public async Task StatusPersistidoOnlineSemHeartbeat_ContinuaOnline()
     {
-        // O Redis pode estar indisponível ou a chave ter sido renovada por outro nó:
-        // o status persistido Online ainda é afirmação válida de que o agente vive.
+        // Redis conectado e SEM chave para o agente: ele está offline agora e o banco
+        // ainda diz Online (status defasado por design). O status persistido só volta a
+        // valer quando o Redis fica MUDO — isso é coberto por
+        // PatchPendingOnlineStatusTests.RedisIndisponivel*.
         var agentId = Guid.NewGuid();
         var seenAt = DateTime.UtcNow.AddMinutes(-2);
         var cache = new FakeHeartbeatCache();
@@ -233,7 +281,7 @@ public class PatchPendingFreshnessTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(item.Status, Is.EqualTo("Online"));
+            Assert.That(item.Status, Is.EqualTo("Offline"));
             Assert.That(item.LastSeenAt, Is.EqualTo(seenAt));
         });
     }
@@ -261,7 +309,8 @@ public class PatchPendingFreshnessTests
         // lista não pode lançar nem inventar frescor — devolve null e Offline.
         var agentId = Guid.NewGuid();
         var db = await SeedAgentAsync(agentId, AgentStatus.Offline, null);
-        var handler = new GetPatchPendingQueryHandler(new PatchRepository(db), new FakeHeartbeatCache());
+        var handler = new GetPatchPendingQueryHandler(
+            new PatchRepository(db), new FakeHeartbeatCache(), new FakeRedisService(isConnected: true));
         var result = await handler.Handle(
             new GetPatchPendingQuery(PatchScope.Global, null, null, 25, null, true, []), default);
 
@@ -319,7 +368,8 @@ public class PatchPendingFreshnessTests
         await db.SaveChangesAsync();
 
         var cache = new FakeHeartbeatCache([.. entries]);
-        var handler = new GetPatchPendingQueryHandler(new PatchRepository(db), cache);
+        var handler = new GetPatchPendingQueryHandler(
+            new PatchRepository(db), cache, new FakeRedisService(isConnected: true));
         var result = await handler.Handle(
             new GetPatchPendingQuery(PatchScope.Global, null, null, 25, null, true, []), default);
 

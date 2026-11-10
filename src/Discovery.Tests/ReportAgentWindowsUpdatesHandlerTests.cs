@@ -264,6 +264,8 @@ public class ReportAgentWindowsUpdatesHandlerTests
         public Task<IReadOnlyList<PatchPendingAgentRow>> GetPendingAgentsAsync(
             Guid? clientId, Guid? siteId, string? cursor, int limit, string? search,
             bool hasGlobalAccess, IReadOnlyCollection<Guid> allowedClientIds, CancellationToken ct = default)
+            // O row de pendências ganhou Status (string do enum persistido); este fake
+            // não monta linhas, então só precisa continuar satisfazendo a interface.
             => Task.FromResult<IReadOnlyList<PatchPendingAgentRow>>([]);
 
         public Task<IReadOnlyDictionary<Guid, PatchAgentLiveState>> GetAgentStatusesAsync(
