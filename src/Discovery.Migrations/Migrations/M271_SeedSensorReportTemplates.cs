@@ -3,8 +3,9 @@ using FluentMigrator;
 namespace Discovery.Migrations.Migrations;
 
 /// <summary>
-/// Templates de relatório embutidos para os sensores (dataset 29 — estado
-/// corrente de cada sensor por agente/alvo).
+/// [Historico] Esta migration semeava 2 templates embutidos de sensores (dataset 29 —
+/// estado corrente de cada sensor por agente/alvo). O seed foi DESATIVADO: instalacao
+/// limpa nao deve trazer templates prontos.
 ///
 ///   a0000004-...-01 "Sensores em Falha por Agente" — fonte única, agrupada
 ///                     por hostname, com as falhas severidade alta.
@@ -28,39 +29,12 @@ namespace Discovery.Migrations.Migrations;
 [Migration(20270106_271)]
 public class M271_SeedSensorReportTemplates : Migration
 {
-    private const int AgentSensorsVal = 29;
-    private const int AgentHardwareVal = 4;
-
     private const string DefaultStyle = @",""style"":{""primaryColor"":""#16324F"",""headerBackgroundColor"":""#16324F"",""headerTextColor"":""#FFFFFF"",""alternateRowColor"":""#EEF4F7"",""fontFamily"":""Segoe UI, sans-serif""}";
 
     public override void Up()
     {
-        var now = DateTime.UtcNow.ToString("O");
-
-        Seed("a0000004-0000-0000-0000-000000000001",
-            "Sensores em Falha por Agente",
-            "Estado corrente dos sensores por agente: sensores com falha, severidade, valor do canal primário, limites e última coleta.",
-            AgentSensorsVal,
-            SensorFailuresLayoutJson,
-            SensorFailuresSchema, now);
-
-        Seed("a0000004-0000-0000-0000-000000000002",
-            "Hardware + Sensores por Agente",
-            "Uma linha por agente com o hardware inventariado e os sensores medidos no mesmo host (join por agentId).",
-            AgentHardwareVal,
-            HardwareSensorsLayoutJson,
-            HardwareSensorsSchema, now);
+        // No-op: nada e inserido em report_templates.
     }
-
-    /// <summary>Layout JSON do template "Sensores em Falha por Agente".
-    /// Exposto para o teste validar exatamente a string que o seed insere.</summary>
-    public static string SensorFailuresLayoutJson =>
-        @"{""title"":""Sensores em Falha por Agente"",""orientation"":""landscape"",""groupBy"":""agentHostname"",""groupTitleTemplate"":""{{value}} ({{count}} sensores)"",""hideGroupColumn"":true,""columns"":[{""field"":""agentHostname"",""header"":""Agente""},{""field"":""sensorName"",""header"":""Sensor""},{""field"":""sensorType"",""header"":""Tipo""},{""field"":""target"",""header"":""Alvo""},{""field"":""status"",""header"":""Status""},{""field"":""severity"",""header"":""Severidade""},{""field"":""primaryValue"",""header"":""Valor"",""format"":""number""},{""field"":""unit"",""header"":""Unidade""},{""field"":""message"",""header"":""Mensagem""},{""field"":""consecutiveFailures"",""header"":""Falhas consecutivas"",""format"":""number""},{""field"":""lastRunAt"",""header"":""Última coleta"",""format"":""datetime""}],""groupDetails"":[{""field"":""clientName"",""header"":""Cliente""},{""field"":""siteName"",""header"":""Site""}],""groupSummaries"":[{""label"":""Sensores"",""aggregate"":""count""}]" + DefaultStyle + "}";
-
-    /// <summary>Layout JSON do template "Hardware + Sensores por Agente".
-    /// Exposto para o teste validar exatamente a string que o seed insere.</summary>
-    public static string HardwareSensorsLayoutJson =>
-        @"{""title"":""Hardware + Sensores por Agente"",""orientation"":""landscape"",""groupBy"":""hw.agentHostname"",""groupTitleTemplate"":""{{value}}"",""hideGroupColumn"":true,""dataSources"":[{""datasetType"":4,""alias"":""hw""},{""datasetType"":29,""alias"":""sns"",""join"":{""joinToAlias"":""hw"",""sourceKey"":""agentId"",""targetKey"":""agentId"",""joinType"":""left""}}],""columns"":[{""field"":""hw.agentHostname"",""header"":""Agente""},{""field"":""hw.osName"",""header"":""SO""},{""field"":""hw.processor"",""header"":""Processador""},{""field"":""hw.totalMemoryGB"",""header"":""RAM (GB)"",""format"":""number""},{""field"":""hw.totalDisksCount"",""header"":""Discos"",""format"":""number""},{""field"":""hw.collectedAt"",""header"":""Coletado em"",""format"":""datetime""}],""sections"":[{""title"":""Sensores do agente"",""source"":""sns"",""columns"":[{""field"":""sns.sensorName"",""header"":""Sensor""},{""field"":""sns.sensorType"",""header"":""Tipo""},{""field"":""sns.target"",""header"":""Alvo""},{""field"":""sns.status"",""header"":""Status""},{""field"":""sns.severity"",""header"":""Severidade""},{""field"":""sns.primaryValue"",""header"":""Valor"",""format"":""number""},{""field"":""sns.unit"",""header"":""Unidade""},{""field"":""sns.message"",""header"":""Mensagem""},{""field"":""sns.lastRunAt"",""header"":""Última coleta"",""format"":""datetime""}]}],""summaries"":[{""label"":""Agentes"",""aggregate"":""count""}]" + DefaultStyle + "}";
 
     public override void Down()
     {
@@ -71,25 +45,14 @@ public class M271_SeedSensorReportTemplates : Migration
         }
     }
 
-    private void Seed(string id, string name, string description, int datasetType, string layoutJson, string executionSchemaJson, string now)
-    {
-        Insert.IntoTable("report_templates").Row(new
-        {
-            id = Guid.Parse(id),
-            name,
-            description,
-            dataset_type = datasetType,
-            default_format = 0,
-            layout_json = layoutJson,
-            filters_json = (string?)null,
-            execution_schema_json = executionSchemaJson,
-            is_active = true,
-            is_built_in = true,
-            version = 1,
-            created_at = now,
-            updated_at = now
-        });
-    }
+    /// <summary>Layout JSON do template "Sensores em Falha por Agente".
+    /// Exposto para o teste validar o layoutJson contra o catalogo real.</summary>
+    public static string SensorFailuresLayoutJson =>
+        @"{""title"":""Sensores em Falha por Agente"",""orientation"":""landscape"",""groupBy"":""agentHostname"",""groupTitleTemplate"":""{{value}} ({{count}} sensores)"",""hideGroupColumn"":true,""columns"":[{""field"":""agentHostname"",""header"":""Agente""},{""field"":""sensorName"",""header"":""Sensor""},{""field"":""sensorType"",""header"":""Tipo""},{""field"":""target"",""header"":""Alvo""},{""field"":""status"",""header"":""Status""},{""field"":""severity"",""header"":""Severidade""},{""field"":""primaryValue"",""header"":""Valor"",""format"":""number""},{""field"":""unit"",""header"":""Unidade""},{""field"":""message"",""header"":""Mensagem""},{""field"":""consecutiveFailures"",""header"":""Falhas consecutivas"",""format"":""number""},{""field"":""lastRunAt"",""header"":""Última coleta"",""format"":""datetime""}],""groupDetails"":[{""field"":""clientName"",""header"":""Cliente""},{""field"":""siteName"",""header"":""Site""}],""groupSummaries"":[{""label"":""Sensores"",""aggregate"":""count""}]" + DefaultStyle + "}";
+    /// <summary>Layout JSON do template "Hardware + Sensores por Agente".
+    /// Exposto para o teste validar o layoutJson contra o catalogo real.</summary>
+    public static string HardwareSensorsLayoutJson =>
+        @"{""title"":""Hardware + Sensores por Agente"",""orientation"":""landscape"",""groupBy"":""hw.agentHostname"",""groupTitleTemplate"":""{{value}}"",""hideGroupColumn"":true,""dataSources"":[{""datasetType"":4,""alias"":""hw""},{""datasetType"":29,""alias"":""sns"",""join"":{""joinToAlias"":""hw"",""sourceKey"":""agentId"",""targetKey"":""agentId"",""joinType"":""left""}}],""columns"":[{""field"":""hw.agentHostname"",""header"":""Agente""},{""field"":""hw.osName"",""header"":""SO""},{""field"":""hw.processor"",""header"":""Processador""},{""field"":""hw.totalMemoryGB"",""header"":""RAM (GB)"",""format"":""number""},{""field"":""hw.totalDisksCount"",""header"":""Discos"",""format"":""number""},{""field"":""hw.collectedAt"",""header"":""Coletado em"",""format"":""datetime""}],""sections"":[{""title"":""Sensores do agente"",""source"":""sns"",""columns"":[{""field"":""sns.sensorName"",""header"":""Sensor""},{""field"":""sns.sensorType"",""header"":""Tipo""},{""field"":""sns.target"",""header"":""Alvo""},{""field"":""sns.status"",""header"":""Status""},{""field"":""sns.severity"",""header"":""Severidade""},{""field"":""sns.primaryValue"",""header"":""Valor"",""format"":""number""},{""field"":""sns.unit"",""header"":""Unidade""},{""field"":""sns.message"",""header"":""Mensagem""},{""field"":""sns.lastRunAt"",""header"":""Última coleta"",""format"":""datetime""}]}],""summaries"":[{""label"":""Agentes"",""aggregate"":""count""}]" + DefaultStyle + "}";
 
     private static string ScopeFilters => @"
     { ""name"": ""clientId"", ""label"": ""Cliente"", ""type"": 3, ""required"": false, ""group"": ""Escopo"", ""description"": ""Escopo opcional por cliente."", ""uiComponent"": 4, ""placeholder"": ""GUID do cliente"" },
@@ -103,7 +66,7 @@ public class M271_SeedSensorReportTemplates : Migration
     { ""name"": ""limit"", ""label"": ""Limite de linhas"", ""type"": 4, ""required"": false, ""group"": ""Saida"", ""description"": ""Maximo recomendado: 10000."", ""uiComponent"": 5, ""defaultValue"": ""1000"", ""min"": 1, ""max"": 10000 }";
 
     /// <summary>Schema de execucao do template "Sensores em Falha por Agente".
-    /// Exposto para o teste validar exatamente a string que o seed insere —
+    /// Exposto para o teste validar exatamente esta string —
     /// este bloco contem o campo json aninhado "filtersJson", cujo escape
     /// errado fazia o INSERT falhar com 22P02 (invalid input syntax for type
     /// json) e derrubava a API no boot.</summary>
@@ -134,7 +97,7 @@ public class M271_SeedSensorReportTemplates : Migration
 }";
 
     /// <summary>Schema de execucao do template "Hardware + Sensores por Agente".
-    /// Exposto para o teste validar exatamente a string que o seed insere.</summary>
+    /// Exposto para o teste validar o layoutJson contra o catalogo real.</summary>
     public static string HardwareSensorsSchema => @"
 {
   ""scopeType"": 3,
@@ -158,4 +121,5 @@ public class M271_SeedSensorReportTemplates : Migration
     { ""name"": ""Somente Windows 11"", ""description"": ""Agentes cujo SO reportado contem 'Windows 11'"", ""filtersJson"": ""{ \""osName\"": \""Windows 11\"" }"" }
   ]
 }";
+
 }

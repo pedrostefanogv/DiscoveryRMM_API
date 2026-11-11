@@ -3,65 +3,27 @@ using FluentMigrator;
 namespace Discovery.Migrations.Migrations;
 
 /// <summary>
-/// Templates de relatório embutidos para o gerenciador de patches do Windows
-/// (datasets 24–27) e para o inventário/estado dos agentes (28).
+/// [Historico] Esta migration semeava 5 templates embutidos dos datasets do
+/// gerenciador de patches do Windows (24-27) e do inventario/estado dos agentes (28).
 ///
-/// Cada template traz layout + execution_schema_json (filtros/presets) para que
-/// o formulário de execução do console já ofereça escopo/período/ordenação e
-/// presets prontos — sem isso o usuário precisaria montar o JSON de filtros.
+/// O seed foi DESATIVADO: instalacao limpa nao deve trazer templates prontos.
+/// Up() virou no-op e as constantes de dataset que so o seed usava foram removidas.
 ///
-/// IDs determinísticos a0000003-0000-0000-0000-00000000000N (deep-link estável
-/// pelo mapa de slug no console) e Down idempotente.
+/// As propriedades estaticas de layout/schema (WindowsUpdatesSchema,
+/// PatchComplianceSchema, PatchApprovalsSchema, PatchApprovalAuditSchema,
+/// AgentsSchema) foram PRESERVADAS de proposito: PatchReportTemplateMigrationSchemaTests
+/// as le por reflexao e valida o JSON de cada uma em CI. Os helpers internos que
+/// elas referenciam (ScopeFilters/OutputFilters) permanecem para elas compilarem.
+///
+/// A classe, o atributo [Migration(20261220_232)] e o numero da versao foram
+/// mantidos para preservar a cadeia de versoes do FluentMigrator. Down idempotente.
 /// </summary>
 [Migration(20261220_232)]
 public class M232_SeedPatchReportTemplates : Migration
 {
-    private const int WindowsUpdatesVal = 24;
-    private const int PatchComplianceVal = 25;
-    private const int PatchApprovalsVal = 26;
-    private const int PatchApprovalAuditVal = 27;
-    private const int AgentsVal = 28;
-
-    private const string DefaultStyle = @",""style"":{""primaryColor"":""#16324F"",""headerBackgroundColor"":""#16324F"",""headerTextColor"":""#FFFFFF"",""alternateRowColor"":""#EEF4F7"",""fontFamily"":""Segoe UI, sans-serif""}";
-
     public override void Up()
     {
-        var now = DateTime.UtcNow.ToString("O");
-
-        Seed("a0000003-0000-0000-0000-000000000001",
-            "Patches Pendentes por Agente",
-            "Atualizações do Windows pendentes por agente, com severidade, classificação, aprovação e reinício.",
-            WindowsUpdatesVal,
-            @"{""title"":""Patches Pendentes por Agente"",""orientation"":""landscape"",""groupBy"":""agentHostname"",""groupTitleTemplate"":""{{value}} ({{count}} atualizações)"",""hideGroupColumn"":true,""columns"":[{""field"":""kbIds"",""header"":""KB""},{""field"":""title"",""header"":""Atualização""},{""field"":""classification"",""header"":""Classificação""},{""field"":""severity"",""header"":""Severidade""},{""field"":""approvalState"",""header"":""Aprovação""},{""field"":""requiresReboot"",""header"":""Reinício""},{""field"":""publishedAt"",""header"":""Publicada"",""format"":""datetime""},{""field"":""reportedAt"",""header"":""Reportada"",""format"":""datetime""}],""groupDetails"":[{""field"":""clientName"",""header"":""Cliente""},{""field"":""siteName"",""header"":""Site""}],""groupSummaries"":[{""label"":""Pendentes"",""aggregate"":""count""}]" + DefaultStyle + "}",
-            WindowsUpdatesSchema, now);
-
-        Seed("a0000003-0000-0000-0000-000000000002",
-            "Conformidade de Patches",
-            "Uma linha por agente: pendentes acionáveis, críticas, recusadas, aprovadas, instaladas e reinício pendente.",
-            PatchComplianceVal,
-            @"{""title"":""Conformidade de Patches"",""orientation"":""landscape"",""columns"":[{""field"":""agentHostname"",""header"":""Agente""},{""field"":""clientName"",""header"":""Cliente""},{""field"":""siteName"",""header"":""Site""},{""field"":""osName"",""header"":""SO""},{""field"":""pendingCount"",""header"":""Pendentes"",""format"":""number""},{""field"":""criticalCount"",""header"":""Críticas"",""format"":""number""},{""field"":""deniedCount"",""header"":""Recusadas"",""format"":""number""},{""field"":""approvedCount"",""header"":""Aprovadas"",""format"":""number""},{""field"":""installedCount"",""header"":""Instaladas"",""format"":""number""},{""field"":""pendingReboot"",""header"":""Reinício pendente""},{""field"":""scanStatus"",""header"":""Scan""},{""field"":""lastScanAt"",""header"":""Último scan"",""format"":""datetime""}],""summaries"":[{""label"":""Agentes"",""aggregate"":""count""},{""label"":""Pendentes (total)"",""field"":""pendingCount"",""aggregate"":""sum""},{""label"":""Críticas (total)"",""field"":""criticalCount"",""aggregate"":""sum""}]" + DefaultStyle + "}",
-            PatchComplianceSchema, now);
-
-        Seed("a0000003-0000-0000-0000-000000000003",
-            "Aprovações de Patches",
-            "Regras de aprovação/recusa de atualizações por escopo, com motivo e responsável.",
-            PatchApprovalsVal,
-            @"{""title"":""Aprovações de Patches"",""orientation"":""landscape"",""columns"":[{""field"":""scopeType"",""header"":""Escopo""},{""field"":""updateKey"",""header"":""Atualização""},{""field"":""kbId"",""header"":""KB""},{""field"":""action"",""header"":""Ação""},{""field"":""reason"",""header"":""Motivo""},{""field"":""updatedBy"",""header"":""Alterado por""},{""field"":""updatedAt"",""header"":""Atualizada em"",""format"":""datetime""}],""summaries"":[{""label"":""Regras"",""aggregate"":""count""}]" + DefaultStyle + "}",
-            PatchApprovalsSchema, now);
-
-        Seed("a0000003-0000-0000-0000-000000000004",
-            "Auditoria de Aprovações de Patches",
-            "Histórico de criação/alteração/remoção de aprovações (usuário, IP, motivo).",
-            PatchApprovalAuditVal,
-            @"{""title"":""Auditoria de Aprovações de Patches"",""orientation"":""landscape"",""columns"":[{""field"":""changedAt"",""header"":""Quando"",""format"":""datetime""},{""field"":""changeType"",""header"":""Mudança""},{""field"":""scopeType"",""header"":""Escopo""},{""field"":""updateKey"",""header"":""Atualização""},{""field"":""oldAction"",""header"":""Ação anterior""},{""field"":""newAction"",""header"":""Nova ação""},{""field"":""reason"",""header"":""Motivo""},{""field"":""changedBy"",""header"":""Por""},{""field"":""ipAddress"",""header"":""IP""}],""summaries"":[{""label"":""Eventos"",""aggregate"":""count""}]" + DefaultStyle + "}",
-            PatchApprovalAuditSchema, now);
-
-        Seed("a0000003-0000-0000-0000-000000000005",
-            "Inventário de Agentes",
-            "Frota de agentes com status, SO, versão do agente, usuário logado e reinício pendente.",
-            AgentsVal,
-            @"{""title"":""Inventário de Agentes"",""orientation"":""landscape"",""columns"":[{""field"":""hostname"",""header"":""Hostname""},{""field"":""clientName"",""header"":""Cliente""},{""field"":""siteName"",""header"":""Site""},{""field"":""status"",""header"":""Status""},{""field"":""osName"",""header"":""SO""},{""field"":""osVersion"",""header"":""Versão SO""},{""field"":""agentVersion"",""header"":""Agente""},{""field"":""loggedUser"",""header"":""Usuário""},{""field"":""lastSeenAt"",""header"":""Último contato"",""format"":""datetime""},{""field"":""pendingReboot"",""header"":""Reinício pendente""}],""summaries"":[{""label"":""Agentes"",""aggregate"":""count""}]" + DefaultStyle + "}",
-            AgentsSchema, now);
+        // No-op: nada e inserido em report_templates.
     }
 
     public override void Down()
@@ -71,26 +33,6 @@ public class M232_SeedPatchReportTemplates : Migration
             Delete.FromTable("report_templates")
                 .Row(new { id = Guid.Parse($"a0000003-0000-0000-0000-00000000000{i:D1}") });
         }
-    }
-
-    private void Seed(string id, string name, string description, int datasetType, string layoutJson, string executionSchemaJson, string now)
-    {
-        Insert.IntoTable("report_templates").Row(new
-        {
-            id = Guid.Parse(id),
-            name,
-            description,
-            dataset_type = datasetType,
-            default_format = 0,
-            layout_json = layoutJson,
-            filters_json = (string?)null,
-            execution_schema_json = executionSchemaJson,
-            is_active = true,
-            is_built_in = true,
-            version = 1,
-            created_at = now,
-            updated_at = now
-        });
     }
 
     private static string ScopeFilters => @"
