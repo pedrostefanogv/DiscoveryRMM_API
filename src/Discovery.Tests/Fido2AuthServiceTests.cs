@@ -231,6 +231,68 @@ public class Fido2AuthServiceTests
             "valor indecifrável não pode virar match");
     }
 
+    // ─── Regressão: register/begin com credencial já cadastrada (HTTP 400) ─────
+    //
+    // O credential id é persistido em base64URL SEM padding (PersistPendingKeyAsync),
+    // mas o begin usava Convert.FromBase64String — que é ESTRITO e exige o padding.
+    // Resultado em produção (11/11/2026): FormatException "The input is not a valid
+    // Base-64 string..." -> o handler devolvia 400 {"code":"Internal"} e o usuário não
+    // conseguia cadastrar uma chave NOVA enquanto tivesse qualquer chave antiga.
+    // O valor abaixo é exatamente o credential id do usuário afetado em produção.
+
+    private const string ProductionCredentialIdBase64Url = "4NG1ds8XHXEBSKHnUm2RqP5hjOLkGnSHl30Dql6YriM";
+
+    [Test]
+    public async Task BeginRegistration_DoesNotThrow_WhenUserAlreadyHasAKeyStoredAsBase64Url()
+    {
+        var (service, redis, _) = new Harness();
+
+        // Antes: FormatException. Depois: options geradas normalmente.
+        var optionsJson = await service.BeginRegistrationAsync(
+            UserA, "user@example.com", "Usuário Teste", [ProductionCredentialIdBase64Url]);
+
+        Assert.That(optionsJson, Is.Not.Null.And.Not.Empty);
+        Assert.That(redis.LastExpirySeconds, Is.GreaterThanOrEqualTo(180), "o challenge deve ir ao Redis com TTL válido");
+
+        using var doc = JsonDocument.Parse(optionsJson);
+        var excluded = doc.RootElement.GetProperty("excludeCredentials").EnumerateArray().ToList();
+        Assert.That(excluded, Has.Count.EqualTo(1), "a credencial existente deve continuar sendo excluída");
+        Assert.That(excluded[0].GetProperty("id").GetString(), Is.EqualTo(ProductionCredentialIdBase64Url),
+            "o id devolvido ao navegador é o base64url original, sem padding");
+    }
+
+    [Test]
+    public async Task BeginRegistration_AcceptsBothBase64UrlAndStandardEncoding()
+    {
+        var (service, _, _) = new Harness();
+
+        var optionsJson = await service.BeginRegistrationAsync(
+            UserA, "user@example.com", "Usuário Teste",
+            [ProductionCredentialIdBase64Url, ProductionCredentialIdBase64Url + "="]);
+
+        using var doc = JsonDocument.Parse(optionsJson);
+        var excluded = doc.RootElement.GetProperty("excludeCredentials").EnumerateArray().ToList();
+        Assert.That(excluded, Has.Count.EqualTo(2),
+            "base64url (novo) e base64 padrão com padding (legado) decodificam para o mesmo id e são aceitos");
+    }
+
+    [Test]
+    public async Task BeginRegistration_SkipsCorruptedCredentialId_InsteadOfFailingTheWholeRegistration()
+    {
+        var (service, _, _) = new Harness();
+
+        // Uma linha corrompida no banco não pode impedir o cadastro de uma chave nova.
+        var optionsJson = await service.BeginRegistrationAsync(
+            UserA, "user@example.com", "Usuário Teste",
+            ["não é base64!", "", "AQID"]);
+
+        using var doc = JsonDocument.Parse(optionsJson);
+        var excluded = doc.RootElement.GetProperty("excludeCredentials").EnumerateArray().ToList();
+        Assert.That(excluded, Has.Count.EqualTo(1),
+            "os dois valores inválidos são omitidos; só o id válido entra em excludeCredentials");
+        Assert.That(excluded[0].GetProperty("id").GetString(), Is.EqualTo("AQID"));
+    }
+
     // ─── Itens 4 e 5: telemetria e handler do registro ──────────────────────
 
     [Test]

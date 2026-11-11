@@ -137,9 +137,28 @@ public class Fido2AuthService : IFido2Service
             DisplayName = fullName
         };
 
-        var excludeCredentials = existingCredentialIds
-            .Select(id => new PublicKeyCredentialDescriptor(Convert.FromBase64String(id)))
-            .ToList();
+        // O credential id é gravado em base64URL (ver PersistPendingKeyAsync e
+        // ToBase64Url) — formato que o navegador usa e que NÃO tem padding '='. Usar
+        // Convert.FromBase64String aqui lançava FormatException para toda chave já
+        // cadastrada, e o register/begin virava o 400 "Internal" mesmo com as
+        // credenciais em perfeito estado. DecodeBase64AnyFormat aceita base64url e
+        // base64 padrão (legado) e foi feito exatamente para este caso.
+        var excludeCredentials = new List<PublicKeyCredentialDescriptor>();
+        foreach (var id in existingCredentialIds)
+        {
+            var idBytes = DecodeBase64AnyFormat(id);
+            if (idBytes is null || idBytes.Length == 0)
+            {
+                // Uma credencial corrompida não pode impedir o cadastro de uma chave nova:
+                // ela é apenas omitida do excludeCredentials (e o log registra o caso).
+                _logger.LogWarning(
+                    "Credencial com id inválido foi ignorada no excludeCredentials durante o registro FIDO2: {Raw}.",
+                    Truncate(id, 128));
+                continue;
+            }
+
+            excludeCredentials.Add(new PublicKeyCredentialDescriptor(idBytes));
+        }
 
         var options = _fido2.RequestNewCredential(new RequestNewCredentialParams
         {
