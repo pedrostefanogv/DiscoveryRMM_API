@@ -2,6 +2,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Helpers;
 using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -116,8 +117,24 @@ public sealed class GetPatchComplianceQueryHandler(DiscoveryDbContext db)
             .Where(u => u.IsPresent && u.IsPending &&
                         u.ApprovalState != PatchApprovalState.Denied &&
                         agentIds.Contains(u.AgentId))
-            .Select(u => new { u.AgentId, u.IsMandatory, Failed = u.Status == PatchUpdateStatus.Failed })
+            .Select(u => new { u.AgentId, u.Source, u.IsMandatory, Failed = u.Status == PatchUpdateStatus.Failed })
             .ToListAsync(ct);
+
+        // Origem de terceiros (D22): com "third_party" DESATIVADO na política
+        // efetiva do escopo do agente (Site > Client > Global), apps choco/winget
+        // não são considerados na conformidade — não contam como pendência, não
+        // derrubam o score e não aparecem nas falhas. Mesmo veredito das visões
+        // de frota do PatchRepository (mesma tabela de políticas).
+        var visibility = await PatchThirdPartyVisibility.LoadAsync(db, ct);
+        var thirdPartyAllowedByAgent = agents.ToDictionary(
+            agent => agent.Id,
+            agent => visibility.AllowsThirdParty(
+                agent.SiteId,
+                siteById.GetValueOrDefault(agent.SiteId)?.ClientId));
+        pending = pending
+            .Where(u => !PatchSourcePolicy.IsThirdPartySource(u.Source) ||
+                        thirdPartyAllowedByAgent.GetValueOrDefault(u.AgentId))
+            .ToList();
 
         var pendingByAgent = pending
             .GroupBy(u => u.AgentId)

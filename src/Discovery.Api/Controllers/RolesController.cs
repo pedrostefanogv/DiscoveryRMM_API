@@ -101,4 +101,46 @@ public class RolesController(IMediator mediator) : ControllerBase
         var result = await mediator.Send(new RemoveRolePermissionCommand(id, permissionId));
         return result.ToActionResult();
     }
+
+    /// <summary>
+    /// Concede várias permissões de uma vez.
+    /// </summary>
+    /// <remarks>
+    /// O console edita a matriz de permissões inteira numa tela só; sem este endpoint ele
+    /// precisaria de N chamadas unitárias, o que deixava a role em estado parcial durante a
+    /// edição e disparava N invalidações de cache global. A semântica é de merge: somente as
+    /// permissões enviadas são processadas, as demais permanecem. A operação é idempotente —
+    /// reenviar o que já estava concedido apenas incrementa <c>skipped</c>, nunca é erro.
+    /// Corpo: <c>{ "permissionIds": ["&lt;guid&gt;", ...] }</c>.
+    /// Resposta 200: <c>{ "added": &lt;int&gt;, "skipped": &lt;int&gt; }</c>.
+    /// 404 quando a role não existe; 400 quando a role é de sistema ou algum id não existe
+    /// no catálogo.
+    /// </remarks>
+    [HttpPost("{id:guid}/permissions/batch")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> AddRolePermissionsBatch(Guid id, [FromBody] BulkRolePermissionsDto dto)
+    {
+        var result = await mediator.Send(new AddRolePermissionsCommand(id, dto.PermissionIds));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Revoga várias permissões de uma vez.
+    /// </summary>
+    /// <remarks>
+    /// Contraparte de <see cref="AddRolePermissionsBatch"/>; o corpo vai em JSON mesmo sendo
+    /// DELETE porque a lista pode ser longa e querystring não comporta a matriz de permissões.
+    /// Idempotente: ids que não estavam vinculados apenas incrementam <c>skipped</c>.
+    /// Corpo: <c>{ "permissionIds": ["&lt;guid&gt;", ...] }</c>.
+    /// Resposta 200: <c>{ "removed": &lt;int&gt;, "skipped": &lt;int&gt; }</c>.
+    /// 404 quando a role não existe; 400 quando a role é de sistema ou algum id não existe
+    /// no catálogo.
+    /// </remarks>
+    [HttpDelete("{id:guid}/permissions/batch")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    public async Task<IActionResult> RemoveRolePermissionsBatch(Guid id, [FromBody] BulkRolePermissionsDto dto)
+    {
+        var result = await mediator.Send(new RemoveRolePermissionsCommand(id, dto.PermissionIds));
+        return result.ToActionResult();
+    }
 }

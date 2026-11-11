@@ -57,6 +57,18 @@ public static class PatchSourcePolicy
     public static bool AllowsOs(string? sourcesJson) =>
         EffectiveSources(sourcesJson).Contains(Os, StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// A política habilita a ORIGEM de apps de terceiros (1º consentimento, D22)?
+    ///
+    /// Este gate é de VISIBILIDADE/REPORT, não de automação: com a origem
+    /// desativada (padrão — ausente = só "os") os apps choco/winget não aparecem
+    /// nas visões de frota (inventário, pendências, conformidade), não entram nos
+    /// contadores dos snapshots e o agente nem os coleta. A automação continua
+    /// exigindo o duplo consentimento (<see cref="ThirdPartyConsented"/>).
+    /// </summary>
+    public static bool AllowsThirdParty(string? sourcesJson) =>
+        EffectiveSources(sourcesJson).Contains(ThirdParty, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Duplo consentimento para terceiros (Sources + AllowThirdPartyApps).</summary>
     public static bool ThirdPartyConsented(string? sourcesJson, bool allowThirdPartyApps) =>
         allowThirdPartyApps &&

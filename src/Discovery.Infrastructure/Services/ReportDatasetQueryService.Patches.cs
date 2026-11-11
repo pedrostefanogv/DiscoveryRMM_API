@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.ValueObjects;
+using Discovery.Infrastructure.Cqrs.Patches;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -63,6 +64,7 @@ public partial class ReportDatasetQueryService
                 update.Title,
                 update.Classification,
                 update.Severity,
+                update.Source,
                 update.IsPending,
                 update.IsInstalled,
                 update.IsHidden,
@@ -82,6 +84,21 @@ public partial class ReportDatasetQueryService
             query = query.Where(row => row.SiteId == siteId.Value);
         if (agentId.HasValue)
             query = query.Where(row => row.AgentId == agentId.Value);
+
+        // Origem de terceiros (D22): o relatório respeita a MESMA visibilidade
+        // das visões de frota — com "third_party" desativado na política efetiva
+        // do escopo do agente (Site > Client > Global), apps choco/winget saem
+        // do dataset. Predicado NULL-safe (Source NULL = linhas antigas de OS).
+        var thirdPartyVisibility = await PatchThirdPartyVisibility.LoadAsync(_db, cancellationToken);
+        query = query.Where(row =>
+            (row.Source == null ||
+             (row.Source != "choco" && row.Source != "winget")) ||
+            thirdPartyVisibility.SiteAllows.Contains(row.SiteId) ||
+            (!thirdPartyVisibility.SitePolicySites.Contains(row.SiteId) &&
+                (thirdPartyVisibility.ClientAllows.Contains(row.ClientId) ||
+                 (!thirdPartyVisibility.ClientPolicyClients.Contains(row.ClientId) &&
+                  thirdPartyVisibility.GlobalAllowsThirdParty))));
+
         // ToLower/Contains em vez de ILike: mantém a consulta traduzível no
         // Npgsql e no provider InMemory (testes).
         if (!string.IsNullOrWhiteSpace(updateKey))
@@ -363,27 +380,41 @@ public partial class ReportDatasetQueryService
         if (agentIds.Count == 0)
             return new Dictionary<Guid, PatchCounts>();
 
-        var counts = await _db.AgentWindowsUpdates
-            .AsNoTracking()
-            .Where(update => agentIds.Contains(update.AgentId) && update.IsPresent)
-            .GroupBy(update => update.AgentId)
-            .Select(group => new
+        // Origem de terceiros (D22): os contadores do relatório de conformidade
+        // medem o MESMO universo das visões de frota — apps choco/winget não
+        // contam quando a política efetiva do agente desativa "third_party".
+        var thirdPartyVisibility = await PatchThirdPartyVisibility.LoadAsync(_db, cancellationToken);
+
+        var counts = await (
+            from update in _db.AgentWindowsUpdates.AsNoTracking()
+            join agent in _db.Agents.AsNoTracking() on update.AgentId equals agent.Id
+            join site in _db.Sites.AsNoTracking() on agent.SiteId equals site.Id
+            where agentIds.Contains(update.AgentId) && update.IsPresent
+            where (update.Source == null ||
+                   (update.Source != "choco" && update.Source != "winget")) ||
+                  thirdPartyVisibility.SiteAllows.Contains(site.Id) ||
+                  (!thirdPartyVisibility.SitePolicySites.Contains(site.Id) &&
+                   (thirdPartyVisibility.ClientAllows.Contains(site.ClientId) ||
+                    (!thirdPartyVisibility.ClientPolicyClients.Contains(site.ClientId) &&
+                     thirdPartyVisibility.GlobalAllowsThirdParty)))
+            group update by update.AgentId into groupByAgent
+            select new
             {
-                AgentId = group.Key,
-                Pending = group.Count(update => update.IsPending &&
+                AgentId = groupByAgent.Key,
+                Pending = groupByAgent.Count(update => update.IsPending &&
                     update.ApprovalState != PatchApprovalState.Denied),
                 // ToLower() em vez de ILike: o agregado precisa ser traduzível
                 // tanto no Npgsql quanto no provider InMemory dos testes.
-                Critical = group.Count(update => update.IsPending &&
+                Critical = groupByAgent.Count(update => update.IsPending &&
                     update.ApprovalState != PatchApprovalState.Denied &&
                     update.Severity != null &&
                     update.Severity.ToLower() == "critical"),
-                Denied = group.Count(update => update.IsPending &&
+                Denied = groupByAgent.Count(update => update.IsPending &&
                     update.ApprovalState == PatchApprovalState.Denied),
-                Approved = group.Count(update => update.IsPending &&
+                Approved = groupByAgent.Count(update => update.IsPending &&
                     (update.ApprovalState == PatchApprovalState.Approved ||
                      update.ApprovalState == PatchApprovalState.AutoApproved)),
-                Installed = group.Count(update => update.IsInstalled)
+                Installed = groupByAgent.Count(update => update.IsInstalled)
             })
             .ToListAsync(cancellationToken);
 

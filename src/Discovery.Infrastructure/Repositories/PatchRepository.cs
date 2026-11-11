@@ -3,6 +3,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Cqrs.Patches;
 using Discovery.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -45,6 +46,15 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         var query = db.AgentWindowsUpdates
             .AsNoTracking()
             .Where(update => update.AgentId == agentId && update.IsPresent);
+
+        // Origem de terceiros DESATIVADA na política efetiva do agente (D22):
+        // os apps choco/winget somem da aba, dos contadores e dos totais — a
+        // página nunca anuncia pendente que a política esconde. Predicado
+        // NULL-safe (Source NULL = linhas antigas de OS, permanecem).
+        if (!await ThirdPartyAllowedForAgentAsync(agentId, ct))
+            query = query.Where(update =>
+                update.Source == null ||
+                (update.Source != "choco" && update.Source != "winget"));
 
         if (status.HasValue)
         {
@@ -138,11 +148,22 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
                 (update.UpdateKey == updateKey || update.GroupKey == updateKey), ct);
 
     public async Task<IReadOnlyList<AgentWindowsUpdate>> GetPendingForAgentAsync(Guid agentId, CancellationToken ct = default)
-        => await db.AgentWindowsUpdates
+    {
+        var query = db.AgentWindowsUpdates
             .AsNoTracking()
-            .Where(update => update.AgentId == agentId && update.IsPresent && update.IsPending)
+            .Where(update => update.AgentId == agentId && update.IsPresent && update.IsPending);
+
+        // Origem de terceiros desativada na política efetiva: pendências
+        // choco/winget não são reportadas nem contadas (D22 — visibilidade).
+        if (!await ThirdPartyAllowedForAgentAsync(agentId, ct))
+            query = query.Where(update =>
+                update.Source == null ||
+                (update.Source != "choco" && update.Source != "winget"));
+
+        return await query
             .OrderBy(update => update.Title)
             .ToListAsync(ct);
+    }
 
     public async Task<IReadOnlyList<AgentWindowsUpdate>> GetPendingForAgentsAsync(
         IReadOnlyCollection<Guid> agentIds,
@@ -949,11 +970,24 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
 
     // â”€â”€ Frota â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    private IQueryable<PatchRowContext> BuildScopedRows(
+    /// <summary>
+    /// A política EFETIVA (Site &gt; Client &gt; Global) do agente habilita a
+    /// origem "third_party"? Resolvida por consulta (a tabela de políticas é
+    /// pequena) — o mesmo veredito do resolver de aprovação e da configuração
+    /// enviada ao agente.
+    /// </summary>
+    private async Task<bool> ThirdPartyAllowedForAgentAsync(Guid agentId, CancellationToken ct)
+    {
+        var policy = await PatchThirdPartyVisibility.GetEffectivePolicyForAgentAsync(db, agentId, ct);
+        return PatchSourcePolicy.AllowsThirdParty(policy?.Sources);
+    }
+
+    private async Task<IQueryable<PatchRowContext>> BuildScopedRowsAsync(
         Guid? clientId,
         Guid? siteId,
         bool hasGlobalAccess,
-        IReadOnlyCollection<Guid> allowedClientIds)
+        IReadOnlyCollection<Guid> allowedClientIds,
+        CancellationToken ct = default)
     {
         var query =
             from update in db.AgentWindowsUpdates.AsNoTracking()
@@ -980,6 +1014,22 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             query = query.Where(row => allowed.Contains(row.Client.Id));
         }
 
+        // Origem de terceiros (D22): visível somente quando a política efetiva
+        // do ESCOPO do agente inclui "third_party". Sem política (ou sem
+        // "third_party") a origem está desativada e os pacotes choco/winget
+        // não entram em NENHUMA visão de frota construída daqui (inventário,
+        // pendências por agente, snapshot e quebras por severidade/classificação).
+        // Predicado NULL-safe e traduzível: conjuntos pequenos viram IN (...).
+        var visibility = await PatchThirdPartyVisibility.LoadAsync(db, ct);
+        query = query.Where(row =>
+            (row.Update.Source == null ||
+             (row.Update.Source != "choco" && row.Update.Source != "winget")) ||
+            visibility.SiteAllows.Contains(row.Site.Id) ||
+            (!visibility.SitePolicySites.Contains(row.Site.Id) &&
+                (visibility.ClientAllows.Contains(row.Site.ClientId) ||
+                 (!visibility.ClientPolicyClients.Contains(row.Site.ClientId) &&
+                  visibility.GlobalAllowsThirdParty))));
+
         return query;
     }
 
@@ -997,7 +1047,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         CancellationToken ct = default)
     {
         var safeLimit = Math.Clamp(limit, 1, MaxLimit);
-        var query = BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds);
+        var query = await BuildScopedRowsAsync(clientId, siteId, hasGlobalAccess, allowedClientIds, ct);
 
         if (!string.IsNullOrWhiteSpace(severity))
         {
@@ -1082,7 +1132,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         CancellationToken ct = default)
     {
         var safeLimit = Math.Clamp(limit, 1, MaxLimit);
-        var query = BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
+        var query = (await BuildScopedRowsAsync(clientId, siteId, hasGlobalAccess, allowedClientIds, ct))
             .Where(row => row.Update.GroupKey == groupKey);
 
         if (status.HasValue)
@@ -1143,6 +1193,20 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             var allowed = allowedClientIds.ToList();
             query = query.Where(row => allowed.Contains(row.client.Id));
         }
+
+        // Origem de terceiros (D22): a lista de pendências por agente só conta
+        // o que a política efetiva do agente (Site > Client > Global) torna
+        // visível — com "third_party" desativado, apps choco/winget não mantêm
+        // o agente nesta lista nem alimentam seus contadores.
+        var visibility = await PatchThirdPartyVisibility.LoadAsync(db, ct);
+        query = query.Where(row =>
+            (row.update.Source == null ||
+             (row.update.Source != "choco" && row.update.Source != "winget")) ||
+            visibility.SiteAllows.Contains(row.site.Id) ||
+            (!visibility.SitePolicySites.Contains(row.site.Id) &&
+                (visibility.ClientAllows.Contains(row.client.Id) ||
+                 (!visibility.ClientPolicyClients.Contains(row.client.Id) &&
+                  visibility.GlobalAllowsThirdParty))));
 
         var patterns = SoftwareSearchTerms.BuildPatterns(search);
         if (patterns is not null)
@@ -1270,7 +1334,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
     {
         var now = DateTime.UtcNow;
 
-        var pendingQuery = BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
+        var pendingQuery = (await BuildScopedRowsAsync(clientId, siteId, hasGlobalAccess, allowedClientIds, ct))
             .Where(row => row.Update.IsPending);
 
         // Conformidade mede o que estÃ¡ PENDENTE E NÃƒO BLOQUEADO: um KB recusado
@@ -1349,7 +1413,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         CancellationToken ct = default)
     {
         var safeLimit = Math.Clamp(limit, 1, 50);
-        return await BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
+        return await (await BuildScopedRowsAsync(clientId, siteId, hasGlobalAccess, allowedClientIds, ct))
             .Where(row => row.Update.IsPending && row.Update.ApprovalState != PatchApprovalState.Denied)
             .GroupBy(row => row.Update.Severity ?? "Unspecified")
             .Select(group => new PatchSeverityCount { Label = group.Key, Count = group.Count() })
@@ -1367,7 +1431,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         CancellationToken ct = default)
     {
         var safeLimit = Math.Clamp(limit, 1, 50);
-        return await BuildScopedRows(clientId, siteId, hasGlobalAccess, allowedClientIds)
+        return await (await BuildScopedRowsAsync(clientId, siteId, hasGlobalAccess, allowedClientIds, ct))
             .Where(row => row.Update.IsPending && row.Update.ApprovalState != PatchApprovalState.Denied)
             .GroupBy(row => row.Update.Classification ?? "Unspecified")
             .Select(group => new PatchSeverityCount { Label = group.Key, Count = group.Count() })

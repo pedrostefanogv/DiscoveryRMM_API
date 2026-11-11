@@ -136,11 +136,34 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         return total;
     }
 
+    /// <summary>
+    /// Recalcula os contadores do snapshot do agente (rollup da aba
+    /// "Atualizações" e do dashboard).
+    ///
+    /// Origem de terceiros (D22): quando a política efetiva do agente NÃO inclui
+    /// "third_party", as linhas choco/winget não contam — os contadores do
+    /// snapshot precisam medir o MESMO universo que as listas da frota (que já
+    /// filtram a origem), senão a aba anunciaria "12 pendentes" para uma tabela
+    /// que mostra 1.
+    /// </summary>
     public async Task RefreshSnapshotCountsAsync(Guid agentId, CancellationToken ct = default)
     {
-        var counts = await db.AgentWindowsUpdates
+        var policy = await Cqrs.Patches.PatchThirdPartyVisibility.GetEffectivePolicyForAgentAsync(db, agentId, ct);
+        await RefreshSnapshotCountsCoreAsync(agentId, policy, ct);
+    }
+
+    private async Task RefreshSnapshotCountsCoreAsync(Guid agentId, PatchPolicy? effectivePolicy, CancellationToken ct)
+    {
+        var countsQuery = db.AgentWindowsUpdates
             .AsNoTracking()
-            .Where(update => update.AgentId == agentId && update.IsPresent)
+            .Where(update => update.AgentId == agentId && update.IsPresent);
+
+        if (!PatchSourcePolicy.AllowsThirdParty(effectivePolicy?.Sources))
+            countsQuery = countsQuery.Where(update =>
+                update.Source == null ||
+                (update.Source != "choco" && update.Source != "winget"));
+
+        var counts = await countsQuery
             .GroupBy(_ => 1)
             .Select(group => new
             {
@@ -196,7 +219,7 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         else
             return 0;
 
-        await RefreshSnapshotCountsAsync(agentId, ct);
+        await RefreshSnapshotCountsCoreAsync(agentId, policy, ct);
         return changed;
     }
 

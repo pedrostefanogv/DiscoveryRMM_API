@@ -217,6 +217,73 @@ public class PatchComplianceHandlerTests
         });
     }
 
+    /// <summary>
+    /// D22/origem de terceiros na CONFORMIDADE: com a origem "third_party"
+    /// desativada (default do produto — nenhuma política com a origem), apps
+    /// choco/winget não contam como pendência (nem obrigatória), não derrubam a
+    /// conformidade nem o score. Ao habilitar a origem, passam a contar.
+    /// </summary>
+    [Test]
+    public async Task TerceirosDesativados_NaoContamNaConformidade()
+    {
+        var (db, clientId, _, _, agentAId, agentBId) = Seed();
+        // A: 1 pendente de OS obrigatório → não-compliant.
+        db.AgentWindowsUpdates.Add(Pending(agentAId, mandatory: true));
+        // A: 1 pendente de TERCEIROS (choco) — com a origem desativada não conta.
+        var thirdParty = Pending(agentAId, mandatory: true);
+        thirdParty.UpdateKey = "choco:brave";
+        thirdParty.GroupKey = "choco:brave";
+        thirdParty.Title = "Brave Browser";
+        thirdParty.Source = "choco";
+        db.AgentWindowsUpdates.Add(thirdParty);
+        // B: pendente de terceiros FALHO — também fora da contagem quando a
+        // origem está desativada.
+        var thirdPartyFailed = Pending(agentBId, failed: true);
+        thirdPartyFailed.UpdateKey = "winget:app";
+        thirdPartyFailed.GroupKey = "winget:app";
+        thirdPartyFailed.Title = "App de Terceiros";
+        thirdPartyFailed.Source = "winget";
+        db.AgentWindowsUpdates.Add(thirdPartyFailed);
+        db.AgentWindowsUpdateSnapshots.Add(Snapshot(agentAId, DateTime.UtcNow));
+        db.AgentWindowsUpdateSnapshots.Add(Snapshot(agentBId, DateTime.UtcNow));
+        await db.SaveChangesAsync();
+
+        var handler = new GetPatchComplianceQueryHandler(db);
+
+        // Default (sem origem habilitada): só o pendente de OS conta.
+        var disabled = await handler.Handle(new GetPatchComplianceQuery(clientId, null), default);
+        var totals = disabled.Value!.Totals;
+        Assert.Multiple(() =>
+        {
+            Assert.That(totals.PendingPatches, Is.EqualTo(1), "terceiros desativado não conta como pendência");
+            Assert.That(totals.FailedPatches, Is.EqualTo(0), "falha de terceiros desativado não conta");
+            Assert.That(totals.Compliant, Is.EqualTo(1),
+                "sem a pendência de terceiros, B fica conforme; A segue não-conforme (OS obrigatório)");
+            Assert.That(totals.Score, Is.EqualTo(100.0),
+                "falha de terceiros desativada não derruba o score legado (ninguém tem falha visível)");
+        });
+
+        // Origem habilitada na política GLOBAL: terceiros voltam a contar.
+        db.PatchPolicies.Add(new PatchPolicy
+        {
+            Id = Guid.NewGuid(),
+            ScopeType = PatchApprovalScopeType.Global,
+            Sources = "[\"os\",\"third_party\"]",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var enabled = await handler.Handle(new GetPatchComplianceQuery(clientId, null), default);
+        var enabledTotals = enabled.Value!.Totals;
+        Assert.Multiple(() =>
+        {
+            Assert.That(enabledTotals.PendingPatches, Is.EqualTo(3), "terceiros habilitado conta");
+            Assert.That(enabledTotals.FailedPatches, Is.EqualTo(1), "falha de terceiros volta a contar");
+            Assert.That(enabledTotals.Score, Is.EqualTo(50.0), "falha de terceiros volta a derrubar o score (1 de 2 sem falha)");
+        });
+    }
+
     [Test]
     public async Task Agregacao_Global_RowsPorSite_Site_RowsPorAgente()
     {

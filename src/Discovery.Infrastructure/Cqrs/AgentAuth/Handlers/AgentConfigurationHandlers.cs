@@ -17,6 +17,7 @@ public sealed class GetAgentConfigurationHandler(
     IConfigurationService configService,
     IAgentTlsCertificateProbe tlsProbe,
     IMcpToolPolicyRepository mcpPolicyRepo,
+    IPatchRepository patchRepo,
     ILogger<GetAgentConfigurationHandler> logger
 ) : IRequestHandler<GetAgentConfigurationQuery, Result<object>>
 {
@@ -74,6 +75,27 @@ public sealed class GetAgentConfigurationHandler(
             logger.LogWarning(ex, "Falha ao derivar mcpToolPolicy para o agent {AgentId}", agent.Id);
         }
 
+        // Origem de terceiros da POLÍTICA DE PATCHES (decisão D22) resolvida no
+        // escopo do agente (Site > Client > Global): false = o agente NÃO coleta
+        // nem reporta apps choco/winget no inventário de patches, e o servidor
+        // também os esconde das visões de frota. Default do produto: DESATIVADO
+        // (política sem "third_party" em sources) — habilitar é opt-in na tela
+        // Patches → Política → Origens de patch. Falha ao ler a política é
+        // fail-closed (false) por coerência com o default desativado.
+        var windowsUpdateThirdPartyEnabled = false;
+        try
+        {
+            var patchPolicies = await patchRepo.GetApplicablePoliciesForAgentAsync(
+                site?.ClientId ?? Guid.Empty, agent.SiteId, ct);
+            windowsUpdateThirdPartyEnabled = Discovery.Core.Helpers.PatchSourcePolicy.AllowsThirdParty(
+                patchPolicies.OrderByDescending(item => (int)item.ScopeType).FirstOrDefault()?.Sources);
+        }
+        catch (Exception ex)
+        {
+            // Sem a política o agente não pode nem coletar: false é o default.
+            logger.LogWarning(ex, "Falha ao resolver origem de terceiros da política de patches para o agent {AgentId}", agent.Id);
+        }
+
         var effective = new Dictionary<string, object?>
         {
             ["agentId"] = agent.Id.ToString(),
@@ -125,6 +147,9 @@ public sealed class GetAgentConfigurationHandler(
             // Gerenciador de patches (Windows Update): kill switch e cadência.
             ["windowsUpdateEnabled"] = siteConfig?.WindowsUpdateEnabled ?? clientConfig?.WindowsUpdateEnabled ?? serverConfig.WindowsUpdateEnabled,
             ["windowsUpdateScanIntervalMinutes"] = siteConfig?.WindowsUpdateScanIntervalMinutes ?? clientConfig?.WindowsUpdateScanIntervalMinutes ?? serverConfig.WindowsUpdateScanIntervalMinutes,
+            // Origem de terceiros (choco/winget) da política de patches (D22).
+            // SEMPRE enviado (o default do agente só cobre payload antigo).
+            ["windowsUpdateThirdPartyEnabled"] = windowsUpdateThirdPartyEnabled,
 
             // Autorização de acesso remoto (informativo para diagnóstico; a
             // política efetiva por usuário é resolvida e enviada no start).

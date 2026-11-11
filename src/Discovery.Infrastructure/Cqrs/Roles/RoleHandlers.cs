@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Roles.Commands;
+using Discovery.Core.DTOs.Roles;
 using Discovery.Core.Cqrs.Roles.Queries;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Interfaces.Auth;
@@ -7,6 +8,58 @@ using Discovery.Core.Interfaces.Identity;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Roles;
+
+/// <summary>
+/// Escopo ambiental que silencia a invalidação de cache dos handlers UNITÁRIOS enquanto um
+/// handler em lote está dirigindo a operação.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Por que existe: o lote reusa o caminho de gravação unitário (um comando por permissão),
+/// e o unitário invalida o cache incondicionalmente. Como os dois recebem o MESMO
+/// <c>IPermissionService</c> scoped (auto-registro <c>TryAddScoped</c>), um lote com N efeitos
+/// reais produzia <c>1 + N</c> invalidações do cache GLOBAL — com o catálogo real de 100+
+/// permissões, mais de 100 releituras de permissão para todos os usuários por clique.
+/// </para>
+/// <para>
+/// Por que um flag ambiental e não um escopo DI isolado (<c>CreateScope</c>): um escopo novo
+/// resolve OUTRA instância de <c>RoleService</c>/<c>RoleRepository</c> sobre outro
+/// <c>DiscoveryDbContext</c>, e o unitário deixaria de enxergar o que o lote acabou de gravar
+/// (além de perder a transação corrente). O flag não troca nenhuma dependência de escopo:
+/// muda apenas QUEM invalida, mantendo a gravação no mesmo contexto relacional.
+/// </para>
+/// <para>
+/// Seguro para concorrência: <see cref="AsyncLocal{T}"/> propaga pelo fluxo assíncrono da
+/// MESMA requisição e não vaza entre requisições concorrentes. A restauração é feita em
+/// <c>finally</c>, então uma exceção no meio do lote não deixa a supressão ligada.
+/// </para>
+/// </remarks>
+internal static class RolePermissionCacheSuppression
+{
+    private static readonly AsyncLocal<int> _depth = new();
+
+    /// <summary>Contador de profundidade: lotes aninhados não reativam a invalidação no meio.</summary>
+    internal static bool IsSuppressed => _depth.Value > 0;
+
+    internal static IDisposable Suppress()
+    {
+        _depth.Value++;
+        return new Scope();
+    }
+
+    private sealed class Scope : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            // Nunca deixa o contador negativo, mesmo se Dispose for chamado duas vezes.
+            if (_depth.Value > 0) _depth.Value--;
+        }
+    }
+}
 
 internal static class RoleMapping
 {
@@ -192,7 +245,10 @@ public sealed class AddRolePermissionCommandHandler(
             return Result<PermissionDto>.Failure(Error.Validation("RoleId", ex.Message));
         }
 
-        await permissions.InvalidateAllCacheAsync();
+        // Dirigido por um lote, quem invalida é o lote (uma vez, no final): aqui seria
+        // invalidação redundante do cache global por item. Chamado avulso, invalida normal.
+        if (!RolePermissionCacheSuppression.IsSuppressed)
+            await permissions.InvalidateAllCacheAsync();
 
         return Result<PermissionDto>.Success(RoleMapping.ToDto(permission));
     }
@@ -224,8 +280,191 @@ public sealed class RemoveRolePermissionCommandHandler(
             return Result<VoidResult>.Failure(Error.Validation("RoleId", ex.Message));
         }
 
-        await permissions.InvalidateAllCacheAsync();
+        // Mesma regra do Add: suprimido durante um lote, que invalida uma vez ao final.
+        if (!RolePermissionCacheSuppression.IsSuppressed)
+            await permissions.InvalidateAllCacheAsync();
 
         return Result<VoidResult>.Success(VoidResult.Value);
+    }
+}
+
+// ── Permissões de role em lote ───────────────────────────────────────────────
+
+/// <summary>
+/// Base comum dos handlers em lote: valida role/catálogo uma vez e classifica os ids
+/// pedidos em "aplicar" x "já no estado desejado".
+/// </summary>
+/// <remarks>
+/// Decisões registradas:
+/// <list type="bullet">
+/// <item>A gravação efetiva é feita enviando os comandos UNITÁRIOS pelo mediator, um por
+/// permissão. Duplicar aqui a checagem de <c>IsSystem</c> criaria uma segunda cópia da
+/// invariante e o risco clássico de as duas divergirem; reenviando pelo mediator a regra
+/// (inclusive a defesa em profundidade do repositório) permanece com um dono só.</item>
+/// <item>O lote NÃO aborta no meio: os unitários são processados até o fim e um erro
+/// inesperado é agregado para devolver Failure no final. Abortar na primeira falha deixaria
+/// a role silenciosamente em estado parcial sem que os itens restantes fossem tentados.</item>
+/// <item>A invalidação de cache acontece UMA vez por requisição, e não a cada unitário: o
+/// cache é global e invalidá-lo N vezes faria o console (e os demais usuários) recarregarem
+/// as permissões a cada item aplicado. Como os unitários reusados invalidariam por conta
+/// própria (mesmo IPermissionService scoped), o loop roda dentro de
+/// <see cref="RolePermissionCacheSuppression"/> — ver o comentário daquela classe.</item>
+/// </list>
+/// </remarks>
+internal static class BulkRolePermissions
+{
+    internal static readonly Error SystemRoleError =
+        Error.Validation("RoleId", "Permissões de papéis de sistema não podem ser alteradas.");
+
+    /// <summary>
+    /// Deduplica preservando a ordem de chegada — o console pode remontar a lista com ids
+    /// repetidos e cada repetição seria contada como um "added" a mais.
+    /// </summary>
+    internal static List<Guid> Normalize(IReadOnlyList<Guid>? requested)
+    {
+        var seen = new HashSet<Guid>();
+        var normalized = new List<Guid>(requested?.Count ?? 0);
+
+        foreach (var id in requested ?? [])
+            if (seen.Add(id))
+                normalized.Add(id);
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// Resolve role e catálogo antes de qualquer efeito colateral. Devolve o erro pronto
+    /// (role inexistente ou id fora do catálogo) para o chamador apenas repassar.
+    /// </summary>
+    internal static async Task<(Role? Role, HashSet<Guid> CatalogIds, Error? Error)> LoadContextAsync(
+        IRoleService service, Guid roleId, IReadOnlyList<Guid> permissionIds, CancellationToken ct)
+    {
+        var role = await service.GetByIdAsync(roleId, ct);
+        if (role is null)
+            return (null, [], Error.NotFound($"Role {roleId} not found"));
+
+        // Papel de sistema é recusado antes de qualquer leitura de catálogo: a mensagem
+        // precisa ser exatamente a do handler unitário.
+        if (role.IsSystem)
+            return (null, [], SystemRoleError);
+
+        var catalog = await service.GetAllPermissionsAsync(ct);
+        var catalogIds = catalog.Select(p => p.Id).ToHashSet();
+
+        // Validação prévia: um id inválido no meio do lote não pode conceder "meio lote"
+        // e falhar depois — o console mostra a matriz inteira, então ou vale tudo ou nada.
+        var unknown = permissionIds.Where(id => !catalogIds.Contains(id)).ToList();
+        if (unknown.Count > 0)
+            return (null, [], Error.Validation("PermissionIds",
+                $"Permissões inexistentes no catálogo: {string.Join(", ", unknown)}."));
+
+        return (role, catalogIds, null);
+    }
+}
+
+public sealed class AddRolePermissionsCommandHandler(
+    IMediator mediator,
+    IPermissionService permissions,
+    IRoleService service
+) : IRequestHandler<AddRolePermissionsCommand, Result<BulkAssignPermissionsResultDto>>
+{
+    public async Task<Result<BulkAssignPermissionsResultDto>> Handle(
+        AddRolePermissionsCommand cmd, CancellationToken ct)
+    {
+        var requested = BulkRolePermissions.Normalize(cmd.PermissionIds);
+        if (requested.Count == 0)
+            return Result<BulkAssignPermissionsResultDto>.Success(new BulkAssignPermissionsResultDto(0, 0));
+
+        var (role, _, error) = await BulkRolePermissions.LoadContextAsync(service, cmd.RoleId, requested, ct);
+        if (error is not null)
+            return Result<BulkAssignPermissionsResultDto>.Failure(error);
+
+        var current = (await service.GetPermissionsAsync(cmd.RoleId, ct)).Select(p => p.Id).ToHashSet();
+
+        var toApply = requested.Where(id => !current.Contains(id)).ToList();
+        var skipped = requested.Count - toApply.Count;
+
+        var added = 0;
+        Error? firstFailure = null;
+
+        // Supressão ativa durante todo o loop: cada unitário deixa de invalidar o cache
+        // global (seriam N invalidações) e o lote invalida uma única vez logo abaixo.
+        using (RolePermissionCacheSuppression.Suppress())
+        {
+            foreach (var permissionId in toApply)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var result = await mediator.Send(new AddRolePermissionCommand(cmd.RoleId, permissionId), ct);
+
+                if (result.IsSuccess)
+                    added++;
+                else
+                    // Agrega e continua: os demais ids ainda são tentados, mas o resultado final
+                    // é Failure para o console não achar que o lote inteiro foi aplicado.
+                    firstFailure ??= result.Errors[0];
+            }
+        }
+
+        // Invalidação SEMPRE ao final do lote, inclusive no caminho added=0/skipped=N: outro
+        // operador pode ter alterado as permissões da role entre a leitura acima e agora, e o
+        // handler unitário já invalida incondicionalmente. Condicionar a "added > 0" deixaria
+        // cache obsoleto justamente no caso idempotente (reenvio do mesmo lote).
+        await permissions.InvalidateAllCacheAsync();
+
+        return firstFailure is not null
+            ? Result<BulkAssignPermissionsResultDto>.Failure(firstFailure)
+            : Result<BulkAssignPermissionsResultDto>.Success(new BulkAssignPermissionsResultDto(added, skipped));
+    }
+}
+
+public sealed class RemoveRolePermissionsCommandHandler(
+    IMediator mediator,
+    IPermissionService permissions,
+    IRoleService service
+) : IRequestHandler<RemoveRolePermissionsCommand, Result<BulkRemovePermissionsResultDto>>
+{
+    public async Task<Result<BulkRemovePermissionsResultDto>> Handle(
+        RemoveRolePermissionsCommand cmd, CancellationToken ct)
+    {
+        var requested = BulkRolePermissions.Normalize(cmd.PermissionIds);
+        if (requested.Count == 0)
+            return Result<BulkRemovePermissionsResultDto>.Success(new BulkRemovePermissionsResultDto(0, 0));
+
+        var (role, _, error) = await BulkRolePermissions.LoadContextAsync(service, cmd.RoleId, requested, ct);
+        if (error is not null)
+            return Result<BulkRemovePermissionsResultDto>.Failure(error);
+
+        var current = (await service.GetPermissionsAsync(cmd.RoleId, ct)).Select(p => p.Id).ToHashSet();
+
+        var toApply = requested.Where(current.Contains).ToList();
+        var skipped = requested.Count - toApply.Count;
+
+        var removed = 0;
+        Error? firstFailure = null;
+
+        // Mesma supressão do add: ver RolePermissionCacheSuppression.
+        using (RolePermissionCacheSuppression.Suppress())
+        {
+            foreach (var permissionId in toApply)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var result = await mediator.Send(new RemoveRolePermissionCommand(cmd.RoleId, permissionId), ct);
+
+                if (result.IsSuccess)
+                    removed++;
+                else
+                    firstFailure ??= result.Errors[0];
+            }
+        }
+
+        // Mesma regra do add: invalida sempre, inclusive em removed=0/skipped=N (ver comentário
+        // no AddRolePermissionsCommandHandler).
+        await permissions.InvalidateAllCacheAsync();
+
+        return firstFailure is not null
+            ? Result<BulkRemovePermissionsResultDto>.Failure(firstFailure)
+            : Result<BulkRemovePermissionsResultDto>.Success(new BulkRemovePermissionsResultDto(removed, skipped));
     }
 }

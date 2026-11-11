@@ -29,6 +29,24 @@ public class PatchSourcePolicyTests
     }
 
     [Test]
+    public void ThirdPartyOriginIsDisabledByDefault()
+    {
+        // D22 (visibilidade/report): a origem de terceiros vem DESATIVADA por
+        // padrão. Ausente/inválido = só "os" — apps choco/winget não aparecem
+        // nas visões de frota, não contam em conformidade e o agente não os
+        // coleta. Este gate é de VISIBILIDADE: independe do 2º consentimento.
+        Assert.That(PatchSourcePolicy.AllowsThirdParty(null), Is.False,
+            "sem política a origem de terceiros é desativada");
+        Assert.That(PatchSourcePolicy.AllowsThirdParty("[]"), Is.False);
+        Assert.That(PatchSourcePolicy.AllowsThirdParty("[\"os\"]"), Is.False);
+        Assert.That(PatchSourcePolicy.AllowsThirdParty("[\"os\",\"third_party\"]"), Is.True);
+        Assert.That(PatchSourcePolicy.AllowsThirdParty("[\"THIRD_PARTY\"]"), Is.True,
+            "aceite case-insensitive do valor gravado");
+        Assert.That(PatchSourcePolicy.AllowsThirdParty("[\"inventado\"]"), Is.False,
+            "valor desconhecido não habilita");
+    }
+
+    [Test]
     public void UnknownSourcesAreIgnored()
     {
         var effective = PatchSourcePolicy.EffectiveSources("[\"os\",\"inventado\"]");

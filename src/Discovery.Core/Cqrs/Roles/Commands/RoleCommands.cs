@@ -1,4 +1,5 @@
 using Discovery.Core.Cqrs;
+using Discovery.Core.DTOs.Roles;
 using Discovery.Core.Enums.Identity;
 
 namespace Discovery.Core.Cqrs.Roles.Commands;
@@ -25,6 +26,23 @@ public sealed record AddRolePermissionCommand(
 public sealed record RemoveRolePermissionCommand(
     Guid RoleId, Guid PermissionId
 ) : ICommand<Result<VoidResult>>;
+
+/// <summary>
+/// Concede várias permissões a uma role numa única chamada (merge, não replace: as
+/// permissões não citadas permanecem). Os comandos unitários seguem sendo o caminho
+/// efetivo de gravação — ver AddRolePermissionsCommandHandler.
+/// </summary>
+public sealed record AddRolePermissionsCommand(
+    Guid RoleId, IReadOnlyList<Guid> PermissionIds
+) : ICommand<Result<BulkAssignPermissionsResultDto>>;
+
+/// <summary>
+/// Revoga várias permissões de uma role numa única chamada. Idempotente: ids que não
+/// estavam vinculados apenas incrementam <c>Skipped</c>.
+/// </summary>
+public sealed record RemoveRolePermissionsCommand(
+    Guid RoleId, IReadOnlyList<Guid> PermissionIds
+) : ICommand<Result<BulkRemovePermissionsResultDto>>;
 
 public sealed record RoleDto(
     Guid Id, string Name, string? Description,

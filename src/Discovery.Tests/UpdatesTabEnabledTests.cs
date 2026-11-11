@@ -235,6 +235,96 @@ public class UpdatesTabEnabledTests
             Is.EqualTo("updatesTabEnabled"));
     }
 
+    // ── Origem de terceiros da política de patches (D22) no payload ──────
+
+    /// <summary>
+    /// windowsUpdateThirdPartyEnabled espelha a origem "third_party" da política
+    /// de patches (Site > Client > Global). Default do produto: DESATIVADO — o
+    /// agente não coleta apps choco/winget nem reporta pendências deles.
+    /// </summary>
+    [Test]
+    public async Task Payload_do_agent_terceiros_desativado_sem_politica()
+    {
+        await using var db = CreateDb();
+        var (agentId, siteId) = await SeedAsync(db, serverUpdates: true, clientUpdates: null, siteUpdates: null);
+
+        var payload = await BuildPayloadAsync(db, agentId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(payload.ContainsKey("windowsUpdateThirdPartyEnabled"), Is.True,
+                "o servidor SEMPRE envia o valor resolvido");
+            Assert.That(payload["windowsUpdateThirdPartyEnabled"], Is.EqualTo(false),
+                "sem política (ou sem third_party) a origem de terceiros vem desativada");
+        });
+
+        // Política de SITE com a origem habilitada: vence o default.
+        db.PatchPolicies.Add(new PatchPolicy
+        {
+            Id = Guid.NewGuid(),
+            ScopeType = PatchApprovalScopeType.Site,
+            SiteId = siteId,
+            Sources = "[\"os\",\"third_party\"]",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var withSitePolicy = await BuildPayloadAsync(db, agentId);
+        Assert.That(withSitePolicy["windowsUpdateThirdPartyEnabled"], Is.EqualTo(true));
+    }
+
+    [Test]
+    public async Task Payload_do_agent_terceiros_politica_site_vence_client()
+    {
+        await using var db = CreateDb();
+        var (agentId, siteId) = await SeedAsync(db, serverUpdates: true, clientUpdates: null, siteUpdates: null);
+        var clientId = (await db.Sites.SingleAsync(site => site.Id == siteId)).ClientId;
+
+        // CLIENT habilita, SITE proíbe: a política mais específica decide — false.
+        db.PatchPolicies.Add(new PatchPolicy
+        {
+            Id = Guid.NewGuid(),
+            ScopeType = PatchApprovalScopeType.Client,
+            ClientId = clientId,
+            Sources = "[\"os\",\"third_party\"]",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        db.PatchPolicies.Add(new PatchPolicy
+        {
+            Id = Guid.NewGuid(),
+            ScopeType = PatchApprovalScopeType.Site,
+            SiteId = siteId,
+            Sources = "[\"os\"]",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var payload = await BuildPayloadAsync(db, agentId);
+        Assert.That(payload["windowsUpdateThirdPartyEnabled"], Is.EqualTo(false),
+            "política de site (mais específica) que proíbe vence o client que permite");
+
+        // Sem a política de site, o client decide.
+        var sitePolicy = await db.PatchPolicies.SingleAsync(p => p.ScopeType == PatchApprovalScopeType.Site);
+        db.PatchPolicies.Remove(sitePolicy);
+        await db.SaveChangesAsync();
+
+        var fromClient = await BuildPayloadAsync(db, agentId);
+        Assert.That(fromClient["windowsUpdateThirdPartyEnabled"], Is.EqualTo(true));
+    }
+
+    [Test]
+    public void Go_le_a_chave_exatamente_windowsUpdateThirdPartyEnabled()
+    {
+        // Guarda de contrato com o agent: a chave chega camelCase no payload
+        // (windowsUpdateThirdPartyEnabled) e o campo Go usa a mesma tag json.
+        Assert.That(
+            JsonNamingPolicy.CamelCase.ConvertName("WindowsUpdateThirdPartyEnabled"),
+            Is.EqualTo("windowsUpdateThirdPartyEnabled"));
+    }
+
     // ── (e) ResolvedConfiguration + Inheritance ───────────────────
 
     [Test]
@@ -381,6 +471,7 @@ public class UpdatesTabEnabledTests
             service,
             new NoopTlsProbe(),
             new NoopMcpPolicyRepository(),
+            new PatchRepository(db),
             NullLogger<GetAgentConfigurationHandler>.Instance);
 
         var result = await handler.Handle(new GetAgentConfigurationQuery(agentId), CancellationToken.None);
@@ -445,6 +536,9 @@ public class UpdatesTabEnabledTests
                 typeof(Client),
                 typeof(Site),
                 typeof(Agent),
+                // Origem de terceiros da política de patches (D22): o payload
+                // do agent resolve patch_policies por escopo.
+                typeof(PatchPolicy),
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()

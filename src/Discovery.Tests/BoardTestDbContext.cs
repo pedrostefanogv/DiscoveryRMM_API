@@ -26,6 +26,10 @@ internal sealed class BoardTestDbContext(DbContextOptions<DiscoveryDbContext> op
             typeof(Agent),
             typeof(AgentWindowsUpdate),
             typeof(AgentWindowsUpdateSnapshot),
+            // Origem de terceiros da política de patches (D22): a conformidade
+            // resolve a política efetiva por escopo, então o contexto reduzido
+            // precisa conhece-la.
+            typeof(PatchPolicy),
             typeof(Ticket),
             typeof(AutomationTaskDefinition),
             typeof(AutomationExecutionReport),
@@ -45,6 +49,7 @@ internal sealed class BoardTestDbContext(DbContextOptions<DiscoveryDbContext> op
         modelBuilder.Entity<Agent>(entity => entity.HasKey(item => item.Id));
         modelBuilder.Entity<AgentWindowsUpdate>(entity => entity.HasKey(item => item.Id));
         modelBuilder.Entity<AgentWindowsUpdateSnapshot>(entity => entity.HasKey(item => item.AgentId));
+        modelBuilder.Entity<PatchPolicy>(entity => entity.HasKey(item => item.Id));
         modelBuilder.Entity<Ticket>(entity => entity.HasKey(item => item.Id));
         modelBuilder.Entity<AutomationTaskDefinition>(entity => entity.HasKey(item => item.Id));
         modelBuilder.Entity<AutomationExecutionReport>(entity => entity.HasKey(item => item.Id));
