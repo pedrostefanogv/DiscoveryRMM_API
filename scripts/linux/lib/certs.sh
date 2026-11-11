@@ -76,13 +76,17 @@ setup_self_signed_proxy_certificate() {
   san_entry="$(build_certificate_san_entry "$fido2_server_domain")"
   [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
 
-  if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
-    san_entry="$(build_certificate_san_entry "$INTERNAL_API_HOST")"
+  # Guardas ${VAR:-}: este caminho tambem e alcancado fora do wizard (modes.sh
+  # switch_tls_provider), onde ACCESS_MODE/hosts nunca foram normalizados. Sem
+  # elas, set -u aborta com "ACCESS_MODE: unbound variable". Vazio equivale a
+  # "nem internal nem external": nenhum SAN extra e adicionado.
+  if [[ "${ACCESS_MODE:-}" == "internal" || "${ACCESS_MODE:-}" == "hybrid" ]]; then
+    san_entry="$(build_certificate_san_entry "${INTERNAL_API_HOST:-}")"
     [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
   fi
 
-  if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
-    san_entry="$(build_certificate_san_entry "$EXTERNAL_API_HOST")"
+  if [[ "${ACCESS_MODE:-}" == "external" || "${ACCESS_MODE:-}" == "hybrid" ]]; then
+    san_entry="$(build_certificate_san_entry "${EXTERNAL_API_HOST:-}")"
     [[ -n "$san_entry" ]] && san_entries+=("$san_entry")
   fi
 
@@ -284,11 +288,11 @@ load_existing_tls_defaults() {
 }
 
 setup_cloudflare_tunnel() {
-  [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]] || return 0
+  [[ "${ACCESS_MODE:-}" == "external" || "${ACCESS_MODE:-}" == "hybrid" ]] || return 0
 
   # Em modo external, falha de tunnel e critico; em modo hybrid, e aviso apenas.
   local tunnel_critical=0
-  if [[ "$ACCESS_MODE" == "external" ]]; then tunnel_critical=1; fi
+  if [[ "${ACCESS_MODE:-}" == "external" ]]; then tunnel_critical=1; fi
 
   log "Instalando e configurando cloudflared"
 
@@ -316,7 +320,17 @@ setup_cloudflare_tunnel() {
     warn "cloudflared nao encontrado apos tentativa de instalacao; seguindo sem tunnel automatico."; return
   fi
 
-  if ! sudo cloudflared service install "$CLOUDFLARE_TUNNEL_TOKEN"; then
+  # Token pode nao existir fora do wizard (prompts.sh/normalize.sh): sem a guarda
+  # ${VAR:-} o set -u aborta aqui em vez de emitir o warn/fail abaixo. Token vazio
+  # nao e um install valido, entao falha pelo mesmo ramo (crítico em external).
+  if [[ -z "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    if [[ "$tunnel_critical" -eq 1 ]]; then
+      fail "CLOUDFLARE_TUNNEL_TOKEN ausente: configure o token do tunnel (critico em ACCESS_MODE=external)."
+    fi
+    warn "CLOUDFLARE_TUNNEL_TOKEN ausente; seguindo sem tunnel automatico."; return
+  fi
+
+  if ! sudo cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN:-}"; then
     if [[ "$tunnel_critical" -eq 1 ]]; then
       fail "Falha ao configurar cloudflared service install (critico em ACCESS_MODE=external)."
     fi

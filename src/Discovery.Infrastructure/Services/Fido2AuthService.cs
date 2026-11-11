@@ -242,10 +242,14 @@ public class Fido2AuthService : IFido2Service
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? throw new InvalidOperationException("Resposta de assertion inválida.");
 
-        // Encontra a chave correspondente pelo CredentialId
+        // Encontra a chave correspondente pelo CredentialId.
+        // A comparação é por BYTES (CredentialIdMatches), nunca por string: o banco guarda
+        // base64url sem padding (ver PersistPendingKeyAsync) enquanto aqui a forma natural é
+        // Convert.ToBase64String (base64 padrão, COM '='). Comparar as strings cruas fazia
+        // TODA asserção falhar com "Credencial não reconhecida." (regressão 6188cd8).
         var credIdBase64 = Convert.ToBase64String(assertionResponse.RawId);
         var matchingKey = activeKeys
-            .FirstOrDefault(k => k.CredentialIdBase64 == credIdBase64)
+            .FirstOrDefault(k => CredentialIdMatches(k.CredentialIdBase64, credIdBase64))
             ?? throw new InvalidOperationException("Credencial não reconhecida.");
 
         var publicKey = Convert.FromBase64String(matchingKey.PublicKeyBase64!);
@@ -662,6 +666,19 @@ public class Fido2AuthService : IFido2Service
 
     internal static string ToBase64Url(byte[] bytes)
         => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    /// <summary>
+    /// Compara dois credential ids pelos BYTES decodificados, aceitando base64url (novo) ou base64
+    /// padrão (legado) dos dois lados. É a única forma correta de comparar: os mesmos bytes têm
+    /// representações textuais diferentes ('=' de padding, '+'/'/' vs '-'/'_'), então igualdade de
+    /// string recusa credenciais válidas. Ver a regressão 6188cd8: o login FIDO2 quebrava inteiro.
+    /// </summary>
+    internal static bool CredentialIdMatches(string? storedValue, string? returnedValue)
+    {
+        var stored = DecodeBase64AnyFormat(storedValue);
+        var returned = DecodeBase64AnyFormat(returnedValue);
+        return stored is not null && returned is not null && stored.AsSpan().SequenceEqual(returned);
+    }
 
     private static string? Truncate(string? value, int maxLength)
         => string.IsNullOrWhiteSpace(value)

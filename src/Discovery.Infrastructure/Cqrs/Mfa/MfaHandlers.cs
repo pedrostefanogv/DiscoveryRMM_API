@@ -161,13 +161,13 @@ public sealed class CompleteFido2RegistrationCommandHandler(
         return created.Id;
     }
 
-    /// <summary>Compara credential ids pelos bytes: o banco pode ter base64url (novo) ou base64 padrão (legado).</summary>
+    /// <summary>
+    /// Compara credential ids pelos bytes: o banco pode ter base64url (novo) ou base64 padrão (legado).
+    /// Delega ao comparador único do Fido2AuthService — antes havia uma cópia do algoritmo aqui e o
+    /// mesmo teste faltava no CompleteAssertionAsync, que é justamente onde a regressão 6188cd8 doeu.
+    /// </summary>
     private static bool CredentialIdMatches(string storedValue, string returnedValue)
-    {
-        var stored = Fido2AuthService.DecodeBase64AnyFormat(storedValue);
-        var returned = Fido2AuthService.DecodeBase64AnyFormat(returnedValue);
-        return stored is not null && returned is not null && stored.AsSpan().SequenceEqual(returned);
-    }
+        => Fido2AuthService.CredentialIdMatches(storedValue, returnedValue);
 
     /// <summary>Converte o base64url devolvido pelo serviço no nome WebAuthn minúsculo ("internal").</summary>
     private static string DecodeTransportName(string base64UrlValue)

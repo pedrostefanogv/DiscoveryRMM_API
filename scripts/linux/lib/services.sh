@@ -353,8 +353,10 @@ ensure_nats_fanout_stream() {
     nats "$@"
   }
 
+  # Ate 7 tentativas: 2, 4, 8, 16, 32, 64 e 128s de espera (~254s no total).
+  local js_attempts="${NATS_JS_BOOTSTRAP_ATTEMPTS:-7}"
   local attempt delay
-  for attempt in $(seq 1 6); do
+  for attempt in $(seq 1 "$js_attempts"); do
     if run_nats_cli stream info "$stream_name" >/dev/null 2>&1; then
       if run_nats_cli stream update "$stream_name" \
         --subjects "$stream_subjects" \
@@ -382,8 +384,13 @@ ensure_nats_fanout_stream() {
         return
       fi
     fi
-    delay=$(( 2 ** (attempt < 4 ? attempt : 4) ))
-    log "Tentativa ${attempt}/6 de bootstrap JetStream falhou; aguardando ${delay}s..."
+    # Backoff EXPONENCIAL SEM TETO ANTECIPADO: 2, 4, 8, 16, 32, 64, 128s.
+    # O teto de 16s (2**4) fazia as ultimas tentativas esperarem sempre o mesmo
+    # tempo e desistir em ~48s. Em maquina ocupada com o build do agent
+    # (Wails/Go consumindo CPU e disco), o NATS respondia tarde e a instalacao
+    # terminava com o aviso de fallback mesmo com o JetStream saudavel.
+    delay=$(( 2 ** attempt ))
+    log "Tentativa ${attempt}/${js_attempts} de bootstrap JetStream falhou; aguardando ${delay}s..."
     sleep "$delay"
   done
 

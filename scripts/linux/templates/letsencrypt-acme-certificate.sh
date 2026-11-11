@@ -512,7 +512,12 @@ issue_or_renew() {
   output_file="$(mktemp)"
   challenge_file="$(mktemp)"
   # Cleanup garantido em qualquer saida (sucesso, fail ou abort do set -e).
-  trap 'rm -f "$output_file" "$challenge_file"' EXIT
+  # As variaveis sao `local` desta funcao: quando o trap EXIT dispara, ja sairam
+  # de escopo, e um "$output_file" cru abortaria o shell sob set -u (mensagem
+  # enganosa "line 1: output_file: unbound variable"). Os guards :- mantem o
+  # cleanup idempotente e preservam o exit code original (o status do trap e o
+  # do ultimo comando, e o do script e o status anterior se o trap retornar 0).
+  trap 'rm -f "${output_file:-}" "${challenge_file:-}"' EXIT
 
   if request_dns_challenges "$output_file" "$challenge_file" "$command_action"; then
     if [[ -s "$challenge_file" ]]; then

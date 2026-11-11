@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Discovery.Core.Cqrs.Mfa;
 using Discovery.Core.Entities.Security;
@@ -6,6 +8,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Infrastructure.Cqrs.Mfa;
 using Discovery.Infrastructure.Services;
+using Fido2NetLib.Cbor;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
@@ -126,6 +129,108 @@ public class Fido2AuthServiceTests
             "o id volta em base64url, o formato que o navegador entende");
     }
 
+    // ─── Regressão 6188cd8: comparação do credential id na assertion ───────
+
+    /// <summary>
+    /// Regressão da commit 6188cd8 (2026-11-09): o registro passou a gravar o credential id em
+    /// base64url (sem padding — ver PersistPendingKeyAsync), mas o CompleteAssertionAsync continuou
+    /// comparando strings cruas contra Convert.ToBase64String(RawId) (base64 padrão, com '=').
+    /// Em produção TODA asserção FIDO2 passou a falhar com "Credencial não reconhecida.".
+    /// </summary>
+    [Test]
+    public void CompleteAssertion_FindsKeyStoredAsBase64Url_AsTheRegistrationPathPersists()
+    {
+        var (service, _, repo) = new Harness();
+        var credentialId = new byte[] { 0xE0, 0xD1, 0xB5, 0x76, 0xCF, 0x17, 0x1D, 0x71, 0x01, 0x48, 0xA1, 0xE7, 0x52, 0x6D, 0x91, 0xA8, 0xFE, 0x61, 0x8C, 0xE2, 0xE4, 0x1A, 0x74, 0x87, 0x97, 0x7D, 0x03, 0xAA, 0x5E, 0x98, 0xAE, 0x23 };
+
+        var key = NewFido2Key(UserA, credentialId);
+        key.CredentialIdBase64 = Fido2AuthService.ToBase64Url(credentialId); // como o registro grava
+        key.PublicKeyBase64 = AssertionFixture.PublicKeyBase64;
+        // IsUserHandleOwnerOfCredentialId consulta o repositório: sem semear, a lib recusaria
+        // a assertion por "user is not owner" antes mesmo da verificação de assinatura.
+        repo.Seed(key);
+
+        Assert.That(key.CredentialIdBase64, Is.EqualTo("4NG1ds8XHXEBSKHnUm2RqP5hjOLkGnSHl30Dql6YriM"),
+            "pré-condição: exatamente o id da produção, em base64url de 43 chars");
+        Assert.That(key.CredentialIdBase64, Does.Not.Contain("="), "base64url não leva padding");
+        Assert.That(Convert.ToBase64String(credentialId),
+            Is.EqualTo("4NG1ds8XHXEBSKHnUm2RqP5hjOLkGnSHl30Dql6YriM="),
+            "pré-condição: a conversão antiga (linha 246) produzia a forma COM '=' — 44 chars");
+
+        var assertionJson = AssertionFixture.Build(service, UserA, key, credentialId);
+
+        // Antes da correção: InvalidOperationException("Credencial não reconhecida.") — nunca casava.
+        var result = service.CompleteAssertionAsync(UserA, assertionJson, [key]).GetAwaiter().GetResult();
+
+        Assert.That(result.KeyId, Is.EqualTo(key.Id), "a chave gravada em base64url precisa ser encontrada");
+        Assert.That(result.CredentialIdBase64, Is.EqualTo(Convert.ToBase64String(credentialId)),
+            "o resultado segue devolvendo a forma de sempre (compatibilidade do contrato)");
+    }
+
+    [Test]
+    public void CompleteAssertion_StillFindsLegacyKeyStoredAsStandardBase64()
+    {
+        // Credenciais antigas ficaram em base64 padrão COM padding; a comparação tem de continuar
+        // aceitando as duas formas — a correção não pode trocar um bug por outro.
+        var (service, _, repo) = new Harness();
+        var key = NewFido2Key(UserA, [1, 2, 3]);
+        key.CredentialIdBase64 = Convert.ToBase64String([1, 2, 3]);
+        key.PublicKeyBase64 = AssertionFixture.PublicKeyBase64;
+        // 3 bytes -> 4 chars, sem padding (só comprimentos não múltiplos de 3 geram '=').
+        Assert.That(key.CredentialIdBase64, Is.EqualTo("AQID"));
+        repo.Seed(key);
+
+        var assertionJson = AssertionFixture.Build(service, UserA, key, [1, 2, 3]);
+
+        var result = service.CompleteAssertionAsync(UserA, assertionJson, [key]).GetAwaiter().GetResult();
+
+        Assert.That(result.KeyId, Is.EqualTo(key.Id), "chave legada em base64 padrão continua aceita");
+    }
+
+    [Test]
+    public void CompleteAssertion_RejectsCredentialOfAnotherKey_WithTheSameErrorAsBefore()
+    {
+        // A tolerância é de CODIFICAÇÃO, não de identidade: id diferente continua recusado, com o
+        // mesmo tipo e a mesma mensagem (o log de produção e o suporte dependem disso).
+        var (service, _, _) = new Harness();
+        var registered = NewFido2Key(UserA, [1, 2, 3]);
+        registered.PublicKeyBase64 = AssertionFixture.PublicKeyBase64;
+        var other = NewFido2Key(UserA, [9, 9, 9]);
+        other.PublicKeyBase64 = AssertionFixture.PublicKeyBase64;
+
+        var assertionJson = AssertionFixture.Build(service, UserA, registered, [1, 2, 3]);
+
+        var ex = Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.CompleteAssertionAsync(UserA, assertionJson, [other]))
+            .GetAwaiter().GetResult();
+
+        Assert.That(ex.Message, Is.EqualTo("Credencial não reconhecida."));
+    }
+
+    // Pares REAIS: mesmos bytes, codificações diferentes. ("AQID"/"AQID=" NÃO é par válido:
+    // um valor de 3 bytes não leva padding; "AQID=" é base64 malformado.)
+    [TestCase("4NG1ds8XHXEBSKHnUm2RqP5hjOLkGnSHl30Dql6YriM", "4NG1ds8XHXEBSKHnUm2RqP5hjOLkGnSHl30Dql6YriM=")] // só o padding difere
+    [TestCase("4NG1dg", "4NG1dg==")] // 4 bytes: base64url sem padding vs base64 padrão com '=='
+    [TestCase("-___", "+///")] // mesmo valor, alfabetos diferentes
+    [TestCase("AQID", "AQID")] // 3 bytes: as duas formas coincidem (sem padding)
+    public void CredentialIdMatches_AcceptsBothEncodingsOfTheSameBytes(string base64Url, string base64Standard)
+    {
+        Assert.That(Fido2AuthService.CredentialIdMatches(base64Url, base64Standard), Is.True);
+        Assert.That(Fido2AuthService.CredentialIdMatches(base64Standard, base64Url), Is.True);
+        Assert.That(Fido2AuthService.CredentialIdMatches(base64Url, base64Url), Is.True);
+    }
+
+    [Test]
+    public void CredentialIdMatches_IsFalse_ForDifferentOrInvalidValues()
+    {
+        Assert.That(Fido2AuthService.CredentialIdMatches("AQID", "BAUG"), Is.False, "ids diferentes não casam");
+        Assert.That(Fido2AuthService.CredentialIdMatches(null, "AQID"), Is.False);
+        Assert.That(Fido2AuthService.CredentialIdMatches("AQID", null), Is.False);
+        Assert.That(Fido2AuthService.CredentialIdMatches("AQID", ""), Is.False);
+        Assert.That(Fido2AuthService.CredentialIdMatches("AQID", "não é base64!"), Is.False,
+            "valor indecifrável não pode virar match");
+    }
+
     // ─── Itens 4 e 5: telemetria e handler do registro ──────────────────────
 
     [Test]
@@ -214,6 +319,93 @@ public class Fido2AuthServiceTests
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Monta um AuthenticatorAssertionRawResponse REAL para uma chave já registrada: usa o
+    /// GetAssertionOptions/AssertionOptions.ToJson da própria biblioteca (challenge, rpId e origin
+    /// como em produção) e assina com uma chave ECDSA P-256 descartável cuja pública é a que vai
+    /// na chave gravada. Assim o teste atravessa o caminho de produção — inclusive a busca da
+    /// credencial — em vez de simular o resultado. (O foco do teste é a BUSCA da credencial; a
+    /// verificação de assinatura da lib roda antes, então a assinatura precisa ser válida.)
+    /// </summary>
+    private static class AssertionFixture
+    {
+        private static readonly ECDsa SigningKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+        /// <summary>
+        /// Pública no formato que o banco guarda: uma <b>COSE_Key</b> (CBOR), não SPKI.
+        /// A Fido2NetLib reconstrói um CredentialPublicKey a partir desses bytes; passar SPKI
+        /// faz o parser explodir com InvalidCastException (CborInteger -> CborMap).
+        /// ES256 = {1:2 (kty EC2), 3:-7 (alg ES256), -1:1 (crv P-256), -2:x, -3:y}.
+        /// </summary>
+        public static string PublicKeyBase64 { get; } = BuildCoseEs256PublicKey();
+
+        private static string BuildCoseEs256PublicKey()
+        {
+            var p = SigningKey.ExportParameters(false);
+            var cose = new CborMap
+            {
+                { 1, 2 },      // kty: EC2
+                { 3, -7 },     // alg: ES256
+                { -1, 1 },     // crv: P-256
+                { -2, p.Q.X! },
+                { -3, p.Q.Y! }
+            };
+            return Convert.ToBase64String(cose.Encode());
+        }
+
+        public static string Build(Fido2AuthService service, Guid userId, UserMfaKey key, byte[] credentialId)
+        {
+            var credentialIdB64Url = Fido2AuthService.ToBase64Url(credentialId);
+
+            // O BeginAssertionAsync grava o challenge no Redis falso; é dele que sai o challenge.
+            var optionsJson = service.BeginAssertionAsync(userId, [key]).GetAwaiter().GetResult();
+            Assert.That(optionsJson, Does.Contain(credentialIdB64Url),
+                "allowCredentials devolve o id em base64url — o formato que o navegador ecoa em rawId");
+
+            using var doc = JsonDocument.Parse(optionsJson);
+            var challenge = doc.RootElement.GetProperty("challenge").GetString()!;
+
+            var clientDataJson = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                type = "webauthn.get",
+                challenge,
+                origin = "https://localhost:5001", // Authentication:Fido2:Origins:0 do Harness
+                crossOrigin = false
+            });
+
+            var authData = BuildAuthenticatorData();
+            var signature = SigningKey.SignData(
+                [.. authData, .. SHA256.HashData(clientDataJson)],
+                HashAlgorithmName.SHA256,
+                DSASignatureFormat.Rfc3279DerSequence);
+
+            return JsonSerializer.Serialize(new
+            {
+                id = credentialIdB64Url,
+                rawId = credentialIdB64Url,
+                type = "public-key",
+                response = new
+                {
+                    clientDataJSON = Fido2AuthService.ToBase64Url(clientDataJson),
+                    authenticatorData = Fido2AuthService.ToBase64Url(authData),
+                    signature = Fido2AuthService.ToBase64Url(signature),
+                    userHandle = Fido2AuthService.ToBase64Url(Convert.FromBase64String(key.UserHandleBase64!))
+                }
+            });
+        }
+
+        /// <summary>rpIdHash(SHA256 de "localhost") + flags UP|UV + contador de assinatura (big-endian).</summary>
+        private static byte[] BuildAuthenticatorData()
+        {
+            var rpIdHash = SHA256.HashData(Encoding.UTF8.GetBytes("localhost"));
+            var authData = new byte[rpIdHash.Length + 1 + 4];
+            rpIdHash.CopyTo(authData, 0);
+            authData[rpIdHash.Length] = 0x05; // UP | UV
+            authData[^4] = 0; authData[^3] = 0; authData[^2] = 0; authData[^1] = 1;
+            return authData;
+        }
+    }
 
     private static UserMfaKey NewFido2Key(Guid userId, byte[] credentialId) => new()
     {
