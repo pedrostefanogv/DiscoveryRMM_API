@@ -781,6 +781,47 @@ public class RolePermissionBulkIntegrationTests
     }
 
     /// <summary>
+    /// ADVERSARIAL (concorrência): a supressão é um AsyncLocal — ela NÃO pode vazar para o
+    /// fluxo de outra requisição. Se vazasse, um lote de um operador silenciaria a
+    /// invalidação de cache de um comando unitário de OUTRO operador rodando ao mesmo tempo,
+    /// deixando o console dele com permissão obsoleta. Aqui 50 lotes concorrentes rodam
+    /// juntos e cada um confirma que a supressão vale dentro do próprio fluxo e some fora.
+    /// </summary>
+    [Test]
+    public async Task Supressao_nao_vaza_entre_requisicoes_concorrentes()
+    {
+        using var h = NewHarness();
+        var role = await SeedRoleAsync(h.Db);
+        var catalog = await SeedCatalogAsync(h.Db, 4);
+
+        var erros = 0;
+
+        await Task.WhenAll(Enumerable.Range(0, 50).Select(_ => Task.Run(async () =>
+        {
+            using (RolePermissionCacheSuppression.Suppress())
+            {
+                await Task.Yield();
+                // Dentro do fluxo do lote a supressão DEVE valer (é o que silencia os unitários).
+                if (!RolePermissionCacheSuppression.IsSuppressed) Interlocked.Increment(ref erros);
+            }
+
+            // Fora do lote, no mesmo fluxo, ela DEVE ter sido liberada.
+            if (RolePermissionCacheSuppression.IsSuppressed) Interlocked.Increment(ref erros);
+        })));
+
+        Assert.That(erros, Is.EqualTo(0),
+            "a supressão precisa ser visível só dentro do fluxo do lote e liberada ao sair");
+
+        // E um comando unitário depois de toda a concorrência volta a invalidar normalmente.
+        h.Permissions.Reset();
+        var unitario = new AddRolePermissionCommandHandler(h.RoleService, h.Permissions);
+        await unitario.Handle(new AddRolePermissionCommand(role.Id, catalog[0]), CancellationToken.None);
+
+        Assert.That(h.Permissions.InvalidateAllCalls, Is.EqualTo(1),
+            "após a concorrência, o unitário avulso continua invalidando 1x (nada vazou)");
+    }
+
+    /// <summary>
     /// Isola as duas contribuições: o contador do LOTE e o contador dos UNITÁRIOS reusados.
     /// Prova que a dos unitários é exatamente 0 (supressão funcionando) e que a gravação
     /// NÃO foi afetada — a supressão silencia a invalidação, não a escrita.
