@@ -72,9 +72,18 @@ public class OpenAiProvider : ILlmProvider
     }
 
     /// <summary>
-    /// Auto-detecta se o modelo pertence ao OpenRouter (modelos com "/" no nome: org/model)
-    /// e corrige provider/baseUrl automaticamente para evitar erros 404 quando o provider
-    /// está como "openai" mas o modelo é do OpenRouter.
+    /// Resolve o par (provider, baseUrl) efetivo antes de montar a requisição.
+    ///
+    /// Regras:
+    /// 1. Modelo com "/" (org/model) ou baseUrl contendo openrouter.ai => OpenRouter
+    ///    (auto-detecção para evitar 404 quando o provider está "openai").
+    /// 2. provider == "openrouter" => SEMPRE OpenRouter. Se a baseUrl configurada for
+    ///    vazia ou apontar para o host de outro provedor conhecido (api.openai.com),
+    ///    ela é substituída pelo default do OpenRouter. Sem isso, uma baseUrl
+    ///    herdada de default/migração vencia o provider correto e o chat devolvia
+    ///    401 invalid_api_key (credencial sk-or-v1 enviada à OpenAI).
+    /// 3. Qualquer outra baseUrl customizada legítima (proxy self-hosted, gateway
+    ///    interno, ollama, openrouter.ai) é preservada intacta.
     /// </summary>
     internal static (string Provider, string BaseUrl) AutoCorrectProviderAndBaseUrl(
         string? provider, string? baseUrl, string model)
@@ -94,12 +103,26 @@ public class OpenAiProvider : ILlmProvider
         var isOpenRouterBaseUrl = !string.IsNullOrWhiteSpace(baseUrl)
             && baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase);
 
-        if (isOpenRouterModel || isOpenRouterBaseUrl)
+        // Provider explicitamente "openrouter" é uma declaração de intenção do
+        // usuário: a baseUrl resultante TEM de ser do OpenRouter. Uma baseUrl
+        // apontando para o host de OUTRO provedor (ex: api.openai.com herdado de
+        // um default/migração) é dado inconsistente, não customização — enviar
+        // uma API key sk-or-v1 para api.openai.com devolve 401 invalid_api_key.
+        var providerIsOpenRouter = string.Equals(
+            provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase);
+
+        if (isOpenRouterModel || isOpenRouterBaseUrl || providerIsOpenRouter)
         {
             var effectiveProvider = AIIntegrationSettings.ProviderOpenRouter;
-            var effectiveBaseUrl = !string.IsNullOrWhiteSpace(baseUrl)
-                ? baseUrl
+
+            // Só preservamos a baseUrl configurada quando ela é de fato utilizável
+            // para o OpenRouter: o próprio OpenRouter, ou um host de terceiro
+            // legítimo (proxy/gateway self-hosted, ollama, etc.). Hosts de outro
+            // provedor conhecido (openai) são descartados em favor do default.
+            var effectiveBaseUrl = IsUsableOpenRouterBaseUrl(baseUrl)
+                ? baseUrl!
                 : AIIntegrationSettings.OpenRouterDefaultBaseUrl;
+
             return (effectiveProvider, effectiveBaseUrl);
         }
 
@@ -108,6 +131,30 @@ public class OpenAiProvider : ILlmProvider
             : ResolveDefaultBaseUrl(provider);
 
         return (provider ?? AIIntegrationSettings.ProviderOpenAi, finalBaseUrl!);
+    }
+
+    /// <summary>
+    /// Indica se uma baseUrl configurada pode ser usada como destino do OpenRouter.
+    /// Vazia => não (usa o default). Host de outro provedor conhecido (api.openai.com
+    /// / platform.openai.com) => não, é configuração inconsistente. Qualquer outro
+    /// host é tratado como customização legítima (proxy self-hosted, gateway interno,
+    /// ollama, openrouter.ai já correto) e é preservado.
+    /// </summary>
+    internal static bool IsUsableOpenRouterBaseUrl(string? baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl))
+            return false;
+
+        // Hosts que comprovadamente NÃO pertencem ao OpenRouter. Requisições para
+        // eles com credencial OpenRouter falham com 401.
+        if (baseUrl.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase)
+            || baseUrl.Contains("platform.openai.com", StringComparison.OrdinalIgnoreCase)
+            || baseUrl.Contains("chatgpt.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

@@ -35,6 +35,44 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
         request.Headers.TryAddWithoutValidation("X-Title", "Discovery RMM");
     }
 
+    /// <summary>
+    /// Resolve a baseUrl efetiva dos embeddings, aplicando a mesma invariante do
+    /// chat (<see cref="OpenAiProvider.AutoCorrectProviderAndBaseUrl"/>): uma
+    /// credencial OpenRouter NUNCA deve ser enviada para o host de outro provedor.
+    ///
+    /// A detecção do OpenRouter é feita pela própria credencial/baseUrl, porque a
+    /// assinatura de IEmbeddingProvider não carrega o provider configurado:
+    ///   - apiKey com prefixo "sk-or-" (chave OpenRouter) => OpenRouter;
+    ///   - baseUrl contendo openrouter.ai            => OpenRouter.
+    ///
+    /// Nesses casos, uma baseUrl apontando para api.openai.com (ou vazia) é
+    /// substituída pelo default do OpenRouter. Customizações legítimas
+    /// (proxy self-hosted, gateway interno, openrouter.ai) são preservadas.
+    /// </summary>
+    internal static string ResolveEmbeddingBaseUrl(string? baseUrlOverride, string? apiKey)
+    {
+        var isOpenRouterCredential = !string.IsNullOrWhiteSpace(apiKey)
+            && apiKey.StartsWith("sk-or-", StringComparison.OrdinalIgnoreCase);
+
+        var isOpenRouterBaseUrl = !string.IsNullOrWhiteSpace(baseUrlOverride)
+            && baseUrlOverride.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase);
+
+        var isOpenRouter = isOpenRouterCredential || isOpenRouterBaseUrl;
+
+        if (!string.IsNullOrWhiteSpace(baseUrlOverride))
+        {
+            // baseUrl de outro provedor conhecido + credencial OpenRouter => inconsistente.
+            if (isOpenRouter && !OpenAiProvider.IsUsableOpenRouterBaseUrl(baseUrlOverride))
+                return AIIntegrationSettings.OpenRouterDefaultBaseUrl;
+
+            return baseUrlOverride;
+        }
+
+        return isOpenRouter
+            ? AIIntegrationSettings.OpenRouterDefaultBaseUrl
+            : AIIntegrationSettings.OpenAiDefaultBaseUrl;
+    }
+
     public async Task<float[]> GenerateEmbeddingAsync(string text, string? modelOverride = null, string? apiKeyOverride = null, string? baseUrlOverride = null, CancellationToken ct = default)
     {
         var embeddingModel = string.IsNullOrWhiteSpace(modelOverride)
@@ -53,9 +91,7 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
             input
         });
 
-        var resolvedBaseUrl = !string.IsNullOrWhiteSpace(baseUrlOverride)
-            ? baseUrlOverride
-            : AIIntegrationSettings.OpenAiDefaultBaseUrl;
+        var resolvedBaseUrl = ResolveEmbeddingBaseUrl(baseUrlOverride, apiKeyOverride);
 
         var requestUri = new Uri(new Uri(resolvedBaseUrl.TrimEnd('/') + '/'), "embeddings");
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -71,7 +107,8 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogError("Embeddings API erro {Status}: {Body}", response.StatusCode, errorBody);
+            _logger.LogError("Embeddings API erro {Status} em {Host}: {Body}",
+                response.StatusCode, requestUri.Host, errorBody);
             throw new HttpRequestException($"Embeddings falhou: {response.StatusCode}");
         }
 
@@ -128,9 +165,7 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
             input = truncated
         });
 
-        var resolvedBaseUrl = !string.IsNullOrWhiteSpace(baseUrlOverride)
-            ? baseUrlOverride
-            : AIIntegrationSettings.OpenAiDefaultBaseUrl;
+        var resolvedBaseUrl = ResolveEmbeddingBaseUrl(baseUrlOverride, apiKeyOverride);
 
         var requestUri = new Uri(new Uri(resolvedBaseUrl.TrimEnd('/') + '/'), "embeddings");
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
@@ -146,7 +181,8 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogError("Embeddings batch API erro {Status}: {Body}", response.StatusCode, errorBody);
+            _logger.LogError("Embeddings batch API erro {Status} em {Host}: {Body}",
+                response.StatusCode, requestUri.Host, errorBody);
             throw new HttpRequestException($"Embeddings batch falhou: {response.StatusCode}");
         }
 
