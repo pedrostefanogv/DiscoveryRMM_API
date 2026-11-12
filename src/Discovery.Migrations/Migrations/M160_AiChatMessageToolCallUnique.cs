@@ -13,7 +13,8 @@ namespace Discovery.Migrations.Migrations;
 /// se aquele call_id já tinha role='tool' no histórico, nem duplicatas dentro
 /// do PRÓPRIO lote. As duas linhas eram persistidas e, no round seguinte,
 /// BuildLlmMessagesFromHistory (OrderBy SequenceNumber) as convertia em DOIS
-/// function_call_output para o mesmo call_id -> provedor 400 -> HTTP 500.
+/// function_call_output para o mesmo call_id -> provedor 400, que o middleware
+/// converte na resposta genérica "Erro interno do servidor" vista no cliente.
 /// Caso real: sessão 01a1cd68-31a4-716d-ad2c-637be5849a65, seq 16 e 17,
 /// call_856c0949dcd0b375_2 (get_pending_updates).
 ///

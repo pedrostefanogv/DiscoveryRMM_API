@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -22,17 +23,182 @@ public class AiChatMessageRepository : IAiChatMessageRepository
         return message;
     }
 
+    /// <summary>
+    /// Últimas <paramref name="limit"/> mensagens da sessão, em ordem crescente.
+    /// <para>
+    /// A fronteira é ALINHADA ao começo de um grupo de tool calls: o corte por
+    /// SequenceNumber caía no MEIO do grupo e o payload enviado ao LLM começava
+    /// com function_call_output ÓRFÃOS (sem o assistant que declarou os
+    /// call_ids) — o provedor rejeitava com 400 "No function call found for
+    /// function call output with call_id '...'". Era SISTEMÁTICO: toda sessão
+    /// cuja janela truncada caía num role='tool' quebrava (3 de 3 sessões com
+    /// >= 10 mensagens no incidente de 2026-11-11).
+    /// </para>
+    /// <para>
+    /// A regra é CONSERVADORA por necessidade: as colunas tool_call_id e
+    /// tool_calls_json são comparadas como TEXTO exato (sem parsing de prefixo
+    /// 'call_' — o formato do id varia por provedor, ex. 'chatcmpl-tool-...').
+    /// Quando as respostas de um grupo ficam com a declaração FORA da janela, a
+    /// janela RECUA até incluí-la (a declaração fica a poucas linhas do corte);
+    /// só quando ela não existe no histórico é que as respostas órfãs saem do
+    /// recorte. Cadeia aberta no FIM também é completada. O normalizador de
+    /// BuildLlmMessagesFromHistory continua sendo a rede de segurança final.
+    /// </para>
+    /// <para>
+    /// O limite é respeitado: nenhum caminho devolve mais que <c>safeLimit</c>
+    /// mensagens, então o custo de prompt continua limitado por
+    /// maxHistoryMessages.
+    /// </para>
+    /// </summary>
     public async Task<List<AiChatMessage>> GetRecentBySessionAsync(Guid sessionId, int limit, CancellationToken ct = default)
     {
         var safeLimit = Math.Clamp(limit, 1, 200);
 
-        return await _db.AiChatMessages
+        var window = await _db.AiChatMessages
             .AsNoTracking()
             .Where(m => m.SessionId == sessionId)
             .OrderByDescending(m => m.SequenceNumber)
             .Take(safeLimit)
             .OrderBy(m => m.SequenceNumber)
             .ToListAsync(ct);
+
+        if (window.Count == 0) return window;
+
+        // 1) Respostas com a declaração FORA da janela. Sem o assistant que
+        //    declarou o call_id não existe payload válido contendo a resposta
+        //    (function_call_output sem function_call = 400). A primeira tentativa
+        //    é incluir a declaração: o corte é sempre próximo dela (no incidente,
+        //    a declaração estava 3 linhas antes). Só se isso não resolver — a
+        //    declaração não existe — as respostas é que saem do recorte.
+        //    A resolução fica em NormalizeToolCallPairs como rede de segurança.
+        var declaredInWindow = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var msg in window)
+            foreach (var callId in ExtractCallIds(msg.ToolCallsJson))
+                declaredInWindow.Add(callId);
+
+        var orphanIds = window
+            .Where(m => m.Role == "tool" && !string.IsNullOrWhiteSpace(m.ToolCallId)
+                && !declaredInWindow.Contains(m.ToolCallId!))
+            .Select(m => m.ToolCallId!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (orphanIds.Count > 0)
+        {
+            // Declaração anterior à janela que cobre TODAS as respostas órfãs: ela
+            // é a cabeça legítima do grupo (mesma regra "respostas vêm logo depois
+            // do assistant que as declarou" usada pelo normalizador).
+            // Candidatas = últimas declarações antes da janela; a escolha da que
+            // cobre TODAS as respostas órfãs é feita em memória (a tradução de
+            // All(...Contains) não é suportada por todos os providers).
+            var candidates = await _db.AiChatMessages.AsNoTracking()
+                .Where(m => m.SessionId == sessionId
+                    && m.Role == "assistant"
+                    && m.ToolCallsJson != null
+                    && m.SequenceNumber < window[0].SequenceNumber
+                    && m.ToolCallsJson.Contains(window[0].ToolCallId!))
+                .OrderByDescending(m => m.SequenceNumber)
+                .Take(safeLimit)
+                .ToListAsync(ct);
+
+            var head = candidates.FirstOrDefault(m =>
+                orphanIds.All(id => m.ToolCallsJson!.Contains(id, StringComparison.Ordinal)));
+
+            var from = head?.SequenceNumber ?? window[0].SequenceNumber;
+            var expanded = await _db.AiChatMessages.AsNoTracking()
+                .Where(m => m.SessionId == sessionId && m.SequenceNumber >= from)
+                .OrderBy(m => m.SequenceNumber)
+                .Take(safeLimit)
+                .ToListAsync(ct);
+
+            var stillOrphan = expanded
+                .Where(m => m.Role == "tool" && !string.IsNullOrWhiteSpace(m.ToolCallId))
+                .Any(m => !expanded.Any(d => ExtractCallIds(d.ToolCallsJson)
+                    .Contains(m.ToolCallId!, StringComparer.OrdinalIgnoreCase)));
+
+            if (expanded.Count > 0 && !stillOrphan) return expanded;
+
+            // Declaração inexistente: avançar para depois das respostas órfãs.
+            var first = 0;
+            while (first < window.Count
+                && window[first].Role == "tool"
+                && !string.IsNullOrWhiteSpace(window[first].ToolCallId)
+                && !declaredInWindow.Contains(window[first].ToolCallId!))
+            {
+                first++;
+            }
+            return window.Skip(first).ToList();
+        }
+
+        // 2) Cadeia ABERTA no fim: a última mensagem que declara calls pode ter
+        //    respostas fora da janela (corte no meio do grupo pelo fim). Incluir
+        //    as mensagens seguintes dá ao normalizador as respostas que faltam.
+        var lastDeclaring = window.LastOrDefault(m => !string.IsNullOrWhiteSpace(m.ToolCallsJson));
+        if (lastDeclaring is not null)
+        {
+            var missing = new List<string>();
+            foreach (var callId in ExtractCallIds(lastDeclaring.ToolCallsJson))
+            {
+                if (window.Any(m => string.Equals(m.ToolCallId, callId, StringComparison.OrdinalIgnoreCase))) continue;
+                if (await ExistsAnswerAfterAsync(sessionId, lastDeclaring.SequenceNumber, callId, ct)) missing.Add(callId);
+            }
+
+            if (missing.Count > 0)
+            {
+                var declaration = await _db.AiChatMessages.AsNoTracking()
+                    .Where(m => m.SessionId == sessionId
+                        && m.SequenceNumber < lastDeclaring.SequenceNumber
+                        && m.ToolCallsJson != null
+                        && missing.Any(id => m.ToolCallsJson!.Contains(id)))
+                    .OrderByDescending(m => m.SequenceNumber)
+                    .FirstOrDefaultAsync(ct);
+
+                // A declaração anterior (que a janela cortou) é incluída; a
+                // ORIGEM não pode ser 'responses' — só linhas role='tool' contam
+                // como resposta (uma linha assistant com ToolCallId pode ser eco).
+                var from = declaration?.SequenceNumber ?? lastDeclaring.SequenceNumber;
+                var extended = await _db.AiChatMessages.AsNoTracking()
+                    .Where(m => m.SessionId == sessionId && m.SequenceNumber >= from)
+                    .OrderBy(m => m.SequenceNumber)
+                    .Take(safeLimit)
+                    .ToListAsync(ct);
+                if (extended.Count > window.Count) return extended;
+            }
+        }
+
+        return window;
+    }
+
+    /// <summary>Existe resposta (role='tool') deste call_id DEPOIS da sequência informada?</summary>
+    private Task<bool> ExistsAnswerAfterAsync(Guid sessionId, int sequenceNumber, string toolCallId, CancellationToken ct)
+        => _db.AiChatMessages.AsNoTracking().AnyAsync(m => m.SessionId == sessionId
+            && m.SequenceNumber > sequenceNumber
+            && m.Role == "tool"
+            && m.ToolCallId == toolCallId, ct);
+
+    /// <summary>
+    /// call_ids declarados em tool_calls_json. Leitura tolerante: o JSON é
+    /// gravado pelo servidor, mas um payload corrompido não pode derrubar a
+    /// leitura do histórico.
+    /// </summary>
+    private static IEnumerable<string> ExtractCallIds(string? toolCallsJson)
+    {
+        if (string.IsNullOrWhiteSpace(toolCallsJson)) yield break;
+
+        List<string> ids;
+        try
+        {
+            using var doc = JsonDocument.Parse(toolCallsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) yield break;
+            ids = doc.RootElement.EnumerateArray()
+                .Select(e => e.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() : null)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .ToList();
+        }
+        catch (JsonException) { yield break; }
+
+        foreach (var id in ids) yield return id;
     }
 
     public async Task<List<AiChatMessage>> SearchByAgentAsync(

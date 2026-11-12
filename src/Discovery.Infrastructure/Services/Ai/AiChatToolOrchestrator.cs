@@ -894,8 +894,186 @@ public class AiChatToolOrchestrator
 
     public static List<LlmMessage> BuildLlmMessagesFromHistory(List<AiChatMessage> history)
     {
-        return history.OrderBy(m => m.SequenceNumber)
-            .Select(m => new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName, ParseToolCallsFromJson(m.ToolCallsJson)))
-            .ToList();
+        // O corte de histórico (GetRecentBySessionAsync: últimas N por
+        // SequenceNumber) pode cair no MEIO de um grupo de tool calls. O payload
+        // passava a ter function_call_output SEM o function_call que o declarou
+        // -> provedor 400 "No function call found for function call output with
+        // call_id '...'" (o status real é 400; o cliente pode exibir 500): o chat
+        // só voltava a funcionar "limpando o chat" (sessão nova, janela nunca
+        // cortada no meio do grupo).
+        // A normalização roda no ponto ÚNICO onde histórico vira mensagens LLM,
+        // então vale para os 3 consumidores (sync, stream e multi-round).
+        return NormalizeToolCallPairs(history.Select(m => new OrderedLlmMessage(
+            m.SequenceNumber,
+            new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName, ParseToolCallsFromJson(m.ToolCallsJson)))));
+    }
+
+    /// <summary>Mensagem LLM + SequenceNumber: mantém a ordenação do histórico determinística.</summary>
+    internal readonly record struct OrderedLlmMessage(long SequenceNumber, LlmMessage Message);
+
+    /// <summary>
+    /// Mesmo invariante aplicado diretamente às mensagens LLM (usado pelos
+    /// consumidores que já têm <see cref="LlmMessage"/> em memória — o
+    /// multi-round não reescreve o histórico, só acrescenta tool results).
+    /// </summary>
+    public static List<LlmMessage> NormalizeToolCallPairs(List<LlmMessage> messages)
+        => NormalizeToolCallPairs(messages.Select(
+            (m, index) => new OrderedLlmMessage(index, m)));
+
+    /// <summary>
+    /// Garante o invariante exigido pelos provedores OpenAI-compatible:
+    /// <list type="bullet">
+    /// <item>toda mensagem <c>role='tool'</c> tem, ANTES dela no mesmo payload, o
+    /// assistant que declarou aquele <c>call_id</c>; e</item>
+    /// <item>todo <c>call_id</c> declarado por um assistant tem exatamente UMA
+    /// resposta <c>role='tool'</c>.</item>
+    /// </list>
+    /// <para>
+    /// Nada de conteúdo inventado: a resposta órfã é DESCARTADA (um tool result
+    /// sintético mentiria para o modelo) e um assistant que declara calls sem
+    /// todas as respostas volta como TEXTO PURO — assim o payload nunca carrega
+    /// function_call sem function_call_output nem o inverso. Uma declaração
+    /// completa que ficaria como ÚLTIMA mensagem (função sem resposta no fim)
+    /// também é removida.
+    /// </para>
+    /// </summary>
+    internal static List<LlmMessage> NormalizeToolCallPairs(IEnumerable<OrderedLlmMessage> ordered)
+    {
+        var source = ordered.OrderBy(m => m.SequenceNumber).Select(m => m.Message).ToList();
+        if (source.Count == 0) return source;
+
+        // Dois conceitos, com semânticas diferentes:
+        //   DECLARER = assistant com tool_calls. Obriga o payload a conter,
+        //              DEPOIS dele, exatamente uma resposta por call_id.
+        //   RESPOSTA = mensagem role='tool' OU mensagem com ToolCallId. O agente
+        //              às vezes responde o ÚLTIMO call da cadeia numa mensagem
+        //              assistant (o modelo repete o resultado como JSON e a linha
+        //              recebe ToolCallId) — em produção foi exatamente assim na
+        //              sessão 01a1cd68 (call_856c0949dcd0b375_2). O que o
+        //              provedor exige é uma function_call_output por function_call,
+        //              então qualquer linha com ToolCallId conta como resposta;
+        //              ao ir ao payload ela é reescrita para role='tool' (única
+        //              forma aceita).
+        var declares = new List<HashSet<string>>(source.Count);
+        for (var i = 0; i < source.Count; i++)
+        {
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (source[i].Role == "assistant" && source[i].ToolCalls is { Count: > 0 })
+                foreach (var call in source[i].ToolCalls!)
+                    if (!string.IsNullOrWhiteSpace(call.Id)) ids.Add(call.Id);
+            declares.Add(ids);
+        }
+
+        // Resposta = PRIMEIRA linha com ToolCallId daquele call_id; a dona é o
+        // ÚLTIMO declarer ANTES dela (pareamento posicional, igual ao provedor).
+        // Sem declarer antes -> órfã (a declaração ficou fora da janela).
+        var declarerOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var answerOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < source.Count; i++)
+        {
+            var id = source[i].ToolCallId;
+            if (string.IsNullOrWhiteSpace(id) || answerOf.ContainsKey(id!)) continue;
+
+            var owner = -1;
+            for (var j = i - 1; j >= 0; j--)
+                if (declares[j].Contains(id!)) { owner = j; break; }
+            if (owner < 0) continue; // órfã: nenhum assistant declara este call_id
+
+            declarerOf[id!] = owner;
+            answerOf[id!] = i;
+        }
+
+        var resolved = new bool[source.Count];
+        for (var i = 0; i < source.Count; i++)
+        {
+            if (declares[i].Count == 0) continue;
+            resolved[i] = declares[i].All(id => answerOf.TryGetValue(id, out var a) && a > i);
+        }
+
+        // Quando o declarer ORIGINAL de um call_id está fora da janela, a
+        // resposta dele fica órfã. Se outro declarer (adiante) declara o MESMO
+        // call_id, a resposta é reaproveitada para ele em vez de ser descartada.
+        foreach (var pair in answerOf.ToList())
+        {
+            if (declarerOf[pair.Key] >= 0 && resolved[declarerOf[pair.Key]]) continue;
+            for (var d = pair.Value + 1; d < source.Count; d++)
+            {
+                if (!resolved[d] || !declares[d].Contains(pair.Key)) continue;
+                declarerOf[pair.Key] = d;
+                break;
+            }
+        }
+        for (var i = 0; i < source.Count; i++)
+        {
+            if (declares[i].Count == 0) continue;
+            resolved[i] = declares[i].All(id => answerOf.TryGetValue(id, out var a) && a > i);
+        }
+
+        var payload = new List<LlmMessage>(source.Count);
+        for (var i = 0; i < source.Count; i++)
+        {
+            var msg = source[i];
+            var id = msg.ToolCallId;
+            var isCanonicalAnswer = !string.IsNullOrWhiteSpace(id)
+                && answerOf.TryGetValue(id!, out var answerIndex) && answerIndex == i;
+
+            if (msg.Role == "tool")
+            {
+                // Respostas: só a canônica de um declarer resolvido (duplicatas e
+                // órfãs saem — function_call_output sem function_call é 400).
+                if (isCanonicalAnswer && declarerOf.TryGetValue(id!, out var owner) && resolved[owner])
+                    payload.Add(msg);
+                continue;
+            }
+
+            // assistant (declarer ou não) e demais papéis.
+            if (isCanonicalAnswer)
+            {
+                // A resposta veio nesta linha (assistant com ToolCallId): vira
+                // tool message para casar com o function_call — é a única forma
+                // de function_call_output aceita pelo provedor. O dono é sempre
+                // ANTERIOR a esta linha (escolhido assim no pareamento), então a
+                // ordem exigida já está garantida.
+                if (declarerOf.TryGetValue(id!, out var respOwner) && respOwner < i && resolved[respOwner])
+                {
+                    payload.Add(new LlmMessage("tool", msg.Content, id, msg.ToolName));
+                    continue;
+                }
+                payload.Add(msg with { ToolCallId = null }); // texto puro: nunca output solto
+                continue;
+            }
+
+            if (declares[i].Count > 0 && !resolved[i])
+                msg = msg with { ToolCalls = null }; // function_call sem output é 400
+            else if (!string.IsNullOrWhiteSpace(id))
+                msg = msg with { ToolCallId = null }; // output solto: vira texto
+
+            payload.Add(msg);
+        }
+
+        // O payload não pode TERMINAR com função sem par. Apara a cauda de tool
+        // messages; se a declaração final ficou sem NENHUMA resposta emitida, a
+        // cadeia anterior também sai (senão a cauda terminaria no assistant que
+        // a declara).
+        var tail = payload.Count - 1;
+        while (tail >= 0 && payload[tail].Role == "tool") tail--;
+        if (tail > 0 && payload[tail].Role == "assistant" && payload[tail].ToolCalls is { Count: > 0 })
+        {
+            var hadResponse = tail + 1 < payload.Count;
+            payload.RemoveRange(tail, payload.Count - tail);
+            if (!hadResponse)
+            {
+                var cut = payload.Count - 1;
+                if (cut >= 0 && payload[cut].Role == "tool")
+                {
+                    var start = cut;
+                    while (start >= 0 && payload[start].Role == "tool") start--;
+                    if (start >= 1 && payload[start].Role == "assistant" && payload[start].ToolCalls is { Count: > 0 })
+                        payload.RemoveRange(start, payload.Count - start);
+                }
+            }
+        }
+
+        return payload;
     }
 }
