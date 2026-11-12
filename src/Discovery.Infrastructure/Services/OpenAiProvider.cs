@@ -1,5 +1,6 @@
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Discovery.Infrastructure.Services.Ai;
 using Microsoft.Extensions.Logging;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
@@ -583,38 +584,9 @@ public class OpenAiProvider : ILlmProvider
             "StreamWithToolsAsync LLM provider={Provider}: {MessageCount} messages, model={Model}, tools={Tools}",
             effectiveProvider, messages.Count, model, options.EnableTools && options.Tools != null);
 
-        var openAiMessages = new List<object> { new { role = "system", content = systemPrompt } };
-        foreach (var msg in messages)
-        {
-            if (msg.Role == "tool")
-            {
-                openAiMessages.Add(new { role = "tool", tool_call_id = msg.ToolCallId, content = msg.Content });
-            }
-            else if (msg.Role == "assistant" && msg.ToolCalls is { Count: > 0 })
-            {
-                // Assistant com tool_calls: serializa corretamente para que o LLM
-                // saiba qual tool foi chamada com quais argumentos.
-                openAiMessages.Add(new
-                {
-                    role = "assistant",
-                    content = string.IsNullOrEmpty(msg.Content) ? null : msg.Content,
-                    tool_calls = msg.ToolCalls.Select(tc => new
-                    {
-                        id = tc.Id,
-                        type = "function",
-                        function = new
-                        {
-                            name = tc.Name,
-                            arguments = tc.ArgumentsJson
-                        }
-                    }).ToList()
-                });
-            }
-            else
-            {
-                openAiMessages.Add(new { role = msg.Role, content = MessageContent(msg) });
-            }
-        }
+        // FIX-1 (P0): a serialização passa pelo ponto ÚNICO (BuildOpenAiMessages),
+        // que aplica o invariante de pareamento imediatamente antes do envio.
+        var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
 
         var payloadDict = new Dictionary<string, object?>
         {
@@ -919,10 +891,35 @@ public class OpenAiProvider : ILlmProvider
 
     // A8: serialização comum de mensagens (role=tool e assistant.tool_calls) —
     // compartilhada por CompleteAsync, StreamAsync e StreamWithToolsAsync.
-    private static List<object> BuildOpenAiMessages(string systemPrompt, List<LlmMessage> messages)
+    // FIX-1 (P0): este é o ÚLTIMO ponto antes do payload ir para a rede, então é
+    // aqui que o invariante de pareamento é aplicado sem exceção. O multi-round
+    // acrescenta os tool results DEPOIS de normalizar o histórico
+    // (AiChatStreamingOrchestrator:1128) — sem esta chamada o payload real ia ao
+    // provedor com function_call_output órfão/duplicado, e o provedor estrito
+    // (meta/muse-ember no OpenRouter) devolvia 400 "No function call found for
+    // function call output with call_id ...". O helper é idempotente: reaplicá-lo
+    // a um payload já normalizado não muda nada.
+    private List<object> BuildOpenAiMessages(string systemPrompt, List<LlmMessage> messages)
     {
+        // Descarte de resposta órfã registrado no log do request (o gancho é
+        // AsyncLocal: sem isso o descarte seria silencioso e o 400 opaco).
+        AiChatToolOrchestrator.OrphanDropLogger.Value = orphans =>
+            _logger.LogWarning(
+                "A8: function_call_output órfã descartada antes do envio — call_id(s): {CallIds}",
+                string.Join(", ", orphans));
+
+        var normalized = AiChatToolOrchestrator.NormalizeToolCallPairs(messages);
+        if (normalized.Count != messages.Count)
+        {
+            // Diagnóstico do próximo incidente: sem esta linha o descarte fica
+            // invisível (era exatamente o caso do 400 acima).
+            _logger.LogInformation(
+                "A8: pareamento de tool calls normalizado antes do envio — {Before} -> {After} mensagem(ns)",
+                messages.Count, normalized.Count);
+        }
+
         var openAiMessages = new List<object> { new { role = "system", content = systemPrompt } };
-        foreach (var msg in messages)
+        foreach (var msg in normalized)
         {
             if (msg.Role == "tool")
             {

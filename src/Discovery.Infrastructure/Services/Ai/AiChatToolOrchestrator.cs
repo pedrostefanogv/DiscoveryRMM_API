@@ -903,13 +903,94 @@ public class AiChatToolOrchestrator
         // cortada no meio do grupo).
         // A normalização roda no ponto ÚNICO onde histórico vira mensagens LLM,
         // então vale para os 3 consumidores (sync, stream e multi-round).
-        return NormalizeToolCallPairs(history.Select(m => new OrderedLlmMessage(
+        //
+        // FIX-2 (P0): este ponto é o HISTÓRICO, não o payload final. O multi-round
+        // ANEXA os tool results do round DEPOIS desta normalização
+        // (AiChatStreamingOrchestrator:1128), então uma declaração cujas respostas
+        // ainda não existem no histórico era "não resolvida" e o normalizador a
+        // rebaixava a TEXTO PURO — a declaração desaparecia do payload e as
+        // respostas anexadas em seguida viravam órfãs (400 "No function call
+        // found..." do meta/muse-ember). O normalizador continua sendo a rede de
+        // segurança; o que não pode é ele APAGAR uma declaração que o round
+        // corrente ainda vai responder. Aqui a declaração é preservada (o
+        // pareamento é responsabilidade do payload final, ver
+        // NormalizeToolCallPairs e OpenAiProvider.BuildOpenAiMessages), mas as
+        // respostas ÓRFÃS do histórico continuam sendo descartadas.
+        var source = history.Select(m => new OrderedLlmMessage(
             m.SequenceNumber,
-            new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName, ParseToolCallsFromJson(m.ToolCallsJson)))));
+            new LlmMessage(m.Role, m.Content, m.ToolCallId, m.ToolName, ParseToolCallsFromJson(m.ToolCallsJson))))
+            .ToList();
+
+        var declaredAnywhere = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in source)
+            if (entry.Message.Role == "assistant" && entry.Message.ToolCalls is { Count: > 0 })
+                foreach (var call in entry.Message.ToolCalls)
+                    if (!string.IsNullOrWhiteSpace(call.Id)) declaredAnywhere.Add(call.Id);
+
+        var kept = source.Where(entry =>
+            entry.Message.Role != "tool"
+            || string.IsNullOrWhiteSpace(entry.Message.ToolCallId)
+            || declaredAnywhere.Contains(entry.Message.ToolCallId!))
+            .ToList();
+
+        // O normalizador REBAIXA a texto puro toda declaração sem todas as
+        // respostas — é a decisão certa para o PAYLOAD FINAL, mas errada aqui:
+        // no multi-round as respostas do round corrente ainda não existem no
+        // histórico e são anexadas depois (AiChatStreamingOrchestrator:1128).
+        // Preserva-se apenas a ÚLTIMA declaração (a do round em aberto): é ela
+        // que absorve os tool results anexados. As declarações ANTERIORES
+        // continuam sob a regra estrita (uma declaração antiga sem resposta é
+        // histórico inconsistente e não pode ir ao provedor).
+        var lastDeclarerIndex = -1;
+        for (var i = 0; i < kept.Count; i++)
+            if (kept[i].Message.Role == "assistant" && kept[i].Message.ToolCalls is { Count: > 0 })
+                lastDeclarerIndex = i;
+
+        // A ÚLTIMA declaração é o round em ABERTO quando ainda não tem resposta
+        // no histórico: o multi-round anexa essas respostas logo depois
+        // (AiChatStreamingOrchestrator:1128). O normalizador rebaixaria essa
+        // declaração a texto puro (não resolvida) e as respostas anexadas
+        // ficariam órfãs — o 400 de produção.
+        var openDeclarer = (OrderedLlmMessage?)null;
+        if (lastDeclarerIndex >= 0)
+        {
+            var decl = kept[lastDeclarerIndex].Message;
+            var declIds = decl.ToolCalls!.Select(c => c.Id)
+                .Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+
+            // "Respondida" = existe resposta (ToolCallId) para QUALQUER call_id da
+            // declaração — mesma definição do normalizador.
+            var answered = declIds.Any(id => kept.Any(e =>
+                !string.IsNullOrWhiteSpace(e.Message.ToolCallId)
+                && string.Equals(e.Message.ToolCallId, id, StringComparison.OrdinalIgnoreCase)));
+
+            if (!answered)
+            {
+                openDeclarer = kept[lastDeclarerIndex];
+                kept.RemoveAt(lastDeclarerIndex);
+            }
+        }
+
+        var normalized = NormalizeToolCallPairs(kept);
+
+        // Reinsere a declaração em ABERTO no fim (é a última do histórico) para
+        // que as respostas anexadas pelo orquestrador tenham declarer.
+        if (openDeclarer is { } open) normalized.Add(open.Message);
+
+        return normalized;
     }
 
     /// <summary>Mensagem LLM + SequenceNumber: mantém a ordenação do histórico determinística.</summary>
     internal readonly record struct OrderedLlmMessage(long SequenceNumber, LlmMessage Message);
+
+    /// <summary>
+    /// Diagnóstico do descarte de respostas órfãs. O gancho é AsyncLocal para o
+    /// método estático registrar sem alterar assinatura nem vazar estado entre
+    /// requests concorrentes (o provider o preenche com o ILogger do escopo).
+    /// Antes o descarte era SILENCIOSO e foi preciso reconstruí-lo a partir do
+    /// journal de produção para achar o 400 de 2026-11-12.
+    /// </summary>
+    internal static readonly AsyncLocal<Action<IReadOnlyList<string>>?> OrphanDropLogger = new();
 
     /// <summary>
     /// Mesmo invariante aplicado diretamente às mensagens LLM (usado pelos
@@ -1051,28 +1132,67 @@ public class AiChatToolOrchestrator
             payload.Add(msg);
         }
 
-        // O payload não pode TERMINAR com função sem par. Apara a cauda de tool
-        // messages; se a declaração final ficou sem NENHUMA resposta emitida, a
-        // cadeia anterior também sai (senão a cauda terminaria no assistant que
-        // a declara).
+        // FIX-2: o par final SÓ pode ser removido quando está INCOMPLETO.
+        // O código anterior fazia:
+        //   while (tail >= 0 && payload[tail].Role == "tool") tail--;   // PULA as respostas
+        //   if (tail > 0 && ...ToolCalls...) { var hadResponse = tail + 1 < Count; payload.RemoveRange(tail, ...); }
+        // O laço para ANTES da última linha não-tool, ou seja, "hadResponse" media
+        // se existia QUALQUER linha depois do declarer — não se as respostas
+        // estavam completas. Com o par final RESPONDIDO (caso normal!),
+        // hadResponse era TRUE e o RemoveRange apagava declarer E respostas
+        // válidas; com o par final incompleto, apagava o declarer e deixava as
+        // respostas órfãs (o ramo !hadResponse era inalcançável). Os dois
+        // resultados quebravam o provedor: 400 "No function call found for
+        // function call output" / "Each function_call must have exactly one
+        // matching function_call_output".
+        // Correto: mantém o par final RESOLVIDO; se o declarer final estiver
+        // incompleto, remove a declaração E as respostas dela.
         var tail = payload.Count - 1;
         while (tail >= 0 && payload[tail].Role == "tool") tail--;
         if (tail > 0 && payload[tail].Role == "assistant" && payload[tail].ToolCalls is { Count: > 0 })
         {
-            var hadResponse = tail + 1 < payload.Count;
-            payload.RemoveRange(tail, payload.Count - tail);
-            if (!hadResponse)
-            {
-                var cut = payload.Count - 1;
-                if (cut >= 0 && payload[cut].Role == "tool")
-                {
-                    var start = cut;
-                    while (start >= 0 && payload[start].Role == "tool") start--;
-                    if (start >= 1 && payload[start].Role == "assistant" && payload[start].ToolCalls is { Count: > 0 })
-                        payload.RemoveRange(start, payload.Count - start);
-                }
-            }
+            var tailIds = new HashSet<string>(
+                payload[tail].ToolCalls!.Select(c => c.Id).Where(id => !string.IsNullOrWhiteSpace(id)),
+                StringComparer.OrdinalIgnoreCase);
+
+            // Respostas emitidas DEPOIS do declarer final (só tool rows, por
+            // construção do laço acima).
+            var answeredTailIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var i = tail + 1; i < payload.Count; i++)
+                if (!string.IsNullOrWhiteSpace(payload[i].ToolCallId)) answeredTailIds.Add(payload[i].ToolCallId!);
+
+            // Par final completo -> payload válido, nada a fazer.
+            if (!tailIds.IsSubsetOf(answeredTailIds))
+                payload.RemoveRange(tail, payload.Count - tail);
         }
+
+        // Rede de segurança final do invariante (independente do caminho que
+        // montou o payload): nenhuma tool message pode sobreviver sem o
+        // declarer ANTES dela. O caso real é o consumidor que ANEXA tool
+        // results DEPOIS da normalização (multi-round,
+        // AiChatStreamingOrchestrator:1128) — a linha anexada não tem declarer
+        // no payload e o provedor estrito recusa o round inteiro.
+        var declaredAt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var droppedOrphans = new List<string>();
+        for (var i = 0; i < payload.Count; i++)
+        {
+            var msg = payload[i];
+            if (msg.Role == "assistant" && msg.ToolCalls is { Count: > 0 })
+            {
+                foreach (var call in msg.ToolCalls)
+                    if (!string.IsNullOrWhiteSpace(call.Id)) declaredAt.Add(call.Id);
+                continue;
+            }
+            if (msg.Role != "tool") continue;
+            if (!string.IsNullOrWhiteSpace(msg.ToolCallId) && declaredAt.Contains(msg.ToolCallId!)) continue;
+
+            droppedOrphans.Add(msg.ToolCallId ?? "(sem call_id)");
+            payload.RemoveAt(i);
+            i--;
+        }
+
+        if (droppedOrphans.Count > 0)
+            OrphanDropLogger.Value?.Invoke(droppedOrphans);
 
         return payload;
     }

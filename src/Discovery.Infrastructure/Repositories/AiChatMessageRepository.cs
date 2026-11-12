@@ -162,12 +162,46 @@ public class AiChatMessageRepository : IAiChatMessageRepository
                     .OrderBy(m => m.SequenceNumber)
                     .Take(safeLimit)
                     .ToListAsync(ct);
-                if (extended.Count > window.Count) return extended;
+
+                // FIX-2: a extensão da janela podia INTRODUZIR respostas órfãs —
+                // o recuo até 'from' trazia linhas role='tool' cujo declarer ficou
+                // ainda mais atrás (fora do novo recorte). O caminho do passo 1
+                // valida isso (:114-119); este não validava nada além da
+                // contagem, e era por aqui que passava a janela quebrada do
+                // incidente de 2026-11-12 (o normalizador então descartava as
+                // respostas, e o round ficava sem elas). Reaplica a MESMA
+                // validação; se ainda houver órfã, usa a estratégia do passo 1.
+                if (extended.Count > window.Count)
+                {
+                    var stillOrphanExtended = extended
+                        .Where(m => m.Role == "tool" && !string.IsNullOrWhiteSpace(m.ToolCallId))
+                        .Any(m => !declaredInExtended(extended, m.ToolCallId!));
+
+                    if (!stillOrphanExtended) return extended;
+
+                    var firstClean = 0;
+                    while (firstClean < extended.Count
+                        && extended[firstClean].Role == "tool"
+                        && !string.IsNullOrWhiteSpace(extended[firstClean].ToolCallId)
+                        && !declaredInExtended(extended, extended[firstClean].ToolCallId!))
+                    {
+                        firstClean++;
+                    }
+                    return extended.Skip(firstClean).ToList();
+                }
             }
         }
 
         return window;
     }
+
+    /// <summary>
+    /// O call_id é declarado por alguma mensagem do próprio recorte? Usado para
+    /// validar as respostas role='tool' depois de estender a janela (FIX-2).
+    /// </summary>
+    private static bool declaredInExtended(List<AiChatMessage> messages, string toolCallId)
+        => messages.Any(m => ExtractCallIds(m.ToolCallsJson)
+            .Contains(toolCallId, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>Existe resposta (role='tool') deste call_id DEPOIS da sequência informada?</summary>
     private Task<bool> ExistsAnswerAfterAsync(Guid sessionId, int sequenceNumber, string toolCallId, CancellationToken ct)

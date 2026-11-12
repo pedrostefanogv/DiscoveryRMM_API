@@ -116,6 +116,33 @@ public class AiChatStreamingOrchestrator
     }
 
     /// <summary>
+    /// Verifica se o modelo configurado aceita function calling (FIX-3). Espelha
+    /// ShouldSendScreenshotImagesAsync: o catálogo (cache de 60 min) só é
+    /// consultado quando há tools para oferecer, e qualquer falha mantém o
+    /// comportamento anterior (oferece) — nunca derrubar o chat por
+    /// indisponibilidade do catálogo.
+    /// </summary>
+    private async Task<bool> ShouldSendToolsAsync(
+        AIIntegrationSettings settings, Guid clientId, Guid siteId, CancellationToken ct)
+    {
+        var model = settings.ChatModel;
+        if (string.IsNullOrWhiteSpace(model)) return true;
+        try
+        {
+            var info = await _modelCatalog.GetModelAsync(
+                clientId == Guid.Empty ? null : clientId,
+                siteId == Guid.Empty ? null : siteId,
+                model, ct);
+            return AiChatHelpers.ResolveToolsAllowed(info);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Falha ao resolver capacidade de tools do modelo {Model}; mantendo envio de tools", model);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Critério de propagação de token de texto do LLM. NÃO usar
     /// IsNullOrWhiteSpace aqui: deltas contendo somente espaço/quebra de linha
     /// (" ", "\n", "\n\n") são legítimos e separam palavras, itens de lista e
@@ -1154,6 +1181,43 @@ public class AiChatStreamingOrchestrator
 
             try { await _messageRepository.CreateBatchAsync(toolMsgs, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir tool results", traceId); }
+
+            // FIX-3: LIVELOCK. Quando o agent reenvia um lote cujos call_ids já
+            // foram TODOS respondidos no histórico, o modelo reemite as mesmas
+            // chamadas e o turno nunca converge (no incidente: 3 rounds com o
+            // MESMO lote de 8 tools; com o meta/muse-ember cada round terminava
+            // em 400). O dedupe B8-r2 descarta item a item e o orquestrador
+            // seguia pedindo ao modelo; aqui o turno é encerrado com uma
+            // mensagem acionável em vez de repetir o ciclo.
+            if (AiChatHelpers.IsFullyRepeatedToolBatch(
+                    toolResults.Select(tr => tr.CallId).ToList(), answeredCallIds))
+            {
+                _logger.LogWarning(
+                    "[{TraceId}] Lote de tool results INTEIRAMENTE já respondido — encerrando o turno para não repetir o ciclo. CallIds: {CallIds}",
+                    traceId, string.Join(", ", toolResults.Select(tr => tr.CallId)));
+                yield return new AiChatStreamChunk(Type: "error",
+                    Error: "Os resultados de ferramenta enviados já haviam sido processados. Reformule o pedido para continuar.");
+                yield break;
+            }
+
+            // FIX-3 (P0): o payload ACABOU de ser montado (histórico normalizado em
+            // :953 + tool results anexados acima). Renormaliza AQUI, no ponto do
+            // append, porque a invariante do provedor vale sobre o que vai ao
+            // wire — e era exatamente esta a lacuna do incidente de 2026-11-12:
+            // os tool results entravam DEPOIS da normalização e o provedor
+            // estrito (meta/muse-ember) devolvia 400 "Duplicate
+            // function_call_output" / "No function call found for function call
+            // output". O dedupe B8-r2 acima é por call_id e não reordena nem
+            // remove respostas órfãs deixadas pelo corte de janela; o
+            // normalizador faz as duas coisas.
+            var beforeNormalize = llmMessages.Count;
+            llmMessages = AiChatToolOrchestrator.NormalizeToolCallPairs(llmMessages);
+            if (llmMessages.Count != beforeNormalize)
+            {
+                _logger.LogInformation(
+                    "[{TraceId}] Payload do round renormalizado após o append dos tool results — {Before} -> {After} mensagens",
+                    traceId, beforeNormalize, llmMessages.Count);
+            }
         }
 
         var agent = await _agentRepository.GetByIdAsync(agentId);
@@ -1174,6 +1238,18 @@ public class AiChatStreamingOrchestrator
             : new List<LlmTool>();
         var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agentId, session.ClientId, session.SiteId, ct);
         var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
+
+        // FIX-3: guarda de capacidade de TOOLS (espelha a de visão). Um modelo
+        // sem function calling recebia todos os schemas e o provedor devolvia 400
+        // em cada round; sem tools o turno ainda entrega uma resposta em texto.
+        if (availableTools.Count > 0
+            && !await ShouldSendToolsAsync(aiSettings, session.ClientId, session.SiteId, ct))
+        {
+            _logger.LogWarning(
+                "[{TraceId}] Modelo {Model} não declara suporte a tools — {Count} schema(s) NÃO serão enviados",
+                traceId, aiSettings.ChatModel, availableTools.Count);
+            availableTools = new List<LlmTool>();
+        }
 
         var maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
 
@@ -1276,8 +1352,22 @@ public class AiChatStreamingOrchestrator
                     ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
                     : availableTools;
 
+            // FIX-3: teto de tools por round (58 schemas iam em TODOS os rounds).
+            var uncappedCount = roundTools.Count;
+            roundTools = AiChatHelpers.CapToolsPerRound(roundTools);
+            if (roundTools.Count != uncappedCount)
+            {
+                _logger.LogInformation(
+                    "[{TraceId}] Tools do round limitadas pelo teto de {Cap} — {Before} -> {After} (essenciais preservadas: {Kept})",
+                    traceId, AiChatHelpers.MaxToolsPerRound, uncappedCount, roundTools.Count,
+                    string.Join(", ", AiChatHelpers.AlwaysKeptToolNames));
+            }
+
+            // FIX-3: usa o maxTokens RESOLVIDO (ResolveChatMaxTokensAsync, :948) —
+            // antes o round usava ClampMaxTokens e a síntese o resolvido, então o
+            // teto de saída mudava no meio do turno.
             var streamOptions = new LlmOptions(
-                AiChatHelpers.ClampMaxTokens(aiSettings), AiChatHelpers.ClampTemperature(aiSettings),
+                maxTokens, AiChatHelpers.ClampTemperature(aiSettings),
                 string.IsNullOrWhiteSpace(aiSettings.ChatModel) ? null : aiSettings.ChatModel,
                 string.IsNullOrWhiteSpace(aiSettings.BaseUrl) ? null : aiSettings.BaseUrl,
                 string.IsNullOrWhiteSpace(aiSettings.ApiKey) ? null : aiSettings.ApiKey,

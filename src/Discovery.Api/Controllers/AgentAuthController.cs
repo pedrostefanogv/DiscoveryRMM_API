@@ -1555,12 +1555,27 @@ public class AgentAuthController : ControllerBase
         {
             if (!ct.IsCancellationRequested)
             {
-                // B7: não expor exceções internas (DB/provedor/paths) ao client.
-                // Log completo + mensagem genérica com traceId.
+                // B7: não expor exceções internas (DB/paths/stack) ao client.
+                // Exceção de provedor é DIFERENTE: a mensagem já é o próprio texto
+                // de erro do provedor (truncado), é o que o suporte precisa para
+                // distinguir 400 payload malformado / 401 key / 402 créditos / 429
+                // rate limit, e antes era substituída pelo texto genérico.
                 var traceId = HttpContext.TraceIdentifier;
-                _logger.LogError(ex, "[ChatStream] Exceção não tratada. TraceId={TraceId}", traceId);
-                await WriteSseJsonAsync(HttpContext,
-                    new { type = "error", error = "Erro interno ao processar o chat.", traceId }, ct);
+                var (status, detail) = DescribeChatStreamFailure(ex);
+                if (detail is null)
+                {
+                    _logger.LogError(ex, "[ChatStream] Exceção não tratada. TraceId={TraceId}", traceId);
+                    await WriteSseJsonAsync(HttpContext,
+                        new { type = "error", error = "Erro interno ao processar o chat.", traceId, status }, ct);
+                }
+                else
+                {
+                    _logger.LogError(ex,
+                        "[ChatStream] Falha do provedor LLM exposta ao client. TraceId={TraceId} Status={Status}",
+                        traceId, status);
+                    await WriteSseJsonAsync(HttpContext,
+                        new { type = "error", error = detail, traceId, status }, ct);
+                }
             }
         }
     }
@@ -1741,6 +1756,43 @@ public class AgentAuthController : ControllerBase
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    /// <summary>
+    /// F5: os erros de provedor LLM eram engolidos em "Erro interno ao processar o
+    /// chat.", o que destruía a diagnóstica (o agent grava status_code=0). Devolve o
+    /// texto real do provedor (já truncado por OpenAiProvider.BuildProviderErrorMessage
+    /// e re-truncado aqui por segurança) e o status HTTP a reportar no SSE.
+    /// Exceções genuinamente inesperadas (DB, NullReference, etc.) continuam com
+    /// detail null para o catch cair na mensagem genérica — B7 preservado.
+    /// </summary>
+    internal static (int Status, string? Detail) DescribeChatStreamFailure(Exception ex)
+    {
+        switch (ex)
+        {
+            case Discovery.Infrastructure.Services.ProviderStreamErrorException pse
+                when !string.IsNullOrWhiteSpace(pse.Message):
+                return (StatusCodes.Status502BadGateway, TruncateErrorDetail(pse.Message));
+            case HttpRequestException hre when !string.IsNullOrWhiteSpace(hre.Message):
+                // A mensagem já existe e é do provedor (OpenAiProvider:666). O status
+                // upstream (400/401/402/429) não vem no HttpRequestException — o
+                // provider o embute no texto — então reportamos 502 como status do SSE.
+                return (StatusCodes.Status502BadGateway, TruncateErrorDetail(hre.Message));
+            default:
+                return (StatusCodes.Status500InternalServerError, null);
+        }
+    }
+
+    /// <summary>
+    /// Teto do detalhe de erro de provedor exposto via SSE (~500 chars, o mesmo
+    /// usado por OpenAiProvider.BuildProviderErrorMessage). O corpo já vem
+    /// truncado, mas ProviderStreamErrorException monta a mensagem em volta dele.
+    /// </summary>
+    private const int MaxProviderErrorDetailLength = 500;
+
+    private static string TruncateErrorDetail(string detail) =>
+        detail.Length <= MaxProviderErrorDetailLength
+            ? detail
+            : detail[..MaxProviderErrorDetailLength] + "...";
 
     private static async Task WriteSseJsonAsync(HttpContext httpContext, object value, CancellationToken ct)
     {

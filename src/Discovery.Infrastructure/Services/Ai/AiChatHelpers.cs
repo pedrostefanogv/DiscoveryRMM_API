@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Discovery.Core.DTOs;
+using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Logging;
 
@@ -250,6 +251,81 @@ internal static class AiChatHelpers
         // recebia um stream vazio.
         if (ms <= 0) return 120_000;
         return Math.Max(ms, 120_000);
+    }
+
+    // ── Tools / capacidade do modelo ───────────────────────────────────────
+
+    /// <summary>
+    /// Teto de tools enviadas por round (FIX-3). Em produção 58 schemas iam em
+    /// TODOS os 78 rounds do incidente de 2026-11-12: cada round pagava o custo
+    /// dos 58 no prompt, e modelos estritos derrubavam o round (400). O teto é
+    /// aplicado depois de preservar as tools essenciais.
+    /// </summary>
+    public const int MaxToolsPerRound = 20;
+
+    /// <summary>
+    /// Tools que NUNCA saem pelo teto: removê-las tiraria a capacidade de buscar
+    /// na base de conhecimento, que é o caminho de resposta mais usado.
+    /// </summary>
+    public static readonly string[] AlwaysKeptToolNames = ["knowledge_search", "knowledge_list"];
+
+    /// <summary>
+    /// Aplica o teto de tools por round preservando as essenciais
+    /// (<see cref="AlwaysKeptToolNames"/>). Determinístico: a ordem de entrada é
+    /// mantida, então o mesmo conjunto produz sempre o mesmo recorte (importante
+    /// para o cache de prompt dos provedores).
+    /// </summary>
+    public static List<LlmTool> CapToolsPerRound(List<LlmTool> tools)
+    {
+        if (tools.Count <= MaxToolsPerRound) return tools;
+
+        var kept = new List<LlmTool>(MaxToolsPerRound);
+        foreach (var tool in tools)
+            if (AlwaysKeptToolNames.Contains(tool.Name, StringComparer.OrdinalIgnoreCase))
+                kept.Add(tool);
+
+        foreach (var tool in tools)
+        {
+            if (kept.Count >= MaxToolsPerRound) break;
+            if (!kept.Contains(tool)) kept.Add(tool);
+        }
+
+        return kept;
+    }
+
+    /// <summary>
+    /// Decide se as tools podem ser oferecidas ao modelo. Espelha a guarda de
+    /// visão (<see cref="ResolveScreenshotImagesAllowed"/>): a visão tinha guarda
+    /// de capacidade e as TOOLS não tinham nenhuma — um modelo sem suporte a
+    /// function calling recebia todos os schemas e devolvia 400 em cada round.
+    /// A capacidade é a MESMA que <c>AiModelCatalogService.ValidateModelAsync</c>
+    /// calcula (SupportedParameters contém "tools"/"tool_choice"), mas lida do
+    /// cache de GetModelAsync — sem requisição extra por round.
+    ///
+    ///   - catálogo sem informação → mantém o comportamento (oferece);
+    ///   - modelo com parâmetros declarados e SEM tools → não oferece.
+    /// </summary>
+    public static bool ResolveToolsAllowed(AiModelInfo? modelInfo)
+    {
+        if (modelInfo?.SupportedParameters is not { Count: > 0 } parameters) return true;
+        return parameters.Any(p =>
+            string.Equals(p, "tools", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(p, "tool_choice", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Livelock de reenvio (FIX-3): o agent reenvia o MESMO lote de tool results
+    /// já respondido e o modelo reemite as mesmas chamadas para sempre (no
+    /// incidente: 3 rounds com o mesmo lote de 8 tools, cada um terminando em
+    /// 400). Verdadeiro quando o lote NÃO está vazio e TODOS os call_ids já
+    /// foram respondidos no histórico da sessão.
+    /// </summary>
+    public static bool IsFullyRepeatedToolBatch(
+        IReadOnlyList<string> batchCallIds, IReadOnlyCollection<string> answeredCallIds)
+    {
+        var ids = batchCallIds.Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        if (ids.Count == 0) return false;
+        return ids.All(id => answeredCallIds.Contains(id));
     }
 
     // ── Imagens / captura de tela assistida ────────────────────────────────
