@@ -135,6 +135,19 @@ public class AiChatService : IAiChatService
                 McpToolCatalogMetadata.A2uiCapability, scopeClientId, scopeSiteId, agentId, ct);
             var (systemPrompt, injectedArticleIds) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct, a2uiEnabled);
             var llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(historyMessages);
+            // B8-r2: no caminho SÍNCRONO os tool results são gerados aqui mesmo
+            // (um por tool call emitida pelo LLM), então o mesmo CallId não pode
+            // ser respondido duas vezes no MESMO histórico. A proteção fica no
+            // ponto de ESCRITA do tool message: o provedor rejeita o request
+            // inteiro com 400 ("Each function_call must have exactly one
+            // matching function_call_output") e o cliente vê HTTP 500.
+            // A sentinela a2ui_action pode legitimamente repetir — isenta.
+            var answeredCallIds = new HashSet<string>(
+                historyMessages.Where(m => m.Role == "tool"
+                        && !string.IsNullOrWhiteSpace(m.ToolCallId)
+                        && !string.Equals(m.ToolName, AiChatTurnRound.A2uiActionToolName, StringComparison.OrdinalIgnoreCase))
+                    .Select(m => m.ToolCallId!),
+                StringComparer.OrdinalIgnoreCase);
             llmMessages.Add(new LlmMessage("user", message));
 
             var availableTools = await BuildAvailableToolsAsync(scopeClientId, scopeSiteId, agentId, aiSettings, ct);
@@ -173,6 +186,16 @@ public class AiChatService : IAiChatService
 
                 foreach (var tc in llmResponse.ToolCalls)
                 {
+                    var isA2uiAction = string.Equals(tc.Name, AiChatTurnRound.A2uiActionToolName, StringComparison.OrdinalIgnoreCase);
+                    if (!isA2uiAction && !answeredCallIds.Add(tc.Id))
+                    {
+                        // Já existe function_call_output para este call_id na
+                        // LLM messages: emitir outro derruba o round INTEIRO com
+                        // 400 no provedor. Descarta o duplicado e segue.
+                        _logger.LogWarning("[{TraceId}] ToolResult descartado (call_id já respondido no histórico do sync — evitar function_call_output duplicado): CallId={CallId}, Name={Name}, SessionId={SessionId}",
+                            traceId, tc.Id, tc.Name, session.Id);
+                        continue;
+                    }
                     var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson, scopeClientId, scopeSiteId, agentId, aiSettings, injectedArticleIds, departmentId, session.Id, ct);
                     await _messageRepository.CreateAsync(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "tool", Content = toolResult, ToolCallId = tc.Id, ToolName = tc.Name, CreatedAt = DateTime.UtcNow, TraceId = traceId }, ct);
                     llmMessages.Add(new LlmMessage("tool", toolResult, tc.Id, tc.Name));

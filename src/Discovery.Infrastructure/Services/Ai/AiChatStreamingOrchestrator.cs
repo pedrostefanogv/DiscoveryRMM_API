@@ -1021,6 +1021,29 @@ public class AiChatStreamingOrchestrator
             var pendingIds = new HashSet<string>(pendingCalls?.Select(c => c.Id) ?? [], StringComparer.OrdinalIgnoreCase);
             var pendingNames = new HashSet<string>(pendingCalls?.Select(c => c.Name) ?? [], StringComparer.OrdinalIgnoreCase);
 
+            // B8-r2 (500 "Duplicate function_call_output", caso
+            // call_856c0949dcd0b375_2 / sessão 01a1cd68: seq 16 e 17 com o MESMO
+            // tool_call_id): a validação B1 acima é de PERTENCIMENTO — ela diz
+            // que o CallId existe entre as tool calls pendentes, NÃO que ele
+            // ainda está SEM RESPOSTA. O agent reenvia por retry/duplicata um
+            // tool result já respondido e o lote era persistido inteiro; no
+            // round seguinte BuildLlmMessagesFromHistory (OrderBy
+            // SequenceNumber) convertia as duas linhas em DOIS
+            // function_call_output para o mesmo call_id -> provedor 400 ->
+            // HTTP 500 no cliente.
+            // answeredCallIds: call_ids JÁ respondidos no histórico carregado
+            // (role='tool'). a2ui_action fica FORA: é sentinela de clique em
+            // surface (não é tool call real) e pode legitimamente repetir.
+            var answeredCallIds = new HashSet<string>(
+                history.Where(m => m.Role == "tool"
+                        && !string.IsNullOrWhiteSpace(m.ToolCallId)
+                        && !string.Equals(m.ToolName, AiChatTurnRound.A2uiActionToolName, StringComparison.OrdinalIgnoreCase))
+                    .Select(m => m.ToolCallId!),
+                StringComparer.OrdinalIgnoreCase);
+            // CallIds já aceitos NESTE lote: cobre o mesmo CallId repetido
+            // dentro do próprio toolResults.
+            var acceptedCallIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             var toolMsgs = new List<AiChatMessage>();
             // Imagens de captura de tela são adicionadas DEPOIS de todos os tool
             // messages: intercalar mensagens user entre tool messages pode ser
@@ -1041,6 +1064,30 @@ public class AiChatStreamingOrchestrator
                     _logger.LogWarning("[{TraceId}] ToolResult rejeitado (não corresponde a tool call pendente): CallId={CallId}, Name={Name}, SessionId={SessionId}",
                         traceId, tr.CallId, tr.Name, session.Id);
                     continue;
+                }
+
+                // B8-r2: dedupe por CallId. Um call_id que o provedor já
+                // recebeu como function_call_output não pode ser respondido
+                // duas vezes — o provedor rejeita o round INTEIRO com 400
+                // ("Each function_call must have exactly one matching
+                // function_call_output") e o cliente vê HTTP 500.
+                // (a) já respondido no histórico persistido da sessão;
+                // (b) repetido dentro do PRÓPRIO lote toolResults.
+                // A sentinela a2ui_action é isenta nas duas checagens.
+                if (!isA2uiAction)
+                {
+                    if (answeredCallIds.Contains(tr.CallId))
+                    {
+                        _logger.LogWarning("[{TraceId}] ToolResult descartado (call_id já respondido no histórico — evitar function_call_output duplicado): CallId={CallId}, Name={Name}, SessionId={SessionId}",
+                            traceId, tr.CallId, tr.Name, session.Id);
+                        continue;
+                    }
+                    if (!acceptedCallIds.Add(tr.CallId))
+                    {
+                        _logger.LogWarning("[{TraceId}] ToolResult descartado (CallId duplicado dentro do próprio lote): CallId={CallId}, Name={Name}, SessionId={SessionId}",
+                            traceId, tr.CallId, tr.Name, session.Id);
+                        continue;
+                    }
                 }
 
                 // P2.11 (PLANO_CORRECAO_CANAL_ADMIN_IPC.md §4): falha LOCAL
