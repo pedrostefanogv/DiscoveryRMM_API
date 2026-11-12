@@ -73,6 +73,18 @@ public class ServerConfiguration
     /// </summary>
     public bool KnowledgeEmbeddingEnabled { get; set; } = true;
 
+    /// <summary>
+    /// TETO GLOBAL de chamadas de ferramentas MCP por minuto (todas as tools do
+    /// escopo somadas). Herdável por cliente e por site (null = herda), com
+    /// default 20 no servidor — o mesmo padrão do limite por tool de cada
+    /// política. O limite efetivo de uma tool é o MENOR entre
+    /// <c>McpToolPolicy.MaxCallsPerMinute</c> e este teto (ver
+    /// <see cref="McpToolRateLimitCatalog"/>): o teto nunca aumenta o limite da
+    /// tool, apenas o reduz. Faixa aceita: 1..600 (mesmo teto do
+    /// McpToolsController).
+    /// </summary>
+    public int McpToolCallsPerMinute { get; set; } = McpToolRateLimitCatalog.DefaultCallsPerMinute;
+
     // ============ Kill switches de feature (CFG-A) ============
     // Todos com DEFAULT IDÊNTICO ao valor que já estava no appsettings.json, para
     // o rollout não mudar comportamento nenhum. As chaves do appsettings passam a

@@ -169,6 +169,17 @@ public sealed class GetAgentConfigurationHandler(
             // o JSON legado mcp_tool_policy_json não é mais consumido.
             ["maintenanceWindow"] = TryDeserializeJson(siteConfig?.MaintenanceWindowJson ?? clientConfig?.MaintenanceWindowJson ?? serverConfig.MaintenanceWindowJson),
             ["mcpToolPolicy"] = mcpToolPolicy,
+            // Teto GLOBAL de chamadas de tools MCP do chat IA por minuto, resolvido no
+            // escopo do agente (Site > Client > Server). O limite POR TOOL vive em
+            // mcp_tool_policies (tela /settings/mcp-tools) e o efetivo aplicado pelo
+            // servidor é o MENOR dos dois — o agent não executa tools de servidor, então
+            // este valor é informativo para diagnóstico/telemetria do próprio agent.
+            // SEMPRE enviado (mesmo no default): ausência no payload NÃO pode ser lida
+            // como "sem teto" por uma versão futura do agent.
+            ["mcpToolCallsPerMinute"] = McpToolRateLimitCatalog.Normalize(
+                siteConfig?.McpToolCallsPerMinute
+                ?? clientConfig?.McpToolCallsPerMinute
+                ?? serverConfig.McpToolCallsPerMinute),
 
             // Branding & notification
             ["brandingSettings"] = TryDeserializeJson(serverConfig.BrandingSettingsJson),

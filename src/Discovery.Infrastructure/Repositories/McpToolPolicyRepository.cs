@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
@@ -21,28 +22,7 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
         // agente/site, é preciso RESOLVER a cadeia (agente.SiteId e site.ClientId)
         // para que a política do cliente/site também seja herdada — sem isso, as
         // linhas de cliente/site nunca chegavam ao escopo do agente.
-        var resolvedClient = clientId;
-        var resolvedSite = siteId;
-
-        if (agentId.HasValue)
-        {
-            var agentSite = await _db.Set<Agent>().AsNoTracking()
-                .Where(a => a.Id == agentId)
-                .Select(a => (Guid?)a.SiteId)
-                .FirstOrDefaultAsync(ct);
-            if (agentSite.HasValue)
-                resolvedSite = agentSite;
-        }
-
-        if (!resolvedClient.HasValue && resolvedSite.HasValue)
-        {
-            var siteClient = await _db.Set<Site>().AsNoTracking()
-                .Where(s => s.Id == resolvedSite)
-                .Select(s => (Guid?)s.ClientId)
-                .FirstOrDefaultAsync(ct);
-            if (siteClient.HasValue)
-                resolvedClient = siteClient;
-        }
+        var (resolvedSite, resolvedClient) = await ResolveAgentScopeAsync(clientId, siteId, agentId, ct);
 
         var all = await _db.Set<McpToolPolicy>()
             .AsNoTracking()
@@ -70,6 +50,36 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
         }
 
         return result.Values.ToList();
+    }
+
+    /// <inheritdoc />
+    public async Task<(Guid? SiteId, Guid? ClientId)> ResolveAgentScopeAsync(
+        Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default)
+    {
+        var resolvedClient = clientId;
+        var resolvedSite = siteId;
+
+        if (agentId.HasValue)
+        {
+            var agentSite = await _db.Set<Agent>().AsNoTracking()
+                .Where(a => a.Id == agentId)
+                .Select(a => (Guid?)a.SiteId)
+                .FirstOrDefaultAsync(ct);
+            if (agentSite.HasValue)
+                resolvedSite = agentSite;
+        }
+
+        if (!resolvedClient.HasValue && resolvedSite.HasValue)
+        {
+            var siteClient = await _db.Set<Site>().AsNoTracking()
+                .Where(s => s.Id == resolvedSite)
+                .Select(s => (Guid?)s.ClientId)
+                .FirstOrDefaultAsync(ct);
+            if (siteClient.HasValue)
+                resolvedClient = siteClient;
+        }
+
+        return (resolvedSite, resolvedClient);
     }
 
     public async Task<McpToolPolicy?> GetPolicyAsync(
@@ -184,7 +194,10 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
                     Source = normalizedSource,
                     IsEnabled = true,
                     Description = reg.Description,
-                    MaxCallsPerMinute = normalizedSource == McpToolSources.Agent ? 10 : 5,
+                    // Padrão ÚNICO de 20/min para servidor e agente: o teto global
+                    // herdável (McpToolCallsPerMinute) é que reduz o efetivo em
+                    // runtime, não o default da política.
+                    MaxCallsPerMinute = McpToolRateLimitCatalog.DefaultCallsPerMinute,
                     TimeoutSeconds = normalizedSource == McpToolSources.Agent ? 120 : 30,
                     CreatedAt = now,
                 });
@@ -234,28 +247,7 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
             return null;
 
         // Resolve a cadeia (agente -> site -> cliente) como em GetEffectivePoliciesAsync.
-        var resolvedClient = clientId;
-        var resolvedSite = siteId;
-
-        if (agentId.HasValue)
-        {
-            var agentSite = await _db.Set<Agent>().AsNoTracking()
-                .Where(a => a.Id == agentId)
-                .Select(a => (Guid?)a.SiteId)
-                .FirstOrDefaultAsync(ct);
-            if (agentSite.HasValue)
-                resolvedSite = agentSite;
-        }
-
-        if (!resolvedClient.HasValue && resolvedSite.HasValue)
-        {
-            var siteClient = await _db.Set<Site>().AsNoTracking()
-                .Where(s => s.Id == resolvedSite)
-                .Select(s => (Guid?)s.ClientId)
-                .FirstOrDefaultAsync(ct);
-            if (siteClient.HasValue)
-                resolvedClient = siteClient;
-        }
+        var (resolvedSite, resolvedClient) = await ResolveAgentScopeAsync(clientId, siteId, agentId, ct);
 
         // Parent do escopo atual (um nível mais genérico).
         Guid? parentClient = null;

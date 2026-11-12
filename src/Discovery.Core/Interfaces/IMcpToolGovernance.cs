@@ -30,6 +30,15 @@ public interface IMcpToolGovernance
     Task<bool> TryConsumeRateLimitAsync(string toolName, McpToolScope scope, int maxCallsPerMinute);
 
     /// <summary>
+    /// Limite EFETIVO de chamadas por minuto de uma tool no escopo: o MENOR entre
+    /// o limite da política da tool e o TETO GLOBAL herdável da configuração
+    /// (servidor → cliente → site). O teto global é um piso — nunca aumenta o
+    /// limite da tool. Ausência de configuração cai no default do produto (20).
+    /// </summary>
+    Task<int> ResolveMaxCallsPerMinuteAsync(
+        McpToolScope scope, int policyMaxCallsPerMinute, CancellationToken ct = default);
+
+    /// <summary>
     /// Quantas sobrescritas existem em escopos MAIS específicos que o informado —
     /// avisa o operador antes de desabilitar/bloquear no nível atual.
     /// </summary>

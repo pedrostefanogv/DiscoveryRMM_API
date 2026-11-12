@@ -1,3 +1,4 @@
+using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
@@ -95,6 +96,20 @@ public class McpToolExecutor : IMcpToolExecutor
     private readonly ISensorReadService _sensorReadService;
     private readonly ISensorSeriesService _sensorSeriesService;
     private readonly ILogger<McpToolExecutor> _logger;
+
+    // ATENÇÃO — NÃO INJETAR IMcpToolGovernance AQUI (regressão já vista):
+    // McpToolGovernance depende de IMcpToolExecutor, então injetar a governança
+    // neste construtor fecha o ciclo
+    //   IMcpToolExecutor -> IMcpToolGovernance -> IMcpToolExecutor
+    // e o Microsoft DI ESTOURA em runtime (InvalidOperationException, "A circular
+    // dependency was detected") no primeiro request do chat — o default value do
+    // parâmetro NÃO protege: o container só usa o default quando o serviço NÃO
+    // está registrado, e IMcpToolGovernance está registrado no Program.cs.
+    // Como o build e os testes unitários (que constroem à mão) passam normalmente,
+    // o defeito só aparece em runtime: por isso o teto global é resolvido aqui via
+    // IConfigurationResolver, que NÃO depende do executor (grafo acíclico).
+    private readonly IConfigurationResolver? _configurationResolver;
+
     private readonly ConcurrentDictionary<string, Func<McpToolCallContext, Task<string>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _rateLimitCounters = new(StringComparer.OrdinalIgnoreCase);
 
@@ -106,7 +121,8 @@ public class McpToolExecutor : IMcpToolExecutor
         IMediator mediator,
         ISensorReadService sensorReadService,
         ISensorSeriesService sensorSeriesService,
-        ILogger<McpToolExecutor> logger)
+        ILogger<McpToolExecutor> logger,
+        IConfigurationResolver? configurationResolver = null)
     {
         _policyRepo = policyRepo;
         _knowledgeMcpTool = knowledgeMcpTool;
@@ -116,6 +132,7 @@ public class McpToolExecutor : IMcpToolExecutor
         _sensorReadService = sensorReadService;
         _sensorSeriesService = sensorSeriesService;
         _logger = logger;
+        _configurationResolver = configurationResolver;
 
         // Handlers padrão da KB: busca por assunto + catálogo.
         RegisterHandler("knowledge_search", HandleKnowledgeSearchAsync);
@@ -136,6 +153,56 @@ public class McpToolExecutor : IMcpToolExecutor
         // série de sensores do agente. Exigem o seed global da M285.
         RegisterHandler("get_agent_sensors", HandleGetAgentSensorsAsync);
         RegisterHandler("get_agent_sensor_history", HandleGetAgentSensorHistoryAsync);
+    }
+
+    /// <summary>
+    /// Teto global herdável efetivo do escopo (servidor → cliente → site), ou 0
+    /// quando não há configuração/resolvedor — caso em que vale só o limite da
+    /// política da tool. Mesmo caminho de resolução usado pela governança
+    /// (<c>McpToolGovernance.ResolveGlobalCeilingAsync</c>): a cadeia
+    /// agente → site → cliente e a sanitização do valor ficam em helpers
+    /// compartilhados, para as duas pontas não divergirem.
+    /// </summary>
+    private async Task<int> ResolveGlobalCeilingAsync(
+        Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct)
+    {
+        if (_configurationResolver is null)
+            return 0;
+
+        try
+        {
+            // Resolve a cadeia agente → site → cliente pelo MESMO caminho das
+            // políticas: um escopo de agente herda a configuração do site dele
+            // (e, sem site, do cliente). Sem isso o teto do site seria ignorado
+            // para as tools executadas em nome de um agente.
+            (siteId, clientId) = await _policyRepo.ResolveAgentScopeAsync(
+                clientId, siteId, agentId, ct);
+
+            if (siteId.HasValue)
+            {
+                var resolved = await _configurationResolver.ResolveForSiteAsync(siteId.Value);
+                return resolved.McpToolCallsPerMinute;
+            }
+
+            if (clientId.HasValue)
+            {
+                var resolved = await _configurationResolver.ResolveForClientAsync(clientId.Value);
+                return resolved.McpToolCallsPerMinute;
+            }
+
+            // Escopo de agente sem site/cliente (ou global): o nível efetivo é o
+            // SERVIDOR — nunca 0, que desligaria o teto silenciosamente.
+            var server = await _configurationResolver.GetServerAsync();
+            return ConfigurationResolver.ResolveMcpToolCallsPerMinute(
+                null, null, server.McpToolCallsPerMinute);
+        }
+        catch (Exception ex)
+        {
+            // Repropaga para o chamador logar e cair no limite da política: aqui a
+            // decisão de fail-open é do fluxo de execução, não deste helper.
+            _logger.LogDebug(ex, "Falha ao resolver o teto global de tools MCP (site={SiteId} client={ClientId})", siteId, clientId);
+            throw;
+        }
     }
 
     public void RegisterHandler(string toolName, Func<McpToolCallContext, Task<string>> handler)
@@ -172,6 +239,29 @@ public class McpToolExecutor : IMcpToolExecutor
         }
 
         // 2. Rate limiting
+        //
+        // O limite aplicado é o EFETIVO: o MENOR entre o limite da política da
+        // tool e o TETO GLOBAL herdável das configurações (servidor → cliente →
+        // site). A regra do MIN vive num ponto único
+        // (McpToolRateLimitCatalog.Effective); aqui só se resolve o teto.
+        //
+        // A resolução é ASSÍNCRONA e roda ANTES do AddOrUpdate do contador — se
+        // rodasse depois, a chamada recusada já teria consumido cota da janela.
+        var effectiveMaxCallsPerMinute = policy.MaxCallsPerMinute;
+        try
+        {
+            effectiveMaxCallsPerMinute = McpToolRateLimitCatalog.Effective(
+                policy.MaxCallsPerMinute, await ResolveGlobalCeilingAsync(clientId, siteId, agentId, ct));
+        }
+        catch (Exception ex)
+        {
+            // Fail-open: indisponibilidade da configuração não pode derrubar a
+            // execução da tool; o limite da própria política continua valendo.
+            _logger.LogWarning(ex,
+                "Falha ao resolver o teto global de tools MCP para '{ToolName}'; usando o limite da política ({Max}/min)",
+                toolName, policy.MaxCallsPerMinute);
+        }
+
         var rateKey = $"{toolName}:{clientId}:{siteId}:{agentId}";
         var currentCount = _rateLimitCounters.AddOrUpdate(rateKey, 1, (_, v) => v + 1);
 
@@ -181,10 +271,11 @@ public class McpToolExecutor : IMcpToolExecutor
             _rateLimitCounters.TryRemove(rateKey, out var removed);
         });
 
-        if (currentCount > policy.MaxCallsPerMinute)
+        if (currentCount > effectiveMaxCallsPerMinute)
         {
-            _logger.LogWarning("MCP tool '{ToolName}' excedeu limite de {Max}/min", toolName, policy.MaxCallsPerMinute);
-            return $"{{\"error\": \"Rate limit excedido para tool '{toolName}'. Máximo: {policy.MaxCallsPerMinute}/min.\"}}";
+            _logger.LogWarning("MCP tool '{ToolName}' excedeu limite efetivo de {Max}/min (política {PolicyMax}/min)",
+                toolName, effectiveMaxCallsPerMinute, policy.MaxCallsPerMinute);
+            return $"{{\"error\": \"Rate limit excedido para tool '{toolName}'. Máximo: {effectiveMaxCallsPerMinute}/min.\"}}";
         }
 
         // 3. Buscar handler

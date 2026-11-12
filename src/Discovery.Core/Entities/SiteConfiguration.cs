@@ -54,6 +54,14 @@ public class SiteConfiguration
     /// </summary>
     public bool? KnowledgeEmbeddingEnabled { get; set; }
 
+    /// <summary>
+    /// TETO GLOBAL de chamadas de ferramentas MCP por minuto neste site
+    /// (null = herda do cliente e, na ausência dele, do servidor). É um PISO
+    /// sobre o limite por tool de cada política: o efetivo é o menor.
+    /// Faixa: 1..600.
+    /// </summary>
+    public int? McpToolCallsPerMinute { get; set; }
+
     // ============ Kill switches de feature (CFG-A) — null = herda cliente/servidor ============
 
     /// <summary>Modo observação da autorização por departamento (null = herda).</summary>

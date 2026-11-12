@@ -31,6 +31,10 @@ public static class ConfigurationFieldCatalog
         "InventoryIntervalHours",
         "AgentUpdatePolicyJson",
         "MaintenanceWindowJson",
+        // Teto global herdável de chamadas de tools MCP do chat de IA
+        // (servidor → cliente → site). Sem entrar aqui o campo não aparece na UI
+        // nem é reconhecido em locks/herança.
+        "McpToolCallsPerMinute",
         // "McpToolPolicyJson" removido do catálogo: o campo ficou LEGADO.
         // A política de tools MCP do chat é gerenciada apenas em
         // /settings/mcp-tools (mcp_tool_policies) e o payload do agent deriva

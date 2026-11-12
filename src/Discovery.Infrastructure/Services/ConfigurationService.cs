@@ -428,6 +428,10 @@ public class ConfigurationService : IConfigurationService
         CheckRange(type, config, "AgentHeartbeatIntervalSeconds", 10, 3600, errors);
         CheckRange(type, config, "AgentOnlineGraceSeconds", 60, 3600, errors);
         CheckRange(type, config, "RemoteConsentTimeoutSeconds", 10, 600, errors);
+        // Teto global herdável das tools MCP. 0 é REJEITADO: o rate limit não é
+        // desligável por aqui (o padrão de 20/min vale quando o campo é omitido).
+        CheckRange(type, config, "McpToolCallsPerMinute",
+            McpToolRateLimitCatalog.MinCallsPerMinute, McpToolRateLimitCatalog.MaxCallsPerMinute, errors);
         CheckRemoteConsentText(type, config, "RemoteConsentMessage", errors);
         CheckRemoteConsentText(type, config, "RemoteConsentBannerText", errors);
         CheckRange(type, config, "ObjectStorageUrlTtlHours", 1, 168, errors);
@@ -641,10 +645,28 @@ public class ConfigurationService : IConfigurationService
         }
     }
 
+    /// <summary>
+    /// Valida uma faixa numérica inteira.
+    ///
+    /// Cobre <c>int</c> e <c>int?</c>: um <c>int?</c> COM valor é boxeado como
+    /// <c>int</c> puro (Nullable&lt;T&gt; tem boxing próprio), então o pattern
+    /// <c>is int</c> casa nos dois casos. Um <c>int?</c> sem valor chega como
+    /// <c>null</c> e significa "herda do nível superior" — não é validado, que é o
+    /// comportamento desejado nos escopos de cliente/site.
+    ///
+    /// Propriedade ausente no tipo também é ignorada (o mesmo helper é usado para
+    /// Server/Client/Site, que não têm todos os campos).
+    /// </summary>
     private static void CheckRange(Type type, object obj, string propName, int min, int max, List<string> errors)
     {
         var prop = type.GetProperty(propName);
-        if (prop?.GetValue(obj) is int value && (value < min || value > max))
+        if (prop is null)
+            return;
+
+        // Um int? com valor é BOXEADO como int puro (Nullable<T> tem boxing
+        // próprio), então este pattern cobre int E int? com valor. Um int? sem
+        // valor chega como null e significa "herda" — não é validado.
+        if (prop.GetValue(obj) is int value && (value < min || value > max))
             errors.Add($"{propName} must be between {min} and {max}.");
     }
 

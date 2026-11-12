@@ -28,6 +28,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
+            entity.Property(config => config.McpToolCallsPerMinute).HasColumnName("mcp_tool_calls_per_minute");
             // Kill switches de feature (CFG-A).
             entity.Property(config => config.DepartmentAuthShadowMode).HasColumnName("department_auth_shadow_mode");
             entity.Property(config => config.PushEnabled).HasColumnName("push_enabled");
@@ -111,6 +112,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
+            entity.Property(config => config.McpToolCallsPerMinute).HasColumnName("mcp_tool_calls_per_minute");
             // Kill switches de feature herdáveis (CFG-A). OpenTelemetryEnabled,
             // MigrationsRunOnStartup e RealtimeContractMode NÃO existem aqui: são
             // do servidor inteiro.
@@ -166,6 +168,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
+            entity.Property(config => config.McpToolCallsPerMinute).HasColumnName("mcp_tool_calls_per_minute");
             // Kill switches de feature herdáveis (CFG-A) — mesmos do cliente.
             entity.Property(config => config.DepartmentAuthShadowMode).HasColumnName("department_auth_shadow_mode");
             entity.Property(config => config.PushEnabled).HasColumnName("push_enabled");

@@ -86,4 +86,28 @@ public interface IMcpToolPolicyRepository
     /// </summary>
     Task<McpToolPolicy?> GetAncestorLockedPolicyAsync(
         string toolName, Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolve a CADEIA de escopo (agente → site → cliente) devolvendo o par
+    /// (siteId, clientId) canônico a usar em consultas de herança. Um escopo de
+    /// agente sem site resolve para o cliente; sem site e sem cliente resolve para
+    /// (null, null) = nível SERVIDOR.
+    ///
+    /// Existe para que a resolução da cadeia (agente.SiteId → site.ClientId) seja
+    /// feita UMA vez e não divirja entre a leitura de políticas e a do teto global
+    /// de configuração.
+    /// </summary>
+    /// <remarks>
+    /// Implementação PADRÃO: a cadeia só depende dos IDs informados, então o
+    /// fallback é a identidade — escopos de cliente/site (que são os únicos que
+    /// chegam ao teto global) resolvem corretamente sem nenhum I/O. A
+    /// implementação real do repositório resolve agente.SiteId e site.ClientId.
+    ///
+    /// É um método de interface COM CORPO de propósito: fakes de teste e
+    /// implementações parciais não quebram ao compilar, e o contrato continua
+    /// disponível para quem precisa da cadeia completa.
+    /// </remarks>
+    Task<(Guid? SiteId, Guid? ClientId)> ResolveAgentScopeAsync(
+        Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default)
+        => Task.FromResult((siteId, clientId));
 }

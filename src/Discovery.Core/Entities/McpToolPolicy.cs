@@ -1,3 +1,5 @@
+using Discovery.Core.Configuration;
+
 namespace Discovery.Core.Entities;
 
 /// <summary>
@@ -21,7 +23,15 @@ public class McpToolPolicy
     /// agente). Para tools de servidor a descrição vem do executor.
     /// </summary>
     public string? Description { get; set; }
-    public int MaxCallsPerMinute { get; set; } = 5;
+    /// <summary>
+    /// Limite de chamadas POR MINUTO desta tool (janela fixa de 60s), DENTRO do
+    /// teto global herdável <c>McpToolCallsPerMinute</c> das configurações: o
+    /// limite efetivo em runtime é o MENOR dos dois
+    /// (ver <see cref="Discovery.Core.Configuration.McpToolRateLimitCatalog"/>).
+    /// Default 20 desde a padronização do produto (antes era 5 no servidor e 10
+    /// no agente).
+    /// </summary>
+    public int MaxCallsPerMinute { get; set; } = McpToolRateLimitCatalog.DefaultCallsPerMinute;
 
     /// <summary>
     /// Timeout da execução em segundos (0 = sem limite). O padrão do modelo

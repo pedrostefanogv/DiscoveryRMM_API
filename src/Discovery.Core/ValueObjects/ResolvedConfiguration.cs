@@ -39,6 +39,16 @@ public class ResolvedConfiguration
     /// </summary>
     public bool KnowledgeEmbeddingEnabled { get; set; }
 
+    // ============ Ferramentas MCP do chat de IA ============
+
+    /// <summary>
+    /// TETO GLOBAL de chamadas de ferramentas MCP por minuto já resolvido
+    /// (servidor → cliente → site), sempre sanitizado em 1..600 com default 20.
+    /// É um PISO: o limite efetivo de cada tool é o MENOR entre o
+    /// <c>McpToolPolicy.MaxCallsPerMinute</c> dela e este valor.
+    /// </summary>
+    public int McpToolCallsPerMinute { get; set; } = McpToolRateLimitCatalog.DefaultCallsPerMinute;
+
     // ============ Kill switches de feature (CFG-A) ============
 
     /// <summary>Modo observação da autorização por departamento (true = só observa).</summary>

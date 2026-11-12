@@ -216,6 +216,10 @@ public class ConfigurationResolver : IConfigurationResolver
         var remoteAccessRecording = ResolveValue("RemoteAccessRecordingEnabled", blocked, site?.RemoteAccessRecordingEnabled, client?.RemoteAccessRecordingEnabled, server.RemoteAccessRecordingEnabled);
         var remoteAccessRecordingAutoDelete = ResolveValue("RemoteAccessRecordingAutoDeleteExpired", blocked, site?.RemoteAccessRecordingAutoDeleteExpired, client?.RemoteAccessRecordingAutoDeleteExpired, server.RemoteAccessRecordingAutoDeleteExpired);
         var automaticLogging = ResolveValue("AutomaticLoggingEnabled", blocked, site?.AutomaticLoggingEnabled, client?.AutomaticLoggingEnabled, server.AutomaticLoggingEnabled);
+        // Teto global de chamadas de tools MCP (servidor → cliente → site),
+        // sanitizado: valor ausente/inválido cai no default 20 em vez de desligar
+        // o limite. É um PISO sobre o limite por tool das políticas.
+        var mcpToolCalls = ResolveValue("McpToolCallsPerMinute", blocked, site?.McpToolCallsPerMinute, client?.McpToolCallsPerMinute, server.McpToolCallsPerMinute);
 
         // Kill switches do SERVIDOR INTEIRO (CFG-A): sem override por cliente/site
         // (pipeline de telemetria do processo, schema do banco e contrato global do
@@ -272,6 +276,7 @@ public class ConfigurationResolver : IConfigurationResolver
             RemoteAccessRecordingEnabled = remoteAccessRecording.Value,
             RemoteAccessRecordingAutoDeleteExpired = remoteAccessRecordingAutoDelete.Value,
             AutomaticLoggingEnabled = automaticLogging.Value,
+            McpToolCallsPerMinute = ResolveMcpToolCallsPerMinute(site?.McpToolCallsPerMinute, client?.McpToolCallsPerMinute, server.McpToolCallsPerMinute),
             OpenTelemetryEnabled = openTelemetry.Value,
             MigrationsRunOnStartup = migrationsRunOnStartup.Value,
             RealtimeContractMode = realtimeContractMode.Item1,
@@ -309,6 +314,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["RemoteAccessRecordingEnabled"] = (int)remoteAccessRecording.Source;
         resolved.Inheritance["RemoteAccessRecordingAutoDeleteExpired"] = (int)remoteAccessRecordingAutoDelete.Source;
         resolved.Inheritance["AutomaticLoggingEnabled"] = (int)automaticLogging.Source;
+        resolved.Inheritance["McpToolCallsPerMinute"] = (int)mcpToolCalls.Source;
         resolved.Inheritance["OpenTelemetryEnabled"] = (int)openTelemetry.Source;
         resolved.Inheritance["MigrationsRunOnStartup"] = (int)migrationsRunOnStartup.Source;
         resolved.Inheritance["RealtimeContractMode"] = (int)realtimeContractMode.Item2;
@@ -329,6 +335,19 @@ public class ConfigurationResolver : IConfigurationResolver
 
         return resolved;
     }
+
+    /// <summary>
+    /// Sanitiza o teto global herdável de chamadas de tools MCP
+    /// (site ?? cliente ?? servidor) na faixa 1..600, caindo no default 20.
+    ///
+    /// É ESTÁTICO de propósito: a governança de tools (McpToolGovernance) usa
+    /// este helper para resolver o teto efetivo no hot path do chat sem injetar
+    /// IConfigurationResolver — o que criaria um ciclo de DI (o resolver não
+    /// depende da governança, mas os repositórios de configuração e de políticas
+    /// vivem no mesmo grafo scoped).
+    /// </summary>
+    public static int ResolveMcpToolCallsPerMinute(int? site, int? client, int server) =>
+        McpToolRateLimitCatalog.Normalize(site ?? client ?? server);
 
     public async Task ValidateInheritanceAsync()
     {

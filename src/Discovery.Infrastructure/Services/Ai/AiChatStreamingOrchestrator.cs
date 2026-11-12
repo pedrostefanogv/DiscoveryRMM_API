@@ -176,6 +176,9 @@ public class AiChatStreamingOrchestrator
     /// Consome o rate limit da tool do agente. Retorna a mensagem de erro JSON a
     /// devolver ao LLM quando o limite foi excedido, ou null quando permitido.
     /// Tool sem política cadastrada não tem limite (comportamento herdado).
+    ///
+    /// O limite aplicado é o EFETIVO: o MENOR entre o limite da política da tool e
+    /// o teto global herdável das configurações (servidor → cliente → site).
     /// </summary>
     private async Task<string?> CheckAgentToolRateLimitAsync(
         string toolName, McpToolScope scope, IReadOnlyDictionary<string, McpToolPolicy> policies)
@@ -183,15 +186,28 @@ public class AiChatStreamingOrchestrator
         if (!policies.TryGetValue(toolName, out var policy))
             return null;
 
-        if (await _governance.TryConsumeRateLimitAsync(toolName, scope, policy.MaxCallsPerMinute))
+        int effectiveMax;
+        try
+        {
+            effectiveMax = await _governance.ResolveMaxCallsPerMinuteAsync(scope, policy.MaxCallsPerMinute);
+        }
+        catch (Exception ex)
+        {
+            // Fail-open: indisponibilidade da configuração não pode derrubar o chat;
+            // o limite da tool continua valendo.
+            _logger.LogWarning(ex, "[MCP] Falha ao resolver o teto global de tools MCP; usando o limite da tool {ToolName}", toolName);
+            effectiveMax = policy.MaxCallsPerMinute;
+        }
+
+        if (await _governance.TryConsumeRateLimitAsync(toolName, scope, effectiveMax))
             return null;
 
-        _logger.LogWarning("[MCP] Rate limit excedido para tool do agente {ToolName} (max {Max}/min, escopo {Level})",
-            toolName, policy.MaxCallsPerMinute, scope.Level);
+        _logger.LogWarning("[MCP] Rate limit excedido para tool do agente {ToolName} (max efetivo {Max}/min, limite da tool {PolicyMax}/min, escopo {Level})",
+            toolName, effectiveMax, policy.MaxCallsPerMinute, scope.Level);
 
         return JsonSerializer.Serialize(new
         {
-            error = $"Rate limit excedido para '{toolName}'. Máximo: {policy.MaxCallsPerMinute} chamadas por minuto. Aguarde antes de tentar novamente."
+            error = $"Rate limit excedido para '{toolName}'. Máximo: {effectiveMax} chamadas por minuto. Aguarde antes de tentar novamente."
         });
     }
 
