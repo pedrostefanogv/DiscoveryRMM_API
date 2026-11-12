@@ -57,10 +57,17 @@ public class AiChatSettingsResolver
     public static int ClampKbContextTokens(AIIntegrationSettings settings)
         => settings.MaxKbContextTokens is >= 500 and <= 8000 ? settings.MaxKbContextTokens : DefaultMaxKbContextTokens;
 
+    /// <summary>
+    /// Teto de SAÍDA pedido explicitamente (ver AiChatHelpers.ClampMaxTokens).
+    /// Retorna <c>0</c> = AUTOMÁTICO: o orçamento por MODELO decide. O default
+    /// 2048 NÃO pode ser devolvido aqui — era o que fazia "automático" regredir
+    /// para 2048 em silêncio.
+    /// </summary>
     public static int ClampMaxTokens(AIIntegrationSettings settings)
-        => settings.MaxTokensPerRequest is >= 100 and <= AiChatConstants.MaxOutputTokensCeiling
-            ? settings.MaxTokensPerRequest
-            : DefaultMaxTokens;
+        => settings.MaxTokensPerRequest >= AiChatConstants.MinExplicitMaxTokens
+            && settings.MaxTokensPerRequest <= AiChatConstants.MaxOutputTokensCeiling
+                ? settings.MaxTokensPerRequest
+                : 0;
 
     public static double ClampTemperature(AIIntegrationSettings settings)
         => settings.Temperature is >= 0 and <= 2 ? settings.Temperature : DefaultTemperature;

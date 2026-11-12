@@ -15,10 +15,25 @@ internal static class AiChatHelpers
     public static int ClampHistoryMessages(AIIntegrationSettings settings)
         => settings.MaxHistoryMessages is >= 1 and <= 50 ? settings.MaxHistoryMessages : AiChatConstants.DefaultMaxHistoryMessages;
 
+    /// <summary>
+    /// Teto de SAÍDA pedido explicitamente pela configuração do tenant.
+    ///
+    /// Retorna <c>0</c> para sinalizar "AUTOMÁTICO" — ou seja, "sem pedido
+    /// explícito": o orçamento por MODELO (AiTokenBudgetResolver/AiTokenLimits)
+    /// decide o teto a partir da capacidade real do modelo e do teto do produto.
+    ///
+    /// Isso inclui 0, valor ausente e valores fora da faixa (1..99 são inválidos
+    /// como pedido). ANTES este método devolvia <see cref="AiChatConstants.DefaultMaxTokens"/>
+    /// (2048) em qualquer valor inválido — e esse era o bug: "automático"
+    /// regredia silenciosamente para 2048. O retorno 0 PRECISA ser propagado
+    /// até <see cref="AiTokenLimits.ResolveOutputCap"/>, que o interpreta como
+    /// "sem restrição do pedido". NÃO trocar o 0 pelo default aqui.
+    /// </summary>
     public static int ClampMaxTokens(AIIntegrationSettings settings)
-        => settings.MaxTokensPerRequest is >= 100 and <= AiChatConstants.MaxOutputTokensCeiling
-            ? settings.MaxTokensPerRequest
-            : AiChatConstants.DefaultMaxTokens;
+        => settings.MaxTokensPerRequest >= AiChatConstants.MinExplicitMaxTokens
+            && settings.MaxTokensPerRequest <= AiChatConstants.MaxOutputTokensCeiling
+                ? settings.MaxTokensPerRequest
+                : 0;
 
     public static double ClampTemperature(AIIntegrationSettings settings)
         => settings.Temperature is >= 0 and <= 2 ? settings.Temperature : AiChatConstants.DefaultTemperature;

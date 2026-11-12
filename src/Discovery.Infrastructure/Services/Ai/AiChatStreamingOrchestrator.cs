@@ -227,6 +227,8 @@ public class AiChatStreamingOrchestrator
     private async Task<int> ResolveChatMaxTokensAsync(
         Guid siteId, AIIntegrationSettings aiSettings, CancellationToken ct)
     {
+        // 0 = AUTOMÁTICO (sem pedido explícito): o resolvedor deriva o teto da
+        // capacidade real do modelo. NÃO trocar o 0 por um default aqui.
         var tenantMaxTokens = AiChatHelpers.ClampMaxTokens(aiSettings);
 
         try
@@ -237,7 +239,11 @@ public class AiChatStreamingOrchestrator
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Falha ao resolver o orçamento de tokens do chat; usando o teto do tenant.");
-            return tenantMaxTokens;
+            // O tenant pode estar em AUTOMÁTICO (0), que não é um teto utilizável
+            // como valor de max_tokens: devolver 0 enviaria "max_tokens: 0" ao
+            // provedor. Nesse caso cai no default do produto — o resolvedor é o
+            // único que sabe converter 0 em capacidade de modelo.
+            return tenantMaxTokens > 0 ? tenantMaxTokens : AiChatConstants.DefaultMaxTokens;
         }
     }
 

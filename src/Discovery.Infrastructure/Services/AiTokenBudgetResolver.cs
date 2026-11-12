@@ -55,12 +55,27 @@ public class AiTokenBudgetResolver(
         Guid siteId, Guid? clientId, AIIntegrationSettings settings, int requested,
         int? departmentCap = null, CancellationToken ct = default)
     {
-        // Teto do tenant só vale dentro da faixa válida; fora dela é ignorado (e o
-        // teto do produto/modelo assume), em vez de rebaixar silenciosamente.
-        var configuredCap = settings.MaxTokensPerRequest is >= 100 and <= AiTokenLimits.MaxOutputTokensCeiling
-            ? settings.MaxTokensPerRequest
-            : (int?)null;
-        var effectiveRequested = configuredCap.HasValue ? Math.Min(requested, configuredCap.Value) : requested;
+        // Teto do tenant só vale dentro da faixa válida; fora dela (inclusive 0 =
+        // AUTOMÁTICO) NÃO há pedido do tenant e o teto do produto/modelo assume,
+        // em vez de rebaixar silenciosamente para um default.
+        var configuredCap = settings.MaxTokensPerRequest >= AiChatConstants.MinExplicitMaxTokens
+            && settings.MaxTokensPerRequest <= AiTokenLimits.MaxOutputTokensCeiling
+                ? settings.MaxTokensPerRequest
+                : (int?)null;
+
+        // Duas grandezas DIFERENTES sendo combinadas:
+        //   - requested     = pedido DESTA chamada; 0 = AUTOMÁTICO (não restringe);
+        //   - configuredCap = teto EXPLÍCITO do administrador na configuração do
+        //     tenant. Continua valendo mesmo no automático: quem pediu "use a
+        //     capacidade do modelo" não autorizou ignorar o teto configurado.
+        // Por isso o 0 do pedido vira "sem restrição" (int.MaxValue) ANTES do min,
+        // e só permanece 0 (automático de ponta a ponta) quando o tenant também
+        // não definiu teto nenhum.
+        int effectiveRequested;
+        if (requested > 0)
+            effectiveRequested = configuredCap.HasValue ? Math.Min(requested, configuredCap.Value) : requested;
+        else
+            effectiveRequested = configuredCap ?? 0;
 
         var model = await TryGetModelAsync(clientId, siteId, settings.ChatModel, ct);
         return AiTokenLimits.BuildBudget(model, effectiveRequested, departmentCap, settings.ChatModel);

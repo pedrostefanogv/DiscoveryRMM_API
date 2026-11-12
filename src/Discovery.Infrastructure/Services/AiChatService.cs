@@ -155,8 +155,12 @@ public class AiChatService : IAiChatService
             // Orçamento model-aware também no chat síncrono: o pedido explícito do
             // cliente é limitado pela capacidade real do modelo e pelo teto do
             // produto (antes havia um clamp fixo de 8000 que rebaixava o pedido).
-            var requestedMaxTokens = requestMaxTokens.HasValue
-                ? Math.Clamp(requestMaxTokens.Value, 100, AiChatConstants.MaxOutputTokensCeiling)
+            // 0 (ou ausente) = AUTOMÁTICO: mantém o 0 para o resolvedor de orçamento
+            // interpretar como "sem pedido explícito" e deixar a capacidade REAL do
+            // modelo decidir. Math.Clamp(0, 100, teto) devolveria 100 e o automático
+            // ficaria travado num pedido de 100 tokens.
+            var requestedMaxTokens = requestMaxTokens is > 0
+                ? Math.Clamp(requestMaxTokens.Value, AiChatConstants.MinExplicitMaxTokens, AiChatConstants.MaxOutputTokensCeiling)
                 : AiChatHelpers.ClampMaxTokens(aiSettings);
 
             var clampedMaxTokens = (await _tokenBudgetResolver.ResolveForSiteAsync(

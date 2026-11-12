@@ -38,10 +38,30 @@ internal static class AiChatConstants
     public const int DefaultMaxHistoryMessages = 20;
     public const int DefaultMaxKbContextTokens = 2000;
     public const int DefaultMaxTokens = 2048; // ~1500 palavras — evita corte em scripts, explicações longas e respostas técnicas
-    // Teto de segurança do produto para tokens de SAÍDA. Os modelos contratados
-    // suportam 16k–100k+ de saída; 8000 era um teto herdado que revertia
-    // silenciosamente a configuração do administrador.
-    public const int MaxOutputTokensCeiling = 32768;
+    // Teto de segurança do produto para tokens de SAÍDA.
+    //
+    // VALOR DERIVADO DE MEDIÇÃO, NÃO DE ESTIMATIVA. Medição feita na API real do
+    // OpenRouter (catálogo de 475 modelos, 2026-11):
+    //   • mediana de max_completion_tokens = 128.000
+    //   • p90                              = 450.000
+    //   • máximo                           = 1.800.000
+    //   • 106 modelos oferecem MAIS de 128k de saída
+    //   • deepseek/deepseek-v4.1-flash-1017 (modelo em produção):
+    //         context_length = 1.048.576 | max_completion_tokens = 393.216
+    //
+    // O teto fica no p90 (450.000) para cobrir a grande maioria do catálogo sem
+    // desligar o limite de segurança. Os 32.768 anteriores cortavam o modelo de
+    // produção em ~12x e eram a causa do card A2UI truncado.
+    //
+    // ⚠️ NÃO "arredondar" este número de novo sem refazer a medição: ele não é
+    // um chute, é o p90 de um catálogo real de 475 modelos. Reduzi-lo volta a
+    // truncar respostas longas em silêncio.
+    public const int MaxOutputTokensCeiling = 450_000;
+
+    // Menor valor de MaxTokensPerRequest que ainda é tratado como PEDIDO
+    // EXPLÍCITO. Abaixo disso (e o 0) vale o modo AUTOMÁTICO: o orçamento por
+    // MODELO decide o teto, sem o pedido restringir nada.
+    public const int MinExplicitMaxTokens = 100;
     // Teto usado quando o catálogo não conhece o modelo (id inválido, alias auto).
     public const int UnknownModelOutputCap = 4096;
     public const double DefaultTemperature = 0.3; // Determinístico para tool calling, comandos PowerShell e citações precisas

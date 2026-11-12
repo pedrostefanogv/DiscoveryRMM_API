@@ -23,8 +23,19 @@ public class AiTokenBudgetTests
         (cap, _) = AiTokenLimits.ResolveOutputCap(4000, 65535, null, "gemini-2.5-flash");
         Assert.That(cap, Is.EqualTo(4000));
 
-        // o teto do produto limita mesmo com modelo maior
-        (cap, _) = AiTokenLimits.ResolveOutputCap(200000, 262144, null, "z-ai/glm-5.3");
+        // O teto do produto limita mesmo com modelo maior.
+        //
+        // AJUSTE JUSTIFICADO (teto do produto 32.768 -> 450.000, decisão de
+        // produto): este caso usava pedido=200000, que ANTES excedia o teto de
+        // 32.768 e por isso exercitava o ramo do teto. Com o teto em 450.000 o
+        // PEDIDO passou a ser o menor limite (min(200000, 262144, 450000) =
+        // 200000) e o teste deixaria de exercitar o ramo que ele existe para
+        // proteger. O pedido subiu para um valor ACIMA do teto novo, mantendo a
+        // intenção original. Asserção por NÚMERO (não pela constante) de
+        // propósito: com a constante, o teste continuaria verde se alguém
+        // revertesse o teto para 32.768.
+        (cap, _) = AiTokenLimits.ResolveOutputCap(500000, 1_800_000, null, "z-ai/glm-5.3");
+        Assert.That(cap, Is.EqualTo(450_000));
         Assert.That(cap, Is.EqualTo(AiTokenLimits.MaxOutputTokensCeiling));
     }
 
@@ -93,11 +104,22 @@ public class AiTokenBudgetTests
         var settings = new AIIntegrationSettings { MaxTokensPerRequest = 16000 };
         Assert.That(AiChatSettingsResolver.ClampMaxTokens(settings), Is.EqualTo(16000));
 
-        // Acima do teto do produto, cai no default em vez de aceitar o valor inválido.
+        // Com o teto em 450.000, 40.000 passou a ser um pedido VÁLIDO e é
+        // respeitado (o teto subiu de 32.768 para 450.000 por decisão de produto:
+        // o valor antigo cortava o modelo de produção em ~12x).
+        // AJUSTE JUSTIFICADO: a asserção antiga ('not equal 40000') documentava o
+        // teto de 32.768 e virou obsoleta — não foi afrouxada, foi corrigida para
+        // o teto vigente, e o ramo 'acima do teto' passou a usar um valor ACIMA
+        // de 450.000 para continuar exercitando o caminho.
         settings.MaxTokensPerRequest = 40000;
-        var fallback = AiChatSettingsResolver.ClampMaxTokens(settings);
-        Assert.That(fallback, Is.Not.EqualTo(40000));
-        Assert.That(fallback, Is.LessThanOrEqualTo(AiTokenLimits.MaxOutputTokensCeiling));
+        var aceito = AiChatSettingsResolver.ClampMaxTokens(settings);
+        Assert.That(aceito, Is.EqualTo(40000), "40.000 é válido sob o teto de 450.000");
+
+        settings.MaxTokensPerRequest = 500000;
+        var acimaDoTeto = AiChatSettingsResolver.ClampMaxTokens(settings);
+        Assert.That(acimaDoTeto, Is.EqualTo(0),
+            "acima do teto do produto não é um pedido válido => AUTOMÁTICO (0), nunca um default silencioso");
+        Assert.That(acimaDoTeto, Is.LessThanOrEqualTo(AiTokenLimits.MaxOutputTokensCeiling));
     }
 
     [Test]

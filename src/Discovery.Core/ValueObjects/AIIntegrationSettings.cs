@@ -20,8 +20,20 @@ public class AIIntegrationSettings
     /// <summary>Timeout para chamadas de IA (milissegundos)</summary>
     public int TimeoutMs { get; set; } = 30000; // 30s
 
-    /// <summary>Máximo de tokens por requisição</summary>
-    public int MaxTokensPerRequest { get; set; } = 2000;
+    /// <summary>
+    /// Teto de tokens de SAÍDA por requisição.
+    ///
+    /// <c>0 = AUTOMÁTICO</c> (default): o teto é derivado da capacidade REAL do
+    /// modelo selecionado (max_completion_tokens do catálogo), limitado pelo teto
+    /// do produto. Valores 1..99 são inválidos como pedido e também caem no
+    /// automático; 100..450000 são respeitados como pedido explícito e ainda
+    /// limitados pela capacidade do modelo.
+    ///
+    /// Antes o default era 2000 e o teto do produto, 32.768 — a combinação
+    /// truncava respostas longas (era o card A2UI cortado). Não reintroduzir um
+    /// default numérico aqui: qualquer número volta a subutilizar o modelo.
+    /// </summary>
+    public int MaxTokensPerRequest { get; set; } = 0;
 
     /// <summary>Provedor de IA (ex: openai, azure-openai, anthropic)</summary>
     // A15: OpenRouter é o fornecedor principal do produto.

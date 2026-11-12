@@ -5,6 +5,7 @@ using Discovery.Core.Departments;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services.Ai;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Departments;
@@ -54,8 +55,14 @@ internal static class DepartmentAiSettingsValidator
         int weightLearningMode, decimal weightMaxDelta, int weightCycleDays,
         decimal weightMin, decimal weightMax)
     {
-        if (maxOutputTokens is < 200 or > 32768)
-            return Error.Validation("AiAssignmentMaxOutputTokens", "Teto de tokens da triagem deve estar entre 200 e 32768.");
+        // Faixa da CONSTANTE (não número solto): se o teto do produto mudar, a
+        // validação e a mensagem acompanham sem ninguém lembrar deste arquivo.
+        if (maxOutputTokens < AiTokenLimits.MinimumOutputTokens
+            || maxOutputTokens > AiTokenLimits.MaxOutputTokensCeiling)
+        {
+            return Error.Validation("AiAssignmentMaxOutputTokens",
+                $"Teto de tokens da triagem deve estar entre {AiTokenLimits.MinimumOutputTokens} e {AiTokenLimits.MaxOutputTokensCeiling}.");
+        }
 
         if (!IsLearningMode(skillLearningMode))
             return Error.Validation("AiSkillLearningMode", "Modo do aprendizado de competências inválido (0=Off, 1=Sugerir, 2=Automático).");
