@@ -36,6 +36,81 @@ public static class AiChatA2uiValidator
     /// </summary>
     public static IReadOnlyCollection<string> KnownComponentNames => KnownComponents;
 
+    // FONTE ÚNICA dos nomes de glifo aceitos pelo componente Icon. Espelha a
+    // lista FECHADA ICON_NAMES de:
+    //   Discovery/src/tools/a2ui/node_modules/@a2ui/web_core/src/v0_9/
+    //     basic_catalog/components/basic_components.js:66-126
+    // (é o enum do IconApi, basic_components.js:127-144 — schema zod ESTRITO).
+    // O componente Icon do agente (task-6 / R7) indexa EXATAMENTE esses nomes.
+    // Um nome fora daqui cai no fallback visual do renderer: não quebra a
+    // interface, mas entrega um ícone genérico no lugar do pedido. Por isso a
+    // validação acontece ANTES de enviar (defesa em profundidade).
+    // NÃO duplique esta lista: IconNames (C#, aqui) e ICON_NAMES (JS, no
+    // catálogo vendorado) precisam andar juntas — o teste de paridade cobre.
+    private static readonly string[] IconNamesList =
+    {
+        "accountCircle", "add", "arrowBack", "arrowForward", "attachFile",
+        "calendarToday", "call", "camera", "check", "close",
+        "delete", "download", "edit", "event", "error",
+        "fastForward", "favorite", "favoriteOff", "folder", "help",
+        "home", "info", "locationOn", "lock", "lockOpen",
+        "mail", "menu", "moreVert", "moreHoriz", "notificationsOff",
+        "notifications", "pause", "payment", "person", "phone",
+        "photo", "play", "print", "refresh", "rewind",
+        "search", "send", "settings", "share", "shoppingCart",
+        "skipNext", "skipPrevious", "star", "starHalf", "starOff",
+        "stop", "upload", "visibility", "visibilityOff", "volumeDown",
+        "volumeMute", "volumeOff", "volumeUp", "warning"
+    };
+
+    /// <summary>
+    /// Nomes de glifo do Icon aceitos, expostos para o teste de paridade com o
+    /// ICON_NAMES do catálogo vendorado (basic_components.js) e com a tabela do
+    /// componente Icon do agente. Sem esse teste, a lista do servidor divergiria
+    /// em silêncio do que o renderer realmente desenha.
+    /// </summary>
+    public static IReadOnlyCollection<string> IconNames => IconNamesList;
+
+    private static readonly HashSet<string> IconNameSet =
+        new(IconNamesList, StringComparer.OrdinalIgnoreCase);
+
+    // Alias snake_case -> camelCase ("arrow_back" -> "arrowBack"). O LLM às
+    // vezes escreve o nome do Material Symbols com underscore; o componente do
+    // agente aceita esse alias também, então o validador NÃO pode descartar a
+    // surface por causa dele. Sem o alias, um payload que o renderer aceita
+    // seria jogado fora aqui.
+    private static readonly Dictionary<string, string> IconSnakeCaseAliases = BuildIconAliases();
+
+    private static Dictionary<string, string> BuildIconAliases()
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in IconNamesList)
+        {
+            var snake = ToSnakeCase(name);
+            if (!string.Equals(snake, name, StringComparison.Ordinal))
+                aliases[snake] = name;
+        }
+        return aliases;
+    }
+
+    private static string ToSnakeCase(string camelCase)
+    {
+        var sb = new System.Text.StringBuilder(camelCase.Length + 4);
+        foreach (var c in camelCase)
+        {
+            if (char.IsUpper(c))
+            {
+                if (sb.Length > 0) sb.Append('_');
+                sb.Append(char.ToLowerInvariant(c));
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
+    }
+
     // Propriedades que referenciam OUTRO componente por id.
     private static readonly string[] SingleReferenceProps = { "child", "trigger", "content" };
 
@@ -251,6 +326,104 @@ public static class AiChatA2uiValidator
             p.Errors.Add($"'{id}'.action.event.context usa a chave 'path' (o renderer trata o contexto como binding e a ação NÃO dispara — use 'target', 'campo' etc.)");
     }
 
+    /// <summary>
+    /// Achado R7 (Icon do A2UI): o componente agora desenha o glifo por SVG
+    /// inline, então um 'name' fora do catálogo NÃO vira mais texto — cai no
+    /// fallback visual (glifo "help"), silenciosamente. O validador evita
+    /// mandar isso: o nome precisa existir em ICON_NAMES (case-insensitive, com
+    /// o alias snake_case) OU a forma alternativa { path: "&lt;svg path d&gt;" },
+    /// que é o que o schema zod do IconApi aceita (basic_components.js:127-144).
+    ///
+    /// O valor de { path } vem do LLM e termina dentro do atributo 'd' de um
+    /// &lt;svg&gt;. Mesmo com o componente montando o atributo por binding (sem
+    /// interpolação de HTML), aqui é defesa em profundidade: só passa o charset
+    /// de comando de path SVG. Qualquer markup, aspas, '&lt;', '&gt;' ou ';' cai
+    /// no mesmo descarte dos outros componentes.
+    /// </summary>
+    private static void CheckIconName(JsonElement component, string id, ParsedMessage p)
+    {
+        if (!component.TryGetProperty("name", out var nameEl))
+        {
+            // Sem 'name' o componente não é criado (schema estrito) — mesma
+            // classe de falha silenciosa que RequiredProps cobre.
+            p.Errors.Add($"'{id}' (Icon) sem a propriedade obrigatória 'name' (o componente não seria renderizado)");
+            return;
+        }
+
+        switch (nameEl.ValueKind)
+        {
+            case JsonValueKind.String:
+                var raw = nameEl.GetString()?.Trim() ?? "";
+                if (raw.Length == 0)
+                {
+                    p.Errors.Add($"'{id}' (Icon) com 'name' vazio");
+                    return;
+                }
+                if (IconNameSet.Contains(raw)) return;
+                if (IconSnakeCaseAliases.ContainsKey(raw)) return;
+                // Nome desconhecido: não é o bug do R7 (não vira texto), mas o
+                // usuário pediu um ícone e veria outro. Descarta com o mesmo
+                // critério dos demais erros.
+                p.Errors.Add($"'{id}' (Icon) com nome de glifo desconhecido '{raw}' (o renderer cairia no fallback; use um nome do catálogo Material Symbols ou {{\"path\":\"<svg path d>\"}})");
+                return;
+
+            case JsonValueKind.Object:
+                if (!nameEl.TryGetProperty("path", out var pathEl))
+                {
+                    p.Errors.Add($"'{id}' (Icon) com 'name' objeto sem a chave 'path'");
+                    return;
+                }
+                if (pathEl.ValueKind != JsonValueKind.String)
+                {
+                    p.Errors.Add($"'{id}' (Icon) com 'name.path' não textual");
+                    return;
+                }
+                var path = pathEl.GetString() ?? "";
+                if (path.Trim().Length == 0)
+                {
+                    p.Errors.Add($"'{id}' (Icon) com 'name.path' vazio");
+                    return;
+                }
+                if (!IsSafeSvgPathData(path))
+                {
+                    p.Errors.Add($"'{id}' (Icon) com 'name.path' fora do charset permitido de path SVG (só comandos de desenho e números — sem markup, aspas ou ';')");
+                    return;
+                }
+                return;
+
+            default:
+                p.Errors.Add($"'{id}' (Icon) com 'name' de tipo inválido (esperado string ou {{\"path\":\"...\"}})");
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Charset de 'd' de um SVG path: comandos (M L H V C S Q T A Z, maiúsculos
+    /// e minúsculos = absoluto/relativo), dígitos, sinais, ponto decimal,
+    /// separadores (vírgula/espaço) e 'e'/'E' de notação científica. Qualquer
+    /// outro caractere é recusado — em especial '&lt;', '&gt;', '"', '\'', ';',
+    /// '(' e ')'.
+    /// </summary>
+    private static bool IsSafeSvgPathData(string path)
+    {
+        foreach (var c in path)
+        {
+            if (c is >= '0' and <= '9') continue;
+            if (c is '.' or ',' or '-' or '+' or ' ') continue;
+            if (c is 'e' or 'E') continue;   // expoente: 1.5e-3
+            if (c is '\t' or '\n' or '\r') continue;
+            switch (char.ToUpperInvariant(c))
+            {
+                case 'M': case 'L': case 'H': case 'V': case 'C':
+                case 'S': case 'Q': case 'T': case 'A': case 'Z':
+                    continue;
+                default:
+                    return false;
+            }
+        }
+        return true;
+    }
+
     private static void ReadComponent(JsonElement component, ParsedMessage p, HashSet<string> seen)
     {
         if (component.ValueKind != JsonValueKind.Object)
@@ -300,6 +473,9 @@ public static class AiChatA2uiValidator
         }
 
         CheckActionContextPathTrap(component, id, p);
+
+        if (string.Equals(type, "Icon", StringComparison.Ordinal))
+            CheckIconName(component, id, p);
 
         if (component.TryGetProperty("children", out var childrenEl))
         {

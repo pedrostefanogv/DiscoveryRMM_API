@@ -68,13 +68,29 @@ public class AiChatA2uiNavigationPromptTests
         Assert.That(prompt, Does.Contain("escolha é PERDIDA"));
     }
 
+    /// <summary>
+    /// Achado R7: o contrato do Icon MUDOU. Antes o prompt PROIBIA o uso porque a
+    /// webfont Material Symbols não era empacotada e o ícone virava TEXTO. Agora a
+    /// fonte é servida localmente pelo próprio app (sem rede externa), então o
+    /// prompt ORIENTA o uso. O teste antigo
+    /// (DefaultPrompt_ForbidsIconWithoutBundledFont) assertava a string "NÃO USE",
+    /// que deixou de existir — ele falhava por contrato vencido, não por regressão.
+    /// Renomeado e reancorado no texto REAL do builder (verificado na fonte),
+    /// mantendo a mesma cobertura: o Icon continua exigindo nome do catálogo.
+    /// </summary>
     [Test]
-    public void DefaultPrompt_ForbidsIconWithoutBundledFont()
+    public void DefaultPrompt_AllowsIconWithLocallyBundledFont()
     {
         var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
 
-        Assert.That(prompt, Does.Contain("NÃO USE"));
+        // A menção à fonte continua (identifica QUAL catálogo de glifos usar).
         Assert.That(prompt, Does.Contain("Material Symbols"));
+        // O Icon passou a ser PERMITIDO (antes o prompt dizia "NÃO USE").
+        Assert.That(prompt, Does.Contain("use `Icon`"),
+            "o prompt deveria ORIENTAR o uso do Icon (a fonte passou a ser empacotada localmente)");
+        // A lista fechada de nomes continua sendo o contrato.
+        Assert.That(prompt, Does.Contain("NUNCA invente um nome"));
+        Assert.That(prompt, Does.Contain("warning"));
     }
 
     [Test]
