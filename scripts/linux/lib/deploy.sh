@@ -842,6 +842,18 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 LimitNOFILE=65536
+# --- Contencao de recursos (C5) -------------------------------------------
+# O build do agent (Go/CGO/MinGW + NSIS) roda DENTRO deste servico, nao num
+# runner separado. Sem teto, ele satura todos os nucleos (medido: load 14.76
+# num host de 6 vCPU, PSI cpu 76%) e a API que atende trafego degrada por ~3min
+# a cada rebuild. Os limites abaixo reservam capacidade para a API sem tornar o
+# build lento: com o cache quente (ver DISCOVERY_CLEAN_BUILD) o build leva ~34s.
+# Ajustaveis por variavel de ambiente; vazio desativa a diretiva.
+CPUQuota=${DISCOVERY_BUILD_CPU_QUOTA:-400%}
+CPUWeight=${DISCOVERY_BUILD_CPU_WEIGHT:-20}
+IOWeight=${DISCOVERY_BUILD_IO_WEIGHT:-50}
+MemoryHigh=${DISCOVERY_BUILD_MEMORY_HIGH:-1500M}
+MemoryMax=${DISCOVERY_BUILD_MEMORY_MAX:-2500M}
 
 [Install]
 WantedBy=multi-user.target
