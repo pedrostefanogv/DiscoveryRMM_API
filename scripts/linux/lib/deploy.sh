@@ -55,6 +55,18 @@ ensure_discovery_tree_writable() {
   fi
 }
 
+# Sufixo auditavel do release_id: deixa explicito no nome da release qual modo
+# de build foi usado ("clean" = DISCOVERY_CLEAN_BUILD=1, "incremental" = 0).
+# Antes o sufixo era "-initial" fixo e nao distinguia os modos no diagnostico.
+# Deve ser chamado ANTES de qualquer log/acao que crie diretorios.
+release_build_suffix() {
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
+    printf '%s' "clean"
+  else
+    printf '%s' "incremental"
+  fi
+}
+
 ensure_discovery_api_working_directory() {
   if ! sudo -u discovery-api test -x . 2>/dev/null; then
     cd /
@@ -63,7 +75,7 @@ ensure_discovery_api_working_directory() {
 
 publish_api() {
   log "Publicando Discovery.Api"
-  local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
+  local release_id; release_id="$(date +%Y%m%d%H%M%S)-$(release_build_suffix)"
   local release_dir="$DISCOVERY_API_RELEASES/$release_id"
 
   ensure_discovery_api_working_directory
@@ -98,9 +110,93 @@ apply_site_release_permissions() {
   sudo find "$release_dir" -type f -exec chmod 644 {} +
 }
 
+# Cache npm persistente do usuario de servico.
+# ATENCAO: `sudo -H` resolve HOME pelo /etc/passwd (HOME=/opt/discovery-api, NAO
+# /var/lib/discovery-api, que e o HOME apenas do unit systemd). Usamos um caminho
+# FIXO e explicito para nao depender de resolver HOME, e reaproveitamos o cache
+# ja existente e populado (~116M) em /opt/discovery-api/.npm. Criar um cache novo
+# (ex.: /var/lib/discovery-api/.npm) descartaria esse cache quente e forcaria um
+# download completo — pior que hoje. Alternavel por DISCOVERY_NPM_CACHE.
+ensure_service_npm_cache() {
+  local cache_dir="${DISCOVERY_NPM_CACHE:-/opt/discovery-api/.npm}"
+  if [[ ! -d "$cache_dir" ]]; then
+    sudo mkdir -p "$cache_dir" 2>/dev/null || true
+    sudo chown discovery-api:discovery-api "$cache_dir" 2>/dev/null || true
+    sudo chmod 775 "$cache_dir" 2>/dev/null || true
+  fi
+  if ! sudo -u discovery-api test -w "$cache_dir" 2>/dev/null; then
+    warn "Cache npm $cache_dir nao e gravavel por discovery-api; usando o cache padrao do npm."
+    printf '%s' ""
+    return 0
+  fi
+  printf '%s' "$cache_dir"
+}
+
+# Decide entre `npm ci` (limpo, reinstala do zero) e `npm install` (incremental,
+# reaproveita node_modules). Retorna 0 => npm ci; 1 => npm install incremental.
+# Regras:
+#   - DISCOVERY_CLEAN_BUILD=1 -> sempre npm ci (comportamento limpo preservado);
+#   - sem node_modules        -> npm ci (instalacao do zero e o caso correto);
+#   - sem .package-lock.json  -> npm ci (node_modules nao foi criado por npm
+#     moderno; o `npm install` incremental nao e confiavel nesse estado);
+#   - package-lock.json mais novo que node_modules/.package-lock.json -> npm ci
+#     (as dependencias mudaram desde a ultima instalacao);
+#   - caso contrario          -> npm install incremental.
+site_needs_npm_ci() {
+  local site_source="$1"
+  if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$site_source/node_modules" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$site_source/node_modules/.package-lock.json" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$site_source/package-lock.json" ]]; then
+    return 0
+  fi
+  # OWNERSHIP: o .package-lock.json pertence ao discovery-api; um `test -nt`
+  # rodando como o usuario instalador falharia com EACCES. Por isso o teste de
+  # mtime roda como o proprio usuario de servico.
+  local lock_file="$site_source/package-lock.json"
+  local installed_lock="$site_source/node_modules/.package-lock.json"
+  if ! sudo -u discovery-api test -r "$lock_file" -a -r "$installed_lock" 2>/dev/null; then
+    # Nao foi possivel LER os locks (ex.: dono incorreto apos deploy manual como
+    # root). Nesse estado o incremental nao e confiavel: cai para o npm ci.
+    warn "Nao foi possivel ler os lockfiles do portal web; usando 'npm ci' por seguranca."
+    return 0
+  fi
+  if sudo -u discovery-api test "$lock_file" -nt "$installed_lock" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+# Instala as dependencias do portal web reaproveitando node_modules quando o
+# build e incremental. Hoje o `npm ci` e INCONDICIONAL: ele sempre apaga
+# node_modules (203M / ~27.890 arquivos) e reinstala do zero, o que anulava
+# completamente a guarda de DISCOVERY_CLEAN_BUILD logo acima.
+install_site_dependencies() {
+  local site_source="$1"
+  local npm_cache; npm_cache="$(ensure_service_npm_cache)"
+  local -a npm_env=(sudo -u discovery-api -H env)
+  if [[ -n "$npm_cache" ]]; then
+    npm_env+=( "npm_config_cache=$npm_cache" )
+  fi
+
+  if site_needs_npm_ci "$site_source"; then
+    log "Instalando dependencias do portal web com 'npm ci' (reinstalacao completa)"
+    "${npm_env[@]}" npm --prefix "$site_source" ci --no-audit --no-fund
+  else
+    log "Instalando dependencias do portal web de forma incremental ('npm install --prefer-offline')"
+    "${npm_env[@]}" npm --prefix "$site_source" install --prefer-offline --no-audit --no-fund
+  fi
+}
+
 publish_site() {
   log "Publicando portal web Discovery"
-  local release_id; release_id="$(date +%Y%m%d%H%M%S)-initial"
+  local release_id; release_id="$(date +%Y%m%d%H%M%S)-$(release_build_suffix)"
   local release_dir="$DISCOVERY_SITE_RELEASES/$release_id"
 
   ensure_discovery_api_working_directory
@@ -110,7 +206,7 @@ publish_site() {
     log "Limpando cache de build do portal web (node_modules/.cache e dist/)"
     sudo -u discovery-api rm -rf "$DISCOVERY_SITE_SOURCE/node_modules/.cache" "$DISCOVERY_SITE_SOURCE/dist"
   fi
-  sudo -u discovery-api -H npm --prefix "$DISCOVERY_SITE_SOURCE" ci
+  install_site_dependencies "$DISCOVERY_SITE_SOURCE"
   sudo -u discovery-api -H env \
     VITE_API_URL="$DISCOVERY_SITE_API_URL" \
     VITE_REALTIME_PROVIDER="$DISCOVERY_SITE_REALTIME_PROVIDER" \

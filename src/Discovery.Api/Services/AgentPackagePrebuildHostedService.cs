@@ -68,7 +68,10 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             var syncInvalidationPublisher = scope.ServiceProvider.GetRequiredService<ISyncInvalidationPublisher>();
 
             _logger.LogInformation("Agent prebuild: starting clean base binary build...");
-            await packageService.PrebuildBaseBinaryAsync(forceRebuild: true, stoppingToken);
+            // C4: forceRebuild=false - com true, PrebuildBaseBinaryAsync DELETAVA os binarios antes
+            // de checar, anulando o early-return e forcando rebuild completo a cada restart do servico.
+            // O rebuild explicito continua disponivel via RebuildAgentCommand (nao afetado).
+            await packageService.PrebuildBaseBinaryAsync(forceRebuild: false, stoppingToken);
 
             _logger.LogInformation("Agent prebuild: generating update installer artifact...");
             var (content, fileName) = await packageService.BuildUpdateInstallerAsync(stoppingToken);

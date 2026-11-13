@@ -21,9 +21,10 @@ public class AgentPackageService : IAgentPackageService
         "dev", "release", "beta", "lts"
     };
 
-    // Generic (zero-touch) installer cache — single entry with TTL
-    private static readonly ConcurrentDictionary<string, (byte[] Content, string FileName, DateTime CreatedAt)> GenericInstallerCache = new();
+    // Generic (zero-touch) installer cache — chave = hash(version+commit+profile), persistido em DISCO
+    // (o ConcurrentDictionary em memoria tinha 0% de hit pois morria a cada restart do servico).
     private static readonly SemaphoreSlim GenericBuildLock = new(1, 1);
+    private static readonly ConcurrentDictionary<string, string> _loggedGoCacheDecisions = new();
 
     public AgentPackageService(
         IConfiguration config,
@@ -171,6 +172,15 @@ public class AgentPackageService : IAgentPackageService
             ["CGO_ENABLED"] = "0"
         };
 
+        // C2: cache Go versionado pela toolchain (evita artefatos CGO obsoletos
+        // entre versoes de Go sem zerar o cache a cada build).
+        var serviceCacheEnv = await TryBuildGoCacheEnvironmentAsync(projectPath, cancellationToken);
+        if (serviceCacheEnv is not null)
+        {
+            foreach (var (key, value) in serviceCacheEnv)
+                extraEnv[key] = value;
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             // Cross-compile the Windows service binary from the Linux server.
@@ -238,19 +248,37 @@ public class AgentPackageService : IAgentPackageService
         _logger.LogInformation("Building agent on Linux using script: {BuildScript}", buildScriptPath);
 
         // CGO cross-compilation caches can become stale between builds (Go 1.22 + MinGW bug).
-        // Clear the build cache before each build to ensure a clean link step.
+        // C1: o `go clean -cache` rodava SEMPRE e e o gargalo principal (build frio ~54s vs
+        // quente ~5s). Agora ele so roda quando explicitamente pedido; por padrao preservamos
+        // o cache e, em vez disso, versionamos o GOCACHE pela toolchain (C2) — trocar de Go
+        // usa um cache novo automaticamente, sem custo por build.
         var extraEnv = new Dictionary<string, string>
         {
             ["GOFLAGS"] = "-buildvcs=false"
         };
 
-        _logger.LogInformation("Clearing Go build cache to prevent stale CGO artifacts...");
-        await RunProcessAsync(
-            fileName: "go",
-            workingDirectory: projectPath,
-            arguments: ["clean", "-cache"],
-            extraEnvironment: extraEnv,
-            cancellationToken: cancellationToken);
+        // Resolve o ambiente de cache (GOCACHE versionado) ANTES de decidir limpar.
+        // R4: o ramo de limpeza precisa usar o MESMO GOCACHE do build, senao
+        // 'go clean -cache' limparia o cache default ($HOME/.cache/go-build)
+        // enquanto o build grava em $HOME/.cache/go-build-<versao> — invalidando
+        // nada e deixando o cache versionado permanentemente sujo.
+        var cacheEnv = await TryBuildGoCacheEnvironmentAsync(projectPath, cancellationToken);
+        if (cacheEnv is not null)
+        {
+            foreach (var (key, value) in cacheEnv)
+                extraEnv[key] = value;
+        }
+
+        if (ShouldClearGoBuildCache(projectPath, "agent"))
+        {
+            _logger.LogInformation("Go build cache: limpando (go clean -cache) — solicitado por configuracao.");
+            await RunProcessAsync(
+                fileName: "go",
+                workingDirectory: projectPath,
+                arguments: ["clean", "-cache"],
+                extraEnvironment: extraEnv,
+                cancellationToken: cancellationToken);
+        }
 
         try
         {
@@ -391,37 +419,37 @@ public class AgentPackageService : IAgentPackageService
 
     public async Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
     {
-        const string cacheKey = "generic-zerotouch";
+        var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30;
 
-        // Return cached entry if still valid
-        if (!forceRebuild && GenericInstallerCache.TryGetValue(cacheKey, out var cached))
+        var activeProfile = GetActiveProfileName();
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+
+        if (!Directory.Exists(projectPath))
+            throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+
+        // C4: chave = hash(version + commit + profile). O commit e resolvido UMA vez aqui
+        // (com timeout curto) para nao ser preciso chama-lo de novo mais tarde.
+        var cacheVersion = DetectAgentVersion(projectPath);
+        var cacheCommit = ResolveAgentGitCommit(projectPath);
+        var cacheKey = ComputeGenericInstallerCacheKey(cacheVersion, cacheCommit, activeProfile);
+
+        // Fast-path: cache em DISCO sobrevive a restart do servico (antes era um
+        // ConcurrentDictionary em memoria -> 0% de hit entre restarts).
+        if (!forceRebuild && TryReadGenericInstallerFromDisk(cacheKey, ttlMinutes, out var diskCached))
         {
-            var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30;
-            if (DateTime.UtcNow - cached.CreatedAt < TimeSpan.FromMinutes(ttlMinutes))
-            {
-                _logger.LogInformation("Returning cached generic installer (built {Age}s ago, TTL={TtlMin}m)",
-                    (int)(DateTime.UtcNow - cached.CreatedAt).TotalSeconds, ttlMinutes);
-                return (cached.Content, cached.FileName);
-            }
+            _logger.LogInformation(
+                "Generic installer servido do cache em disco: fileName={FileName}, size={Size} bytes, key={Key}",
+                diskCached.FileName, diskCached.Content.Length, cacheKey);
+            return diskCached;
         }
 
         await GenericBuildLock.WaitAsync(cancellationToken);
         try
         {
-            // Re-check after acquiring lock
-            if (!forceRebuild && GenericInstallerCache.TryGetValue(cacheKey, out cached))
-            {
-                var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30;
-                if (DateTime.UtcNow - cached.CreatedAt < TimeSpan.FromMinutes(ttlMinutes))
-                    return (cached.Content, cached.FileName);
-            }
-
-            var activeProfile = GetActiveProfileName();
-            var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
-                ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
-
-            if (!Directory.Exists(projectPath))
-                throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
+            // Re-check after acquiring lock (outra thread pode ter construido enquanto esperavamos)
+            if (!forceRebuild && TryReadGenericInstallerFromDisk(cacheKey, ttlMinutes, out var lockedCached))
+                return lockedCached;
 
             await PrebuildBaseBinaryAsync(cancellationToken: cancellationToken);
 
@@ -431,11 +459,11 @@ public class AgentPackageService : IAgentPackageService
                 () => BuildGenericWithNsisAsync(projectPath, activeProfile, cancellationToken),
                 cancellationToken);
 
-            GenericInstallerCache[cacheKey] = (content, fileName, DateTime.UtcNow);
+            TryWriteGenericInstallerToDisk(cacheKey, content, fileName, cacheVersion, cacheCommit, activeProfile);
 
             _logger.LogInformation(
-                "Generic installer built: fileName={FileName}, size={Size} bytes, cached for {TtlMin}m",
-                fileName, content.Length, _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30);
+                "Generic installer built: fileName={FileName}, size={Size} bytes, cacheKey={Key}, persisted to disk with TTL={TtlMin}m",
+                fileName, content.Length, cacheKey, ttlMinutes);
 
             return (content, fileName);
         }
@@ -444,7 +472,6 @@ public class AgentPackageService : IAgentPackageService
             GenericBuildLock.Release();
         }
     }
-
     private async Task<(byte[] Content, string FileName)> BuildInstallerWithNsisAsync(
         string projectPath,
         string? rawDeployToken,
@@ -1009,6 +1036,356 @@ public class AgentPackageService : IAgentPackageService
         return _config[$"AgentPackage:{key}"];
     }
 
+    // ── C1/C2: decisao de limpeza e versionamento do cache Go ─────────────
+
+    /// <summary>
+    /// C1: decide se o <c>go clean -cache</c> deve rodar antes do build.
+    /// Limpa SOMENTE se a configuracao <c>AgentPackage:ClearGoCacheOnBuild</c> for <c>true</c>
+    /// OU se a variavel de ambiente <c>DISCOVERY_CLEAN_BUILD</c> valer <c>"1"</c> (convencao do
+    /// instalador: <c>0</c> = incremental, <c>1</c> = limpo). O default e NAO limpar, pois o
+    /// clean e justamente o gargalo (build frio medido ~54s vs ~5s com cache quente).
+    /// </summary>
+    private bool ShouldClearGoBuildCache(string projectPath, string label)
+    {
+        var configured = _config.GetValue<bool?>("AgentPackage:ClearGoCacheOnBuild") ?? false;
+        var installerEnv = Environment.GetEnvironmentVariable("DISCOVERY_CLEAN_BUILD");
+        var clear = configured
+            || string.Equals(installerEnv?.Trim(), "1", StringComparison.Ordinal);
+
+        // Loga a decisao uma vez por combinacao (label/projeto/valor) para nao poluir o journal.
+        var decisionKey = $"{label}|{projectPath}|{clear}";
+        if (_loggedGoCacheDecisions.TryAdd(decisionKey, decisionKey))
+        {
+            _logger.LogInformation(
+                "Go build cache [{Label}]: {Decision} (AgentPackage:ClearGoCacheOnBuild={Configured}, DISCOVERY_CLEAN_BUILD={Env})",
+                label,
+                clear ? "limpando (go clean -cache)" : "preservando (incremental)",
+                configured,
+                installerEnv ?? "<nao definida>");
+        }
+
+        return clear;
+    }
+
+    /// <summary>
+    /// C2: quando NAO limpamos o cache, apontamos GOCACHE para um diretorio versionado pela
+    /// toolchain (ex.: /var/lib/discovery-api/.cache/go-build-go1.22.2). Assim trocar de Go usa
+    /// um cache novo automaticamente e builds do mesmo toolchain reaproveitam o cache.
+    /// Roda <c>go env GOVERSION</c> UMA vez; se falhar, retorna <c>null</c> e o GOCACHE padrao
+    /// do processo e mantido (comportamento anterior, sem quebrar o build).
+    /// </summary>
+    private async Task<Dictionary<string, string>?> TryBuildGoCacheEnvironmentAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        string goVersion;
+        try
+        {
+            goVersion = await TryRunGoVersionQueryAsync(projectPath, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Nao foi possivel determinar a versao do Go ({Error}); usando GOCACHE padrao.", ex.Message);
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(goVersion))
+        {
+            _logger.LogWarning("GOVERSION nao retornado por 'go env GOVERSION'; usando GOCACHE padrao.");
+            return null;
+        }
+
+        var sanitized = SanitizeCacheComponent(goVersion);
+        if (sanitized.Length == 0)
+            return null;
+
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (string.IsNullOrWhiteSpace(home))
+            home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(home))
+            home = Path.GetTempPath();
+
+        var cacheRoot = Path.Combine(home, ".cache", "go-build-" + sanitized);
+        try
+        {
+            Directory.CreateDirectory(cacheRoot);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Nao foi possivel criar GOCACHE {Path} ({Error}); usando GOCACHE padrao.", cacheRoot, ex.Message);
+            return null;
+        }
+
+        return new Dictionary<string, string> { ["GOCACHE"] = cacheRoot };
+    }
+
+    private async Task<string> TryRunGoVersionQueryAsync(string projectPath, CancellationToken cancellationToken)
+    {
+        // C2: a versao que importa e a que REALMENTE compila, nao a do bootstrap.
+        // O projeto declara 'toolchain goX.Y.Z' no go.mod, e o Go baixa/usa essa
+        // toolchain automaticamente (GOTOOLCHAIN=auto). Consultar 'go env GOVERSION'
+        // DENTRO do modulo respeita esse switch; se o comando falhar ou vier vazio,
+        // caímos para a diretiva 'toolchain' do proprio go.mod.
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "go",
+            WorkingDirectory = projectPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "env", "GOVERSION" }
+        };
+        // GOFLAGS vazio evita que -mod=vendor/mod=readonly de ambiente interfiram na resolucao da toolchain.
+        startInfo.Environment["GOTOOLCHAIN"] = "auto";
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+            return string.Empty;
+
+        var stdOutTask = process.StandardOutput.ReadToEndAsync();
+        var stdErrTask = process.StandardError.ReadToEndAsync();
+
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+
+        var stdOut = (await stdOutTask).Trim();
+        var stdErr = (await stdErrTask).Trim();
+        if (process.ExitCode != 0)
+        {
+            _logger.LogWarning("Execute 'go env GOVERSION' falhou (ExitCode={Code}): {Error}", process.ExitCode, stdErr);
+            return string.Empty;
+        }
+
+        if (!string.IsNullOrWhiteSpace(stdOut))
+            return stdOut;
+
+        // Fallback: diretiva 'toolchain' do go.mod (ex.: "toolchain go1.27.3").
+        return TryReadGoModToolchainVersion(projectPath) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Le a diretiva <c>toolchain</c> do go.mod (ex.: <c>toolchain go1.27.3</c>).
+    /// Usada como fallback quando 'go env GOVERSION' nao retorna nada.
+    /// </summary>
+    private static string? TryReadGoModToolchainVersion(string projectPath)
+    {
+        try
+        {
+            var goModPath = Path.Combine(projectPath, "go.mod");
+            if (!File.Exists(goModPath))
+                return null;
+
+            foreach (var line in File.ReadLines(goModPath))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("toolchain ", StringComparison.Ordinal))
+                {
+                    var value = trimmed.Substring("toolchain ".Length).Trim();
+                    if (value.Length > 0)
+                        return value;
+                }
+            }
+        }
+        catch
+        {
+            // Best effort: sem a diretiva apenas usamos o GOCACHE padrao.
+        }
+
+        return null;
+    }
+
+    /// <summary>Mantem apenas caracteres seguros para compor o nome da pasta de cache.</summary>
+    private static string SanitizeCacheComponent(string raw)
+    {
+        var builder = new System.Text.StringBuilder(raw.Length);
+        foreach (var ch in raw.Trim())
+        {
+            if (char.IsLetterOrDigit(ch) || ch is '.' or '-' or '_')
+                builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
+    // ── C4: cache em disco do instalador generico (zero-touch) ────────────
+
+    /// <summary>
+    /// Diretorio de cache em disco do servico. Respeita <c>AgentPackage:InstallerCacheDirectory</c>
+    /// quando configurado; caso contrario usa HOME/.cache/discovery-api (Linux) ou
+    /// LOCALAPPDATA/discovery-api/cache (Windows). Retorna <c>null</c> se nenhum caminho for
+    /// resolvivel; falhas de I/O sao tratadas por quem chama, com fallback para o build normal.
+    /// </summary>
+    private string? GetInstallerCacheDirectory()
+    {
+        var configured = GetAgentPackageSetting("InstallerCacheDirectory");
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured;
+
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (string.IsNullOrWhiteSpace(home))
+            home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        if (!string.IsNullOrWhiteSpace(home))
+            return Path.Combine(home, ".cache", "discovery-api");
+
+        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (!string.IsNullOrWhiteSpace(localAppData))
+            return Path.Combine(localAppData, "discovery-api", "cache");
+
+        return null;
+    }
+
+    /// <summary>Chave = hash(version + commit + profile). Estavel entre restarts do servico.</summary>
+    private static string ComputeGenericInstallerCacheKey(string? version, string? commit, string profile)
+    {
+        var raw = $"{version ?? string.Empty}|{commit ?? string.Empty}|{(profile ?? string.Empty).ToLowerInvariant()}";
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+        return Convert.ToHexString(hash).ToLowerInvariant()[..32];
+    }
+
+    /// <summary>
+    /// Resolve o commit curto do agente (git rev-parse). Best-effort: qualquer falha retorna
+    /// string vazia e nao interrompe o fluxo de build.
+    /// </summary>
+    private string ResolveAgentGitCommit(string projectPath)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = "rev-parse --short=8 HEAD",
+                WorkingDirectory = projectPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var gitProc = Process.Start(psi);
+            if (gitProc is null)
+                return string.Empty;
+
+            var output = gitProc.StandardOutput.ReadToEnd().Trim();
+            gitProc.WaitForExit(5000);
+            return output;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("git rev-parse (cache do instalador generico) falhou: {Error}", ex.Message);
+            return string.Empty;
+        }
+    }
+
+    private string GetGenericInstallerCachePath(string cacheKey)
+    {
+        var directory = GetInstallerCacheDirectory();
+        if (string.IsNullOrWhiteSpace(directory))
+            return string.Empty;
+
+        return Path.Combine(directory, $"generic-installer-{cacheKey}.exe");
+    }
+
+    /// <summary>Le do disco (metadados + binario). Qualquer falha resulta em <c>false</c> e build normal.</summary>
+    private bool TryReadGenericInstallerFromDisk(string cacheKey, int ttlMinutes, out (byte[] Content, string FileName) result)
+    {
+        result = default;
+        try
+        {
+            var binaryPath = GetGenericInstallerCachePath(cacheKey);
+            if (string.IsNullOrWhiteSpace(binaryPath))
+                return false;
+
+            var metadataPath = binaryPath + ".json";
+            if (!File.Exists(binaryPath) || !File.Exists(metadataPath))
+                return false;
+
+            var metadata = JsonSerializer.Deserialize<GenericInstallerCacheMetadata>(File.ReadAllText(metadataPath));
+            if (metadata is null)
+                return false;
+
+            var age = DateTime.UtcNow - metadata.CreatedAtUtc;
+            if (age < TimeSpan.Zero || age >= TimeSpan.FromMinutes(ttlMinutes))
+            {
+                _logger.LogInformation("Cache em disco do instalador generico expirado (age={Age}s, ttl={TtlMin}m); rebuild.", (int)age.TotalSeconds, ttlMinutes);
+                return false;
+            }
+
+            var content = File.ReadAllBytes(binaryPath);
+            if (content.Length == 0)
+                return false;
+
+            var fileName = string.IsNullOrWhiteSpace(metadata.FileName) ? "discovery-agent-install.exe" : metadata.FileName;
+            result = (content, fileName);
+            _logger.LogInformation(
+                "Cache HIT (disco) do instalador generico: key={Key}, version={Version}, commit={Commit}, profile={Profile}, age={Age}s",
+                cacheKey, metadata.Version, metadata.Commit, metadata.Profile, (int)age.TotalSeconds);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Falha ao ler cache em disco do instalador generico ({Error}); seguindo com build normal.", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>Persiste o artefato + metadados. Best-effort: falha de disco nao quebra o build.</summary>
+    private void TryWriteGenericInstallerToDisk(string cacheKey, byte[] content, string fileName, string? version, string? commit, string profile)
+    {
+        try
+        {
+            var binaryPath = GetGenericInstallerCachePath(cacheKey);
+            if (string.IsNullOrWhiteSpace(binaryPath))
+                return;
+
+            var directory = Path.GetDirectoryName(binaryPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+
+            // Escrita atomica: .tmp + File.Move para nao servir arquivo truncado se o processo morrer.
+            var tempPath = binaryPath + ".tmp";
+            File.WriteAllBytes(tempPath, content);
+            File.Move(tempPath, binaryPath, overwrite: true);
+
+            var metadata = new GenericInstallerCacheMetadata
+            {
+                CacheKey = cacheKey,
+                Version = version ?? string.Empty,
+                Commit = commit ?? string.Empty,
+                Profile = profile ?? string.Empty,
+                CreatedAtUtc = DateTime.UtcNow,
+                FileName = fileName,
+                SizeBytes = content.LongLength
+            };
+
+            File.WriteAllText(binaryPath + ".json", JsonSerializer.Serialize(metadata));
+
+            _logger.LogInformation(
+                "Instalador generico persistido em disco: path={Path}, size={Size} bytes, key={Key}",
+                binaryPath, content.LongLength, cacheKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Falha ao persistir cache em disco do instalador generico ({Error}); build segue valido.", ex.Message);
+        }
+    }
+
+    private sealed class GenericInstallerCacheMetadata
+    {
+        public string CacheKey { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+        public string Commit { get; set; } = string.Empty;
+        public string Profile { get; set; } = string.Empty;
+        public DateTime CreatedAtUtc { get; set; }
+        public string FileName { get; set; } = string.Empty;
+        public long SizeBytes { get; set; }
+    }
     private static async Task<T> RunExclusiveInstallerBuildAsync<T>(Func<Task<T>> buildAction, CancellationToken cancellationToken)
     {
         await InstallerBuildLock.WaitAsync(cancellationToken);
