@@ -491,7 +491,28 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                         // antecipada de comando de energia usa ExitCode=0 mesmo sem executar.
                         // Classifica pelo "status" do contrato JSON e cai para o texto livre
                         // dos agentes antigos ("deferred_to_window nextRunAt=...").
-                        var classification = PowerCommandResultClassifier.Classify(result.ExitCode, result.Output);
+                        //
+                        // O tipo do comando é necessário para separar power MANUAL de
+                        // automação: para Restart/Shutdown, "deferred_to_window" é inválido
+                        // (a janela não adia comando do operador) e vira Failed em vez do
+                        // Deferred terminal que sumia sem executar. A leitura é best-effort:
+                        // comando ausente (ex.: retenção já apagou) => null => comportamento
+                        // histórico, sem derrubar o processamento do resultado.
+                        CommandType? commandType = null;
+                        try
+                        {
+                            var command = await _commandRepo.GetByIdAsync(result.CommandId);
+                            commandType = command?.CommandType;
+                        }
+                        catch (Exception lookupEx)
+                        {
+                            _logger.LogDebug(
+                                lookupEx,
+                                "Nao foi possivel resolver o CommandType do comando {CommandId}; classificando sem o tipo.",
+                                result.CommandId);
+                        }
+
+                        var classification = PowerCommandResultClassifier.Classify(result.ExitCode, result.Output, commandType);
                         var status = classification.Status;
 
                         // Só loga quando o CONTRATO foi reconhecido no output (StatusCode != null):

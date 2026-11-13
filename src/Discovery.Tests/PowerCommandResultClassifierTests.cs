@@ -163,6 +163,105 @@ public class PowerCommandResultClassifierTests
         Assert.That(result.NextRunAt, Is.EqualTo("2026-11-03T05:00:00Z"));
     }
 
+    // ── Power MANUAL vs. janela de manutenção (correção 2026-11-13) ──
+    //
+    // Incidente real: "Energia > Reiniciar" no console foi respondido pelo agente
+    // com {"status":"deferred_to_window","nextRunAt":"2026-11-14T05:00:00Z"}.
+    // Deferred é terminal negativo (fora de reentrega, apagado pela retenção sem
+    // executar) => a máquina nunca reiniciava e o operador só via o toast de
+    // adiamento. Para power INTERATIVO o deferral de janela é inválido.
+
+    [Test]
+    public void DeferredToWindow_ManualRestart_IsFailed_NotSilentDeferred()
+    {
+        var result = PowerCommandResultClassifier.Classify(
+            0,
+            "{\"status\":\"deferred_to_window\",\"nextRunAt\":\"2026-11-14T05:00:00Z\"}",
+            CommandType.Restart);
+
+        Assert.That(result.Status, Is.EqualTo(CommandStatus.Failed),
+            "power manual adiado por janela não pode virar Deferred silencioso (beco sem saída)");
+        Assert.That(result.StatusCode, Is.EqualTo("deferred_to_window"),
+            "o status code do contrato é preservado para diagnóstico");
+        Assert.That(result.NextRunAt, Is.EqualTo("2026-11-14T05:00:00Z"));
+    }
+
+    [Test]
+    public void DeferredToWindow_ManualShutdown_IsFailed()
+    {
+        var result = PowerCommandResultClassifier.Classify(
+            0,
+            "{\"status\":\"deferred_to_window\",\"nextRunAt\":\"2026-11-14T05:00:00Z\"}",
+            CommandType.Shutdown);
+
+        Assert.That(result.Status, Is.EqualTo(CommandStatus.Failed));
+    }
+
+    [Test]
+    public void DeferredToWindow_LegacyText_ManualRestart_IsFailed()
+    {
+        // Agente antigo, texto livre (mesmo formato visto em produção).
+        var result = PowerCommandResultClassifier.Classify(
+            0,
+            "comando de energia aceito; deferred_to_window nextRunAt=2026-11-14T05:00:00Z",
+            CommandType.Restart);
+
+        Assert.That(result.Status, Is.EqualTo(CommandStatus.Failed));
+        Assert.That(result.NextRunAt, Is.EqualTo("2026-11-14T05:00:00Z"));
+    }
+
+    [Test]
+    public void DeferredToWindow_AutomationOrUnknownType_StaysDeferred()
+    {
+        // Compatibilidade: sem tipo (chamadas históricas) ou tipo não-power, o
+        // comportamento anterior é preservado — o deferral de janela da
+        // AUTOMAÇÃO continua sendo Deferred legítimo.
+        var json = "{\"status\":\"deferred_to_window\",\"nextRunAt\":\"2026-11-14T05:00:00Z\"}";
+
+        Assert.That(PowerCommandResultClassifier.Classify(0, json).Status,
+            Is.EqualTo(CommandStatus.Deferred));
+        Assert.That(PowerCommandResultClassifier.Classify(0, json, null).Status,
+            Is.EqualTo(CommandStatus.Deferred));
+        Assert.That(PowerCommandResultClassifier.Classify(0, json, CommandType.WindowsUpdate).Status,
+            Is.EqualTo(CommandStatus.Deferred),
+            "patch/automação continua sendo adiado pela janela");
+    }
+
+    [Test]
+    public void Scheduled_ManualRestart_StaysDeferred()
+    {
+        // Timer interno do agente: a ação executa depois de verdade. Não regride.
+        var result = PowerCommandResultClassifier.Classify(
+            0,
+            "{\"status\":\"scheduled\",\"action\":\"restart\",\"delaySeconds\":300,\"message\":\"agendado silenciosamente\"}",
+            CommandType.Restart);
+
+        Assert.That(result.Status, Is.EqualTo(CommandStatus.Deferred));
+    }
+
+    [Test]
+    public void DeferredByUser_ManualRestart_StaysDeferred()
+    {
+        // O USUÁRIO adiou no countdown — adiamento legítimo de power manual.
+        var result = PowerCommandResultClassifier.Classify(
+            0,
+            "{\"status\":\"deferred_by_user\",\"action\":\"restart\",\"defer\":{\"current\":1,\"max\":3,\"minutes\":60}}",
+            CommandType.Restart);
+
+        Assert.That(result.Status, Is.EqualTo(CommandStatus.Deferred));
+    }
+
+    [Test]
+    public void Executed_ManualRestart_IsCompleted()
+    {
+        var result = PowerCommandResultClassifier.Classify(
+            0,
+            "{\"status\":\"executed\",\"action\":\"restart\",\"message\":\"restart executado\"}",
+            CommandType.Restart);
+
+        Assert.That(result.Status, Is.EqualTo(CommandStatus.Completed));
+    }
+
     [Test]
     public void UnknownJsonStatus_FallsBackToExitCode()
     {

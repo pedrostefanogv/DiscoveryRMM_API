@@ -30,6 +30,26 @@ public sealed record PowerResultClassification(
 ///
 /// Agentes antigos mandam texto livre: o fallback é case-insensitive e cobre o
 /// formato real de produção ("deferred_to_window nextRunAt=...").
+///
+/// ── Power MANUAL vs. janela de manutenção (correção 2026-11-13) ──
+/// A sobrecarga que recebe <paramref name="commandType"/> trata o caso do comando
+/// de energia INTERATIVO (Restart/Shutdown pedido pelo operador no console): para
+/// ele, "deferred_to_window" NÃO é um desfecho válido e vira <c>Failed</c>.
+///
+/// Motivo (incidente real, servidor de homologação): um clique em
+/// "Energia > Reiniciar" foi respondido pelo agente com
+/// {"status":"deferred_to_window","nextRunAt":"2026-11-14T05:00:00Z"}. Como
+/// <c>Deferred</c> é TERMINAL NEGATIVO — nunca é promovido a Completed
+/// (CommandStatusTransitions), fica FORA da reentrega (CommandRepository) e é
+/// APAGADO pela retenção sem executar (DataRetentionJob) — o operador via
+/// "adiado para a janela de manutenção" e a máquina NUNCA reiniciava: um beco
+/// sem saída silencioso. A janela de manutenção vale para AUTOMAÇÃO (patch,
+/// pacote, auto-update); um pedido manual executa agora.
+///
+/// Assim, se um agente (tipicamente build legado) devolver deferral de janela
+/// para um comando manual, o desfecho fica VISÍVEL como falha em vez de sumir.
+/// "scheduled" (timer interno do agente) e "deferred_by_user" (o usuário adiou no
+/// countdown) continuam <c>Deferred</c>: são adiamentos legítimos de power manual.
 /// </summary>
 public static class PowerCommandResultClassifier
 {
@@ -52,11 +72,39 @@ public static class PowerCommandResultClassifier
         @"nextRunAt\s*=\s*(\S+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// Classificação sem conhecer o tipo do comando (assinatura histórica):
+    /// mantém o comportamento anterior — deferral de janela continua
+    /// <c>Deferred</c>. Prefira a sobrecarga com <c>commandType</c> no fluxo de
+    /// resultados dos agentes, que distingue power manual de automação.
+    /// </summary>
     public static PowerResultClassification Classify(int exitCode, string? output)
+        => Classify(exitCode, output, commandType: null);
+
+    /// <summary>
+    /// Classificação com o tipo do comando: para <see cref="CommandType.Restart"/>
+    /// e <see cref="CommandType.Shutdown"/> (power INTERATIVO, pedido pelo
+    /// operador) o deferral por janela de manutenção é inválido e vira
+    /// <c>Failed</c> — ver o comentário da classe. Para os demais tipos (ou
+    /// <paramref name="commandType"/> nulo) o resultado é idêntico ao da
+    /// assinatura histórica.
+    /// </summary>
+    public static PowerResultClassification Classify(
+        int exitCode,
+        string? output,
+        CommandType? commandType)
     {
         var (statusCode, nextRunAt) = TryReadJsonOutput(output);
         statusCode ??= DetectLegacyStatusCode(output);
         nextRunAt ??= TryReadNextRunAtFromText(output);
+
+        // Comando de energia INTERATIVO (console -> agente): a janela de manutenção
+        // não se aplica, logo um deferral de janela devolvido pelo agente é um
+        // adiamento INVÁLIDO. Classificá-lo como Deferred (terminal negativo,
+        // fora de reentrega, apagado pela retenção) esconderia o fato de que nada
+        // foi executado e o comando nunca mais rodaria. Failed torna o desfecho
+        // visível e acionável.
+        var isManualPower = commandType is CommandType.Restart or CommandType.Shutdown;
 
         var status = statusCode switch
         {
@@ -72,7 +120,12 @@ public static class PowerCommandResultClassifier
             // Timeout). Deferred é terminal e comunica "aceito, execução
             // posterior" sem reabrir o comando.
             Scheduled => CommandStatus.Deferred,
-            DeferredByUser or DeferredToWindow => CommandStatus.Deferred,
+            // deferred_by_user: adiamento escolhido pelo USUÁRIO no countdown —
+            // legítimo também no power manual.
+            DeferredByUser => CommandStatus.Deferred,
+            // deferred_to_window: adiamento por JANELA. Só é legítimo para
+            // automação; em power manual é inválido (agente legado) -> Failed.
+            DeferredToWindow => isManualPower ? CommandStatus.Failed : CommandStatus.Deferred,
             // Usuário negou explicitamente: não é falha da máquina, é cancelamento.
             Denied => CommandStatus.Cancelled,
             Failed => CommandStatus.Failed,
