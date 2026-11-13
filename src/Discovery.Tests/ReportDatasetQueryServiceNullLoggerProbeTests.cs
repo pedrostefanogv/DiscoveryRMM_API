@@ -10,13 +10,18 @@ using NUnit.Framework;
 namespace Discovery.Tests;
 
 /// <summary>
-/// PROVA do CS8604 em ReportDatasetQueryService.cs:294 (reproduzido).
+/// PROVA + REGRESSAO do CS8604 em ReportDatasetQueryService.cs (CORRIGIDO).
 ///
-/// O ctor de 2 args (ReportDatasetQueryService.cs:32-34) passa logger=null.
-/// O ramo "join sem correspondencia" (:287-299) chama _logger.LogWarning
-/// SEM null-conditional. Consequencia: NullReferenceException no lugar do
-/// InvalidOperationException pretendido — erro enganoso que esconde a causa
-/// real (datasets sem chave em comum).
+/// Historico do defeito: o ctor de 2 args passa logger=null e o ramo "join sem
+/// correspondencia" chamava _logger.LogWarning SEM null-conditional. Resultado:
+/// ArgumentNullException("logger") no lugar do InvalidOperationException
+/// pretendido — erro enganoso que escondia a causa real (datasets sem chave em
+/// comum). A linha do defeito era a 294; apos o fix o uso virou
+/// _logger?.LogWarning (linha 305) e o throw ficou na 309.
+///
+/// Este arquivo comecou como prova do defeito (o teste ficava vermelho com o
+/// ArgumentNullException) e hoje e a guarda contra a reincidencia: com logger
+/// nulo o servico PRECISA entregar o erro de negocio.
 ///
 /// Reproduz o cenario de ReportMultiSourceJoinTests.MultiSource_JoinWithNoMatches_FailsLoudly
 /// mudando APENAS o construtor: 3 args (NullLogger) -> 2 args (logger=null).
@@ -90,34 +95,65 @@ public class ReportDatasetQueryServiceNullLoggerProbeTests
         Assert.That(f!.GetValue(svc), Is.Null, "o ctor de 2 args deixa _logger null");
     }
 
+    /// <summary>
+    /// REGRESSAO do CS8604 (corrigido com _logger?.LogWarning em
+    /// ReportDatasetQueryService.cs:305). Antes do fix, ESTE MESMO cenario lancava
+    /// ArgumentNullException("logger") a partir da linha 294 do servico, escondendo
+    /// a causa raiz atras de um erro de logging. O teste original deste arquivo
+    /// provava a falha; agora ele prova que a falha NAO volta.
+    /// </summary>
     [Test]
-    public async Task With_null_logger_the_no_match_branch_throws_ArgumentNullException()
+    public async Task With_null_logger_the_no_match_branch_throws_InvalidOperationException()
     {
         using var db = NewDb();
         await SeedAsync(db);
 
-        // ctor de 2 ARGS -> _logger == null  (o caso do defeito)
+        // ctor de 2 ARGS -> _logger == null: o caminho precisa sobreviver a isso
+        // e entregar a causa raiz, sem ArgumentNullException do logging.
+        var svc = new ReportDatasetQueryService(db, new MemoryCache(new MemoryCacheOptions()));
+
+        var erro = await Assert.ThrowsAsync<System.InvalidOperationException>(async () =>
+            await svc.QueryAsync(Template(HardwareSensorsLayout), null, CancellationToken.None));
+
+        TestContext.Out.WriteLine("CORRIGIDO: " + erro!.GetType().Name + " -> " + erro.Message);
+
+        Assert.That(erro.Message, Does.Contain("agentId"),
+            "a mensagem precisa citar a chave do join");
+        Assert.That(erro.Message, Does.Contain("hw"));
+        Assert.That(erro.Message, Does.Contain("sns"));
+        Assert.That(erro.Message, Does.Contain("nao casou nenhuma linha"),
+            "o log do join sem correspondencia nao pode substituir o erro de negocio");
+        Assert.That(erro.StackTrace, Does.Contain("ReportDatasetQueryService.cs:line 309"),
+            "a origem precisa ser o throw de InvalidOperationException");
+    }
+
+    /// <summary>
+    /// Guarda contra reincidencia: com logger ausente o servico NUNCA pode lancar
+    /// ArgumentNullException/NullReferenceException por causa do logging. A unica
+    /// excecao aceitavel neste cenario e o InvalidOperationException de negocio.
+    /// </summary>
+    [Test]
+    public async Task With_null_logger_the_service_never_throws_ArgumentNullException()
+    {
+        using var db = NewDb();
+        await SeedAsync(db);
+
         var svc = new ReportDatasetQueryService(db, new MemoryCache(new MemoryCacheOptions()));
 
         try
         {
             await svc.QueryAsync(Template(HardwareSensorsLayout), null, CancellationToken.None);
-            Assert.Fail("esperava excecao");
+            Assert.Fail("esperava o InvalidOperationException de negocio");
+        }
+        catch (System.InvalidOperationException)
+        {
+            // excecao de negocio esperada: o que NAO pode acontecer aqui e
+            // ArgumentNullException("logger") vinda do LoggerExtensions.
         }
         catch (System.ArgumentNullException ane)
         {
-            // LoggerExtensions.LogWarning lanca ArgumentNullException quando o
-            // receiver e null (nao NRE, porque o metodo valida o parametro).
-            TestContext.Out.WriteLine("REPRODUZIDO: " + ane.GetType().Name + " -> " + ane.Message);
-            Assert.That(ane.ParamName, Is.EqualTo("logger"));
-            Assert.That(ane.StackTrace, Does.Contain("ReportDatasetQueryService.cs:line 294"),
-                "a origem precisa ser a linha 294");
-            Assert.Pass("CS8604 CONFIRMADO na linha 294: ArgumentNullException(logger) " +
-                        "em vez do InvalidOperationException pretendido.");
-        }
-        catch (System.InvalidOperationException ioe)
-        {
-            Assert.Fail("NAO reproduziu: lancou InvalidOperationException (" + ioe.Message + ")");
+            Assert.Fail("REINCIDIU o CS8604: logging lancou ArgumentNullException("
+                + ane.ParamName + ") em vez do erro de negocio.");
         }
     }
 

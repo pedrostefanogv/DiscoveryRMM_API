@@ -818,7 +818,18 @@ internal static class HardwareInventoryParser
         return result;
     }
 
-    /// <summary>Corta o valor no limite da coluna para não estourar o INSERT.</summary>
+    /// <summary>
+    /// Corta o valor no limite da coluna para não estourar o INSERT.
+    ///
+    /// Contrato de anulabilidade: devolve a própria entrada quando ela é nula/vazia
+    /// (nunca inventa uma string), e por isso é anotado com NotNullIfNotNull — o que
+    /// descreve a semântica real (ver HardwareInventoryTruncateProbeTests) e permite
+    /// atribuir o resultado tanto a propriedades <c>string?</c> (ex.: DisplayName,
+    /// Vendor, Username de AgentRdsSession, cujo JSON pode realmente vir sem valor)
+    /// quanto a propriedades <c>string</c> não-anuláveis (Name das entidades de
+    /// hardware), que só são preenchidas depois do guard IsNullOrWhiteSpace(name).
+    /// </summary>
+    [return: System.Diagnostics.CodeAnalysis.NotNullIfNotNull(nameof(value))]
     private static string? Truncate(string? value, int maxLength)
     {
         if (string.IsNullOrWhiteSpace(value))

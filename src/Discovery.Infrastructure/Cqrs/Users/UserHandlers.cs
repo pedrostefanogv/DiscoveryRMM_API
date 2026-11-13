@@ -22,8 +22,11 @@ using UserSecurityStateDto = Discovery.Core.DTOs.Users.UserSecurityStateDto;
 
 namespace Discovery.Infrastructure.Cqrs.Users;
 
+// Sem IUserRepository aqui de proposito: a listagem e SEMPRE escopada pelo ator
+// (row-level security), responsabilidade de IUserScopedQueryRepository. Injetar o
+// repositorio de CRUD nao agregava nada e o parametro ficou como residuo de
+// refatoracao -- o compilador sinalizava com CS9113.
 public sealed class ListUsersQueryHandler(
-    IUserRepository repo,
     IUserScopedQueryRepository scopedRepo
 ) : IRequestHandler<ListUsersQuery, Result<UsersPageDto>>
 {

@@ -20,6 +20,11 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
 
     private readonly DiscoveryDbContext _db;
     private readonly IMemoryCache _cache;
+    /// <summary>
+    /// Logger OPCIONAL: existe ctor de 2 args que passa null de proposito, entao
+    /// TODA chamada precisa ser null-conditional. Logar e best-effort — nunca pode
+    /// mascarar o erro de negocio que a execucao esta prestes a lancar.
+    /// </summary>
     private readonly ILogger<ReportDatasetQueryService>? _logger;
     private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(60);
 
@@ -291,7 +296,13 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
                       $"o dataset '{alias}' nao retornou linhas para os filtros informados."
                     : $"O join por '{targetKey}' nao casou nenhuma linha entre '{joinAlias}' e '{alias}': " +
                       $"{leftCount} linha(s) na base e {currentRows.Count} na fonte, sem chave em comum.";
-                _logger.LogWarning(
+                // _logger e OPCIONAL por contrato (o ctor de 2 args o deixa null de
+                // proposito, e os testes chamam assim). Sem o null-conditional,
+                // LogWarning lancava ArgumentNullException("logger") AQUI e a causa
+                // raiz (join sem chave em comum) sumia atras de um erro de logging.
+                // A chamada precisa ser tolerante a logger ausente: o throw logo
+                // abaixo e o unico dono do diagnostico.
+                _logger?.LogWarning(
                     "Report multi-source join sem correspondencia: {Reason} (sourceKey={SourceKey}, targetKey={TargetKey})",
                     reason, sourceKey, targetKey);
 

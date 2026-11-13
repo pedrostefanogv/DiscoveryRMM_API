@@ -26,6 +26,10 @@
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14" />
     <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.14" />
+    <!-- Fixa System.Formats.Cbor >= 10.0.15 (GHSA-vmv3-wvjp-wqpj / CVE-2026-118747).
+         Fido2 4.3.1 traz 9.0.0 de forma transitiva, o que gerava NU1902 (moderate).
+         O version= do nuspec do Fido2 e >=, entao esta referencia explicita vence. -->
+    <PackageReference Include="System.Formats.Cbor" Version="10.0.15" />
     <PackageReference Include="WebPush" Version="1.0.13" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
