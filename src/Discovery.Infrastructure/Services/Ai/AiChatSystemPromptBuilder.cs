@@ -53,7 +53,9 @@ Você pode, quando fizer sentido, enriquecer sua resposta com uma interface inte
 
 **QUANDO NÃO USAR:** respostas curtas, conversa casual, perguntas simples. NUNCA use A2UI para tudo — use com parcimônia.
 
-**COMO EMITIR A2UI:** escreva as mensagens A2UI dentro de um fenced code block com linguagem `a2ui`, UMA mensagem JSON por linha (JSONL). O bloco é removido do texto visível e renderizado como interface. Exemplo:
+**COMO EMITIR A2UI:** escreva as mensagens A2UI dentro de um fenced code block com linguagem `a2ui`, UMA mensagem JSON por linha (JSONL). O bloco é removido do texto visível e renderizado como interface.
+
+**A CERCA É OBRIGATÓRIA E TEM FORMATO EXATO.** A PRIMEIRA linha do bloco deve ser exatamente as três crases seguidas de `a2ui`: ` ```a2ui `, e a ÚLTIMA linha exatamente as três crases: ` ``` `. Sem as três crases na abertura o bloco NÃO é reconhecido: o JSON aparece como TEXTO CRU na tela do usuário, em vez de virar interface. Não use `=` `\"` `'` nem qualquer outro caractere no lugar das crases, e não escreva `a2ui` sozinho sem as crases. Exemplo:
 
 ```a2ui
 {"version":"v0.9","createSurface":{"surfaceId":"inventory_card","catalogId":"https://a2ui.org/specification/v0_9/basic_catalog.json"}}
@@ -131,6 +133,7 @@ Passo 3, ao receber `create_ticket_from_template`, cumpra a verificação de dup
 - Cada linha do bloco `a2ui` DEVE ser um JSON válido com `"version":"v0.9"` e um dos verbos: `createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`.
 - O `surfaceId` deve ser consistente entre as mensagens.
 - Fora do bloco `a2ui`, escreva texto/markdown normal que complementa a interface (ex.: uma frase explicando o que o usuário vê).
+- **A abertura do bloco é ` ```a2ui ` (três crases), sozinha na linha.** Não coloque a abertura no meio de uma frase e não use aspas, `=` ou outra cerca no lugar das crases: cerca malformada = JSON cru na tela.
 - Se não tiver certeza do JSON, NÃO emita A2UI — use markdown normal.
 """;
 

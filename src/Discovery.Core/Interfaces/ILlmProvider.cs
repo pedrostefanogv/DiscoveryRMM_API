@@ -76,7 +76,11 @@ public record LlmOptions(
     int? Seed = null,
     string? ResponseFormat = null,
     // B16: reasoning (OpenRouter) era config morta em AIIntegrationSettings.
-    bool ReasoningEnabled = false,
+    // Default TRUE alinhado a AIIntegrationSettings.ReasoningEnabled: o produto
+    // mantém o raciocínio ATIVO (útil no diagnóstico) e apenas NÃO o exibe —
+    // ver reasoning.exclude no OpenAiProvider. Um default false aqui reintroduziria
+    // a divergência entre a config e o que é enviado ao provedor.
+    bool ReasoningEnabled = true,
     string? ReasoningEffort = null);
 
 public record LlmTool(

@@ -30,6 +30,31 @@ public static class AiChatA2uiExtractor
     // C8: abertura de bloco tolerante (espacos e maiusculas variando).
     private static readonly Regex A2uiOpenRegex = new("^```\\s*a2ui\\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // ABERTURA OFICIAL: tres crases + a2ui, sozinha na linha. O comportamento
+    // deste caso NAO pode regredir (req 3) — por isso ele e reconhecido aqui,
+    // exatamente como antes, e a trava da condicao 2 NAO se aplica a ele.
+    private static readonly Regex A2uiOfficialOpenRegex =
+        new("^```\\s*a2ui\\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // ABERTURA QUEBRADA (achado de producao, chat.db turno 1025): o modelo
+    // emitiu  ="a2ui"  no lugar de  ```a2ui  e o bloco inteiro caiu no texto.
+    // A cerca e curta (0 a 3 crases) separada ou colada no 'a2ui', com aspas
+    // OPCIONAIS e sinal de igual opcional. A linha INTEIRA precisa ser so isso:
+    // qualquer prosa junto faz a linha NAO abrir bloco (limite de tolerancia
+    // definido pelo Lead no adendo rev 2).
+    //
+    //   ="a2ui"   =a2ui   a2ui   ``a2ui   `a2ui   ```a2ui
+    //
+    // Detalhes deliberados da gramatica (limite de tolerancia, nao "quase igual"):
+    //   - o sinal de igual so e aceito como PREFIXO (1 ou 2). "= a2ui =" NAO abre.
+    //   - aspas sao opcionais e independentes nas duas pontas ("a2ui", a2ui") —
+    //     o erro medido perdeu as crases, entao nao da para exigir simetria.
+    //   - 0 a 3 crases: 4+ crases volta a ser cerca de markdown comum.
+    //   - qualquer prosa na linha devolve false (a linha tem que ser SO a cerca).
+    private static readonly Regex A2uiBrokenOpenRegex = new(
+        "^(?:={1,2})?\\s*`{0,3}\\s*\"??a2ui\"??\\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static readonly string[] A2uiVerbs =
     {
         "createSurface", "updateComponents", "updateDataModel", "deleteSurface"
@@ -79,8 +104,11 @@ public static class AiChatA2uiExtractor
         var inA2uiBlock = false;
         var blockBuffer = new StringBuilder();
 
-        foreach (var rawLine in lines)
+        // Loop INDEXADO (e nao foreach) porque a tolerancia a cerca quebrada
+        // precisa olhar a linha SEGUINTE (condicao 2 desta task).
+        for (var i = 0; i < lines.Length; i++)
         {
+            var rawLine = lines[i];
             var line = rawLine.Trim();
 
             if (!inA2uiBlock)
@@ -88,10 +116,29 @@ public static class AiChatA2uiExtractor
                 // Abre bloco: cerca de código com a linguagem a2ui.
                 if (A2uiOpenRegex.IsMatch(line))
                 {
+                    // Caminho OFICIAL: comportamento inalterado (req 3). A trava
+                    // da condicao 2 NAO se aplica aqui — aplicá-la mudaria o que
+                    // já funcionava (ex.: abertura oficial seguida de linha em
+                    // branco) e seria regressão.
                     inA2uiBlock = true;
                     blockBuffer.Clear();
                     continue;
                 }
+
+                // ABERTURA QUEBRADA: só abre se a linha INTEIRA for a cerca
+                // malformada E a linha seguinte já for uma mensagem A2UI válida
+                // (condicao 2 = trava de segurança; sem ela, prosa com "a2ui"
+                // engoliria o texto seguinte).
+                var nextLine = i + 1 < lines.Length ? lines[i + 1].Trim() : null;
+                if (IsToleratedA2uiOpenLine(line, nextLine))
+                {
+                    diagnostics.Report(
+                        $"abertura a2ui tolerada: cerca quebrada reconhecida como abertura de bloco ({ShortenForLog(line, 60)})");
+                    inA2uiBlock = true;
+                    blockBuffer.Clear();
+                    continue;
+                }
+
                 clean.Append(rawLine).Append('\n');
                 continue;
             }
@@ -112,6 +159,37 @@ public static class AiChatA2uiExtractor
 
         var messages = ApplyCap(candidates, MaxA2uiMessagesPerResponse, diagnostics.Report);
         return (clean.ToString().TrimEnd('\n'), messages);
+    }
+
+    /// <summary>
+    /// FUNÇÃO PURA: decide se <paramref name="line"/> é uma abertura de bloco
+    /// A2UI TOLERADA (cerca quebrada). Recebe também a linha SEGUINTE porque a
+    /// condição 2 é obrigatória: aceitar a cerca sem exigir JSON A2UI válido na
+    /// sequência transformaria prosa ("Vou usar o a2ui para montar o card") em
+    /// abertura de bloco, e o texto seguinte seria ENGOLIDO — pior que o defeito
+    /// atual, em que o usuário ao menos vê o JSON cru.
+    ///
+    /// Gramática da linha (linha INTEIRA, após trim, case-insensitive):
+    ///   ["=" ou "=="] [0 a 3 crases] ["a2ui" com aspas opcionais]
+    /// Qualquer caractere fora disso (prosa, pontuação, 'a2ui' no meio de frase)
+    /// devolve false. É o limite de tolerância acordado no adendo rev 2.
+    ///
+    /// Não cobre a cerca OFICIAL (```a2ui): esse caso é tratado por
+    /// A2uiOpenRegex no fluxo principal, sem a trava, para não regredir.
+    ///
+    /// Decisões de limite (validadas caso a caso, para o teste não as tratar
+    /// como defeito): "= a2ui =" -> false (o "=" só vale como prefixo);
+    /// "````a2ui" (4 crases) -> false; "a2ui" seguido de JSON sem verbo A2UI,
+    /// de versão vazia, de array ou de linha vazia -> false (trava da condição 2).
+    /// </summary>
+    internal static bool IsToleratedA2uiOpenLine(string? line, string? nextLine)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return false;
+        if (!A2uiBrokenOpenRegex.IsMatch(line.Trim())) return false;
+
+        // Condição 2 — TRAVA: a próxima linha precisa ser JSON A2UI válido.
+        if (string.IsNullOrWhiteSpace(nextLine)) return false;
+        return IsValidA2uiMessage(nextLine.Trim());
     }
 
     /// <summary>
@@ -260,6 +338,17 @@ public static class AiChatA2uiExtractor
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
+
+            // Mesma guarda do IsValidA2uiMessage (e pelo mesmo motivo): a raiz
+            // pode ser array/numero/string/booleano — JSON válido, mas
+            // TryGetProperty em raiz não-objeto lança InvalidOperationException,
+            // que o catch (JsonException) abaixo não captura. Hoje os 3 call
+            // sites só passam linhas JÁ validadas (invariante não expressa no
+            // tipo); sem a guarda, qualquer refatoração que chame Classify antes
+            // da validação reintroduz o bug da task-20.
+            if (root.ValueKind != JsonValueKind.Object)
+                return new A2uiLineInfo(line, "", CreatesSurface: false, DefinesRoot: false);
+
             if (root.TryGetProperty("createSurface", out var create) && create.ValueKind == JsonValueKind.Object)
                 return new A2uiLineInfo(line, ReadSurfaceId(create), CreatesSurface: true, DefinesRoot: false);
 
@@ -414,11 +503,31 @@ public static class AiChatA2uiExtractor
     private static string ShortenForLog(string value, int max) =>
         value.Length <= max ? value : value[..max] + "...";
 
+    /// <summary>
+    /// PREDICADO: nunca lança para entrada arbitrária.
+    ///
+    /// A guarda de ValueKind é OBRIGATÓRIA desde a tolerância a cerca quebrada
+    /// (task-20): a linha seguinte de uma cerca malformada pode ser QUALQUER
+    /// JSON — inclusive array, número, string ou booleano, que são JSON válido.
+    /// JsonDocument.Parse os aceita, mas TryGetProperty em raiz NÃO-objeto lança
+    /// InvalidOperationException, que o catch (JsonException) abaixo NÃO captura:
+    /// a exceção escapava de Extract() e quebrava o turno do chat em vez de cair
+    /// no fail-safe ("não abre bloco"). Pior: a tolerância deveria ser fail-safe
+    /// e virava um caminho de exceção.
+    ///
+    /// Cenário real: cerca quebrada + '[{"foo":1}]' na linha seguinte.
+    /// </summary>
     private static bool IsValidA2uiMessage(string line)
     {
         try
         {
             using var doc = JsonDocument.Parse(line);
+
+            // Só um OBJETO pode ser uma mensagem A2UI (o protocolo é
+            // {"version":..., "<verbo>":{...}}). Guarda antes de TryGetProperty.
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
             if (!doc.RootElement.TryGetProperty("version", out var versionProp))
                 return false;
             var version = versionProp.GetString();

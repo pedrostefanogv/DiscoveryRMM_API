@@ -123,10 +123,31 @@ public class AIIntegrationSettings
 
     // ── OpenRouter-specific features ──────────────────────────────────────────
 
-    /// <summary>Habilita reasoning/thinking tokens em modelos compatíveis (ex: o3-mini, gemini-2.5-pro).</summary>
-    public bool ReasoningEnabled { get; set; } = false;
+    /// <summary>
+    /// Habilita reasoning/thinking tokens em modelos compatíveis (ex: o3-mini,
+    /// gemini-2.5-pro).
+    ///
+    /// DEFAULT TRUE (decisão do usuário, 2026-11): o raciocínio é valioso para o
+    /// diagnóstico de logs e continua ATIVO. O que NÃO pode acontecer é ele ser
+    /// EXIBIDO ao usuário — disso cuida <c>reasoning.exclude = true</c> enviado
+    /// pelo OpenAiProvider (camada 1) mais o descarte de delta.reasoning no
+    /// parser (camada 2). Pensar e exibir são coisas independentes.
+    ///
+    /// ⚠️ EFEITO DE CUSTO: com reasoning ativo o provedor cobra pelos tokens de
+    /// raciocínio mesmo quando eles NÃO voltam na resposta (reasoning.exclude só
+    /// omite a exibição, não o processamento). Modelos com
+    /// reasoning.default_enabled = true (o deepseek em produção) já pensavam
+    /// antes desta mudança; o default true apenas torna isso explícito e
+    /// controlável, em vez de deixar o provedor decidir.
+    /// </summary>
+    public bool ReasoningEnabled { get; set; } = true;
 
-    /// <summary>Esforço de reasoning: low, medium, high. Só aplicável se ReasoningEnabled=true.</summary>
+    /// <summary>
+    /// Esforço de reasoning: max, high, medium, low, none (o que o provedor
+    /// aceitar). Null/vazio usa o default do produto ("high"), que é o default
+    /// do próprio modelo no catálogo medido. Só tem efeito com
+    /// <see cref="ReasoningEnabled"/> = true.
+    /// </summary>
     public string? ReasoningEffort { get; set; }
 
     /// <summary>Habilita web search nativa para modelos compatíveis (via OpenRouter).</summary>

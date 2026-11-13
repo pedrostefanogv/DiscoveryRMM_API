@@ -206,6 +206,60 @@ public class OpenAiProvider : ILlmProvider
     }
 
     /// <summary>
+    /// PONTO ÚNICO de montagem do payload de Chat Completions, usado pelos TRÊS
+    /// caminhos (CompleteAsync / StreamAsync / StreamWithToolsAsync).
+    ///
+    /// Existe por dois motivos:
+    ///  1. TESTABILIDADE — o payload inteiro (model, messages, max_tokens,
+    ///     sampling, tools, stream, session_id e o controle de reasoning) pode
+    ///     ser inspecionado sem tocar a rede. O bug do vazamento de raciocínio
+    ///     nasceu de um campo que o app NÃO enviava, e não havia onde assertar
+    ///     isso. Testar só o AddReasoningToPayload cobriria apenas o reasoning.
+    ///  2. CONSISTÊNCIA — antes os três caminhos repetiam o dicionário à mão e
+    ///     já tinham divergido (o caminho sem tools omitia "stream").
+    ///
+    /// <paramref name="includeTools"/> separa o caminho sem tools (StreamAsync)
+    /// dos demais; a chave "stream" é controlada por <paramref name="stream"/>
+    /// porque o CompleteAsync é justamente o caminho NÃO-streaming.
+    ///
+    /// <paramref name="openAiMessages"/> vem de BuildOpenAiMessages (ponto único
+    /// que aplica o invariante de pareamento tool_call/tool), para que a montagem
+    /// do payload não dependa de como as mensagens foram serializadas.
+    /// </summary>
+    internal static Dictionary<string, object?> BuildChatPayload(
+        LlmOptions options, List<object> openAiMessages, bool includeTools, bool stream)
+    {
+        var payloadDict = new Dictionary<string, object?>
+        {
+            ["model"] = options.Model,
+            ["messages"] = openAiMessages,
+            ["max_tokens"] = options.MaxTokens,
+            ["temperature"] = options.Temperature,
+            // A7: parâmetros opcionais (null = omitido no payload).
+            ["top_p"] = options.TopP,
+            ["frequency_penalty"] = options.FrequencyPenalty,
+            ["presence_penalty"] = options.PresencePenalty,
+            ["seed"] = options.Seed,
+            ["response_format"] = options.ResponseFormat,
+        };
+
+        if (stream)
+            payloadDict["stream"] = true;
+
+        if (includeTools && options.EnableTools && options.Tools != null)
+        {
+            payloadDict["tools"] = options.Tools.Select(t => new
+            {
+                type = "function",
+                function = new { name = t.Name, description = t.Description, parameters = t.Schema }
+            }).ToList();
+        }
+
+        AddSessionIdToPayload(payloadDict, options);
+        AddReasoningToPayload(payloadDict, options);
+        return payloadDict;
+    }
+    /// <summary>
     /// Adiciona session_id ao payload JSON para sticky sessions no OpenRouter.
     /// Funciona para qualquer provider compatível com OpenAI/OpenRouter.
     /// </summary>
@@ -216,21 +270,85 @@ public class OpenAiProvider : ILlmProvider
     }
 
     /// <summary>
-    /// B16: envia o controle de reasoning ao OpenRouter (config que era morta em
-    /// AIIntegrationSettings). Só para OpenRouter para não causar 400 nos demais.
+    /// CAMADA 1 do fix de vazamento de raciocínio: controla EXPLICITAMENTE a
+    /// exposição do reasoning no OpenRouter, em vez de deixar o provedor decidir.
+    ///
+    /// MOTIVO (medido, não suposto): o modelo em produção
+    /// (deepseek/deepseek-v4.1-flash-1017) tem reasoning.default_enabled = TRUE no
+    /// catálogo do OpenRouter — ele PENSA mesmo sem o app pedir. Como o código só
+    /// enviava a chave quando ReasoningEnabled=true (e o default da config era
+    /// false), o app não mandava NADA e o provedor devolvia o CoT junto do texto
+    /// (turno 1046: 2167 de 3890 chars eram raciocínio, no MESMO contínuo).
+    ///
+    /// SHAPE CORRETO (docs oficiais do OpenRouter, "reasoning-tokens"):
+    ///   "Reasoning tokens are included in the response by default if the model
+    ///    decides to output them. On Chat Completions they appear in the reasoning
+    ///    field of each message, and reasoning.exclude can omit them."
+    ///
+    /// Ou seja: no Chat Completions (o nosso caso) o controle de EXCLUSÃO é
+    /// <c>reasoning.exclude</c>, um campo DENTRO do objeto <c>reasoning</c> —
+    /// NÃO um <c>include_reasoning</c> booleano de topo. (O catálogo do modelo
+    /// lista "include_reasoning" em supported_parameters, mas o campo que a doc
+    /// documenta para omitir o raciocínio da resposta é reasoning.exclude.)
+    ///
+    /// ENVIAMOS SEMPRE o objeto (decisão do usuário: o raciocínio continua ATIVO
+    /// — ajuda no diagnóstico de logs; o objetivo é parar de EXIBIR, não de
+    /// pensar):
+    ///   • reasoning.effort  = esforço configurado (default "high", o default do
+    ///     próprio modelo no catálogo — antes era "medium", um valor que o modelo
+    ///     nem lista entre supported_efforts).
+    ///   • reasoning.exclude = true SEMPRE: pede que o raciocínio NÃO volte na
+    ///     resposta. Pensar e não devolver são coisas independentes — é este
+    ///     campo que impede o CoT de contaminar o texto exibido, sem desligar o
+    ///     raciocínio.
+    ///
+    /// Só para OpenRouter: os demais provedores não conhecem esses campos e
+    /// devolveriam 400.
     /// </summary>
-    private static void AddReasoningToPayload(Dictionary<string, object?> payloadDict, LlmOptions options)
+    internal static void AddReasoningToPayload(Dictionary<string, object?> payloadDict, LlmOptions options)
     {
         var (provider, baseUrl) = AutoCorrectProviderAndBaseUrl(options.Provider, options.BaseUrl, options.Model ?? string.Empty);
         var isOpenRouter = string.Equals(provider, AIIntegrationSettings.ProviderOpenRouter, StringComparison.OrdinalIgnoreCase)
             || (!string.IsNullOrWhiteSpace(baseUrl) && baseUrl.Contains("openrouter.ai", StringComparison.OrdinalIgnoreCase));
         if (!isOpenRouter) return;
 
-        // Só envia quando habilitado: "enabled:false" não é um shape documentado
-        // do OpenRouter e a ausência da chave já é o comportamento padrão.
-        if (options.ReasoningEnabled)
-            payloadDict["reasoning"] = new { effort = string.IsNullOrWhiteSpace(options.ReasoningEffort) ? "medium" : options.ReasoningEffort };
+        // Reasoning ATIVO por padrão (decisão do usuário): o modelo continua
+        // pensando. "none" desligaria o raciocínio — NÃO usar.
+        var effort = ResolveReasoningEffort(options);
+
+        // UMA chave, dois controles — "exclude" é o que impede o vazamento.
+        // Enviado SEMPRE (não só quando habilitado): o modelo pensa por
+        // default_enabled=true, então a ausência da chave deixava o provedor
+        // decidir a favor de devolver o CoT (o bug medido no turno 1046).
+        payloadDict["reasoning"] = new Dictionary<string, object?>
+        {
+            ["effort"] = effort,
+            ["exclude"] = true,
+        };
     }
+
+    /// <summary>Esforços aceitos pelo OpenRouter; qualquer outro valor vira o default.</summary>
+    private static readonly string[] ValidReasoningEfforts = ["max", "high", "medium", "low", "none"];
+
+    /// <summary>
+    /// Esforço de reasoning efetivo. Default "high" (o default do próprio modelo
+    /// no catálogo medido, e o valor que preserva a qualidade do diagnóstico).
+    /// Um valor não suportado pelo provedor é descartado em favor do default em
+    /// vez de arriscar 400 — a config é texto livre vindo da UI.
+    /// </summary>
+    private static string ResolveReasoningEffort(LlmOptions options)
+    {
+        var configured = options.ReasoningEffort?.Trim();
+        if (!string.IsNullOrEmpty(configured)
+            && ValidReasoningEfforts.Contains(configured, StringComparer.OrdinalIgnoreCase))
+        {
+            return configured.ToLowerInvariant();
+        }
+        return DefaultReasoningEffort;
+    }
+
+    /// <summary>Esforço default do produto: "high" (ver ResolveReasoningEffort).</summary>
+    public const string DefaultReasoningEffort = "high";
 
     public async Task<LlmResponse> CompleteAsync(
         string systemPrompt,
@@ -304,36 +422,8 @@ public class OpenAiProvider : ILlmProvider
                 }
             }
 
-            // Montar payload como dicionário para suportar campos dinâmicos (session_id)
-            var payloadDict = new Dictionary<string, object?>
-            {
-                ["model"] = model,
-                ["messages"] = openAiMessages,
-                ["max_tokens"] = options.MaxTokens,
-                ["temperature"] = options.Temperature,
-                ["top_p"] = options.TopP,
-                ["frequency_penalty"] = options.FrequencyPenalty,
-                ["presence_penalty"] = options.PresencePenalty,
-                ["seed"] = options.Seed,
-                ["response_format"] = options.ResponseFormat,
-            };
-
-            if (options.EnableTools && options.Tools != null)
-            {
-                payloadDict["tools"] = options.Tools.Select(t => new
-                {
-                    type = "function",
-                    function = new
-                    {
-                        name = t.Name,
-                        description = t.Description,
-                        parameters = t.Schema
-                    }
-                }).ToList();
-            }
-
-            AddSessionIdToPayload(payloadDict, options);
-        AddReasoningToPayload(payloadDict, options);
+            // Payload pelo ponto ÚNICO (stream: false = caminho não-streaming).
+            var payloadDict = BuildChatPayload(options, openAiMessages, includeTools: true, stream: false);
 
             var content = new StringContent(
                 JsonSerializer.Serialize(payloadDict, SJsonOpts),
@@ -379,6 +469,9 @@ public class OpenAiProvider : ILlmProvider
                 )).ToList();
             }
 
+            // SOMENTE Content vira resposta. choice.Message.Reasoning é
+            // deliberadamente IGNORADO (camada 2): o raciocínio nunca é
+            // concatenado ao texto exibido. Ver OpenAiMessage.Reasoning.
             return new LlmResponse(
                 choice.Message.Content ?? string.Empty,
                 result.Usage?.TotalTokens ?? 0,
@@ -432,23 +525,8 @@ public class OpenAiProvider : ILlmProvider
         // turno seguinte em qualquer provider.
         var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
 
-        var payloadDict = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = openAiMessages,
-            ["max_tokens"] = options.MaxTokens,
-            ["temperature"] = options.Temperature,
-            // A7: parametros opcionais (null = omitido no payload)
-            ["top_p"] = options.TopP,
-            ["frequency_penalty"] = options.FrequencyPenalty,
-            ["presence_penalty"] = options.PresencePenalty,
-            ["seed"] = options.Seed,
-            ["response_format"] = options.ResponseFormat,
-            ["stream"] = true
-        };
-
-        AddSessionIdToPayload(payloadDict, options);
-        AddReasoningToPayload(payloadDict, options);
+        // Payload pelo ponto ÚNICO: este caminho NÃO oferece tools.
+        var payloadDict = BuildChatPayload(options, openAiMessages, includeTools: false, stream: true);
 
         var requestBody = new StringContent(
             JsonSerializer.Serialize(payloadDict, SJsonOpts),
@@ -588,33 +666,10 @@ public class OpenAiProvider : ILlmProvider
         // que aplica o invariante de pareamento imediatamente antes do envio.
         var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
 
-        var payloadDict = new Dictionary<string, object?>
-        {
-            ["model"] = model,
-            ["messages"] = openAiMessages,
-            ["max_tokens"] = options.MaxTokens,
-            ["temperature"] = options.Temperature,
-            // B16-r2: mesmos parâmetros de amostragem do caminho sem tools — sem
-            // isso o round com tools e a síntese usavam amostragem diferente.
-            ["top_p"] = options.TopP,
-            ["frequency_penalty"] = options.FrequencyPenalty,
-            ["presence_penalty"] = options.PresencePenalty,
-            ["seed"] = options.Seed,
-            ["response_format"] = options.ResponseFormat,
-            ["stream"] = true
-        };
-
-        if (options.EnableTools && options.Tools != null)
-        {
-            payloadDict["tools"] = options.Tools.Select(t => new
-            {
-                type = "function",
-                function = new { name = t.Name, description = t.Description, parameters = t.Schema }
-            }).ToList();
-        }
-
-        AddSessionIdToPayload(payloadDict, options);
-        AddReasoningToPayload(payloadDict, options);
+        // B16-r2: mesmos parâmetros de amostragem do caminho sem tools — sem
+        // isso o round com tools e a síntese usavam amostragem diferente.
+        // Payload pelo ponto ÚNICO (o de maior tráfego do chat).
+        var payloadDict = BuildChatPayload(options, openAiMessages, includeTools: true, stream: true);
 
         var requestBody = new StringContent(
             JsonSerializer.Serialize(payloadDict, SJsonOpts),
@@ -721,6 +776,32 @@ public class OpenAiProvider : ILlmProvider
     }
 
     /// <summary>
+    /// CAMADA 2 (defesa em profundidade): extrai o texto de raciocínio de um
+    /// delta, quando o provedor o separa do conteúdo.
+    ///
+    /// Aceita as duas chaves conhecidas: "reasoning" (a documentada pelo
+    /// OpenRouter no Chat Completions) e "reasoning_content" (variante usada por
+    /// alguns gateways compatíveis). Retorna false quando não há raciocínio.
+    ///
+    /// O chamador DESCARTA o valor — este método existe para que a leitura seja
+    /// explícita e testável, e para documentar que o campo é reconhecido de
+    /// propósito (e nunca somado ao content).
+    /// </summary>
+    internal static bool TryGetReasoningDelta(JsonElement delta, out string? reasoning)
+    {
+        reasoning = null;
+        if (delta.ValueKind != JsonValueKind.Object) return false;
+
+        if (!delta.TryGetProperty("reasoning", out var prop)
+            && !delta.TryGetProperty("reasoning_content", out prop))
+        {
+            return false;
+        }
+
+        reasoning = prop.ValueKind == JsonValueKind.String ? prop.GetString() : null;
+        return !string.IsNullOrEmpty(reasoning);
+    }
+    /// <summary>
     /// Parse um chunk SSE e retorna o LlmStreamEvent correspondente.
     /// Extraído para método separado para evitar yield dentro de try-catch.
     /// </summary>
@@ -797,7 +878,26 @@ public class OpenAiProvider : ILlmProvider
             }
         }
 
-        // 2. content token. Prioridade sobre finish_reason: um chunk com
+        // 2. RACIOCÍNIO — CAMADA 2 (defesa em profundidade).
+        //
+        // O parser lia APENAS delta.content, então o raciocínio NÃO chegava
+        // pelo stream (o vazamento medido no turno 1046 veio pelo content, por
+        // causa da camada 1 — ver AddReasoningToPayload). Este bloco existe para
+        // que, se o provedor passar a separar o CoT em delta.reasoning, ele
+        // NUNCA vire um evento "token" exibido ao usuário.
+        //
+        // Descartado EM SILÊNCIO (sem evento): o orquestrador só reage a
+        // "token"/"tool_calls"/"done"/"error", então um tipo novo só adicionaria
+        // contrato para manter. O conteúdo é logado em Debug para diagnóstico.
+        if (hasDelta && TryGetReasoningDelta(delta, out var reasoningText))
+        {
+            // NÃO retorna token: o raciocínio é descartado aqui de propósito.
+            // (O valor é lido apenas para o log de diagnóstico abaixo.)
+            System.Diagnostics.Debug.WriteLine(
+                $"[MCP] delta.reasoning descartado ({reasoningText!.Length} chars) — nunca vira token visível.");
+        }
+
+        // 3. content token. Prioridade sobre finish_reason: um chunk com
         // content + finish não pode perder o texto (o finish é resolvido no
         // [DONE]/próximo chunk, e o fim do enumerador também encerra o round).
         if (hasDelta && delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
@@ -812,7 +912,7 @@ public class OpenAiProvider : ILlmProvider
             && usageProp.TryGetProperty("total_tokens", out var ttProp) && ttProp.ValueKind == JsonValueKind.Number)
             tokensUsed = ttProp.GetInt32();
 
-        // 3. finish_reason terminal: tool_calls emite as acumuladas; qualquer
+        // 4. finish_reason terminal: tool_calls emite as acumuladas; qualquer
         // outro (stop/length/content_filter/...) encerra o round.
         if (!string.IsNullOrEmpty(finishReason))
         {
@@ -845,7 +945,17 @@ public class OpenAiProvider : ILlmProvider
     private record OpenAiMessage(
         [property: JsonPropertyName("role")] string Role,
         [property: JsonPropertyName("content")] string? Content,
-        [property: JsonPropertyName("tool_calls")] List<OpenAiToolCall>? ToolCalls
+        [property: JsonPropertyName("tool_calls")] List<OpenAiToolCall>? ToolCalls,
+        /// <summary>
+        /// CAMADA 2 (caminho NÃO-streaming). O OpenRouter documenta que, no Chat
+        /// Completions, os tokens de raciocínio aparecem no campo "reasoning" da
+        /// mensagem. Mapeamos o campo EXPLICITAMENTE para que ele NUNCA seja
+        /// somado a <see cref="Content"/>: antes ele simplesmente não existia no
+        /// record e era descartado pelo System.Text.Json — funcionava por omissão,
+        /// não por intenção, e uma futura mudança de DTO poderia reintroduzir o
+        /// vazamento sem ninguém notar. Lido apenas para log de diagnóstico.
+        /// </summary>
+        [property: JsonPropertyName("reasoning")] string? Reasoning = null
     );
 
     private record OpenAiToolCall(
