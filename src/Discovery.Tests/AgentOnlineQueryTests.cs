@@ -32,6 +32,62 @@ public class AgentOnlineQueryTests
         Assert.That(result.Select(agent => agent.Id), Is.EqualTo(new[] { online.Id }));
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Regressão: o agente na LIXEIRA precisa entrar na reentrega.
+    //
+    // Este é o teste que faltava. Os testes de reentrega existentes exercitam
+    // apenas funções puras (SelectRedeliveryAgentIds / IsRedeliveryAllowedForAgent)
+    // com listas montadas à mão, então NUNCA tocavam a consulta real do
+    // repositório. O filtro global de soft delete (HasQueryFilter
+    // DeletedAt == null) escondia o agente excluído da consulta e o
+    // DecommissionAgent ficava Pending para sempre — o PC nunca era
+    // desinstalado.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task GetOnlineIncludingTrashedAsync_IncludesTrashedAgentStillOnline()
+    {
+        await using var db = NewDb();
+
+        var online = NewAgent(AgentStatus.Online, deleted: false);
+        var trashed = NewAgent(AgentStatus.Online, deleted: true);
+        var offline = NewAgent(AgentStatus.Offline, deleted: false);
+        db.Agents.AddRange(online, trashed, offline);
+        await db.SaveChangesAsync();
+
+        var result = await new AgentRepository(db).GetOnlineIncludingTrashedAsync();
+
+        Assert.That(
+            result.Select(agent => agent.Id).OrderBy(id => id),
+            Is.EqualTo(new[] { online.Id, trashed.Id }.OrderBy(id => id)),
+            "o agente na lixeira ainda ONLINE na máquina precisa ser alcançável para receber o DecommissionAgent");
+        Assert.That(result.Any(agent => agent.Id == offline.Id), Is.False, "agente offline continua fora");
+    }
+
+    [Test]
+    public async Task GetByIdForDecommissionAsync_SeesTrashedAgent()
+    {
+        await using var db = NewDb();
+
+        var trashed = NewAgent(AgentStatus.Online, deleted: true);
+        db.Agents.Add(trashed);
+        await db.SaveChangesAsync();
+
+        var repo = new AgentRepository(db);
+
+        // O lookup de descomissionamento precisa enxergar o agente excluído:
+        // é ele que a autorização de NATS consulta para não derrubar o heartbeat
+        // de quem ainda está instalado na máquina.
+        //
+        // (Não se afirma aqui que GetByIdAsync devolve null: o provider InMemory
+        // NÃO aplica o filtro global HasQueryFilter, então essa expectativa só
+        // vale contra o Postgres real — assumi-la aqui daria um teste que passa
+        // pelo motivo errado.)
+        var found = await repo.GetByIdForDecommissionAsync(trashed.Id);
+        Assert.That(found, Is.Not.Null);
+        Assert.That(found!.DeletedAt, Is.Not.Null, "o lookup precisa trazer o DeletedAt preenchido");
+    }
+
     private static Agent NewAgent(AgentStatus status, bool deleted) => new()
     {
         Id = Guid.NewGuid(),

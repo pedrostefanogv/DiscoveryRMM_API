@@ -35,4 +35,17 @@ public interface ICommandRepository
     Task<IEnumerable<AgentCommand>> GetByAgentIdAsync(Guid agentId, int limit = 50);
     Task<AgentCommand> CreateAsync(AgentCommand command);
     Task UpdateStatusAsync(Guid id, CommandStatus status, string? result, int? exitCode, string? errorMessage);
+
+    /// <summary>
+    /// Encerra como Cancelled todos os comandos NÃO confirmados de um agente para
+    /// um determinado tipo. Usado ao RESTAURAR um agente da lixeira: o pedido de
+    /// descomissionamento que ficou Pending precisa morrer, senão a reentrega o
+    /// entregaria e o PC do agente recém-restaurado se desinstalaria sozinho.
+    /// Retorna quantos comandos foram cancelados.
+    /// </summary>
+    Task<int> CancelPendingByAgentAndTypeAsync(
+        Guid agentId,
+        CommandType commandType,
+        string reason,
+        CancellationToken ct = default);
 }

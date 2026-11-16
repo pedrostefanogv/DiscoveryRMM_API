@@ -127,7 +127,7 @@ internal static class AgentDecommissionDispatch
     /// dispatch não pode impedir a exclusão no painel — o pior caso é o agente
     /// continuar instalado na máquina (comportamento anterior a esta feature).
     /// </summary>
-    internal static async Task TryDispatchAsync(
+    internal static async Task<CommandDispatchOutcome> TryDispatchAsync(
         IAgentCommandDispatcher dispatcher,
         ILogger logger,
         Agent agent,
@@ -154,7 +154,8 @@ internal static class AgentDecommissionDispatch
 
         try
         {
-            await dispatcher.DispatchAsync(command, ct);
+            var result = await dispatcher.DispatchWithOutcomeAsync(command, ct);
+            return result.Outcome;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -165,13 +166,13 @@ internal static class AgentDecommissionDispatch
                 "Falha ao enviar o comando de descomissionamento para o agente {AgentId} ({Reason}).",
                 agent.Id,
                 reason);
+            return CommandDispatchOutcome.Queued;
         }
     }
 }
 
 public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
-    IAgentAuthService authService,
     IRedisService redis,
     ISiteRepository siteRepo
 ) : IRequestHandler<DeleteAgentCommand, Result<VoidResult>>
@@ -182,7 +183,22 @@ public sealed class DeleteAgentCommandHandler(
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
-        await authService.RevokeAllTokensAsync(cmd.Id);
+        // NÃO revogar o token aqui. A lixeira é o PRIMEIRO passo do
+        // descomissionamento: o agente continua INSTALADO e rodando na máquina
+        // até o comando de desinstalação chegar e ser confirmado. O token é a
+        // credencial que o agente usa para autenticar no NATS E a identidade dos
+        // heartbeats — revogá-lo aqui produzia um impasse permanente:
+        //
+        //   revoga token -> auth callout recusa ("authentication expired") ->
+        //   NATS derruba a conexão -> heartbeat rejeitado por
+        //   IsAgentAuthorizedAsync -> agente marcado Offline -> a reentrega
+        //   (PendingCommandRedeliveryService) e o GetOnlineAsync excluem
+        //   offline/lixeira -> o DecommissionAgent fica Pending PARA SEMPRE e
+        //   o PC nunca é desinstalado.
+        //
+        // Como o agente excluído precisa continuar autenticando só até o
+        // uninstall confirmar, a revogação pertence ao PURGE (exclusão
+        // definitiva), que é quando o agente já deixou a máquina.
         await agentRepo.DeleteAsync(cmd.Id);
         await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
         return Result<VoidResult>.Success(VoidResult.Value);
@@ -200,9 +216,9 @@ public sealed class RequestAgentDecommissionCommandHandler(
     DiscoveryDbContext db,
     IAgentCommandDispatcher dispatcher,
     ILogger<RequestAgentDecommissionCommandHandler> logger
-) : IRequestHandler<RequestAgentDecommissionCommand, Result<VoidResult>>
+) : IRequestHandler<RequestAgentDecommissionCommand, Result<AgentDecommissionDispatchDto>>
 {
-    public async Task<Result<VoidResult>> Handle(RequestAgentDecommissionCommand cmd, CancellationToken ct)
+    public async Task<Result<AgentDecommissionDispatchDto>> Handle(RequestAgentDecommissionCommand cmd, CancellationToken ct)
     {
         // IgnoreQueryFilters: o agente acabou de ir para a lixeira (DeletedAt
         // preenchido) e o status Online dele é justamente o que decide o envio.
@@ -212,10 +228,24 @@ public sealed class RequestAgentDecommissionCommandHandler(
             .SingleOrDefaultAsync(a => a.Id == cmd.AgentId, ct);
 
         if (agent is null)
-            return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+            return Result<AgentDecommissionDispatchDto>.Failure(Error.NotFound("Agent not found."));
 
-        await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, cmd.Reason, ct);
-        return Result<VoidResult>.Success(VoidResult.Value);
+        var outcome = await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, cmd.Reason, ct);
+
+        // O painel usa este desfecho para não prometer o que não aconteceu: um
+        // comando Queued só será executado depois que o agente reconectar e a
+        // reentrega o alcançar (ver PendingCommandRedeliveryService).
+        var dto = outcome == CommandDispatchOutcome.Sent
+            ? new AgentDecommissionDispatchDto(
+                Sent: true,
+                Queued: false,
+                Message: "Comando de desinstalação enviado ao agente.")
+            : new AgentDecommissionDispatchDto(
+                Sent: false,
+                Queued: true,
+                Message: "Agente sem conexão no momento: o comando ficou na fila e será entregue assim que ele reconectar.");
+
+        return Result<AgentDecommissionDispatchDto>.Success(dto);
     }
 }
 
@@ -229,6 +259,7 @@ public sealed class PurgeAgentCommandHandler(
     IAgentPurgeService purgeService,
     IRedisService redis,
     ISiteRepository siteRepo,
+    IAgentAuthService authService,
     ILogger<PurgeAgentCommandHandler> logger
 ) : IRequestHandler<PurgeAgentCommand, Result<VoidResult>>
 {
@@ -255,6 +286,24 @@ public sealed class PurgeAgentCommandHandler(
             if (linkedTickets > 0)
                 return Result<VoidResult>.Failure(Error.Conflict(
                     $"Agente vinculado a {linkedTickets} chamado(s). Confirme a exclusão definitiva para continuar."));
+        }
+
+        // Revogação do token: AQUI é o lugar. Esta é a exclusão DEFINITIVA —
+        // o passo final do descomissionamento, depois que o agente já executou
+        // o uninstall (ou quando o operador aceita remover o registro mesmo
+        // sabendo que a máquina pode continuar instalada). Revogar na lixeira
+        // travava o próprio comando que desinstala o agente (ver
+        // DeleteAgentCommandHandler).
+        try
+        {
+            await authService.RevokeAllTokensAsync(cmd.Id);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Com o token revogado o agente não autentica mais: a falha não pode
+            // ser silenciosa, mas o purge em si ainda precisa ser tentado.
+            logger.LogWarning(ex,
+                "Falha ao revogar os tokens do agente {AgentId} durante o purge definitivo.", cmd.Id);
         }
 
         try
@@ -288,7 +337,9 @@ public sealed class PurgeAgentCommandHandler(
 public sealed class RestoreAgentCommandHandler(
     DiscoveryDbContext db,
     IRedisService redis,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    ICommandRepository commandRepo,
+    ILogger<RestoreAgentCommandHandler> logger
 ) : IRequestHandler<RestoreAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RestoreAgentCommand cmd, CancellationToken ct)
@@ -306,6 +357,36 @@ public sealed class RestoreAgentCommandHandler(
             agent.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
             await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
+        }
+
+        // Mata os pedidos de descomissionamento que ficaram pendentes enquanto o
+        // agente estava na lixeira. Restaurar significa "desisti de excluir": se
+        // esses comandos sobrevivessem, a reentrega os entregaria assim que o
+        // agente reconectasse e o PC do agente RECÉM-RESTAURADO se desinstalaria
+        // sozinho — contradizendo a ação do operador.
+        try
+        {
+            var cancelled = await commandRepo.CancelPendingByAgentAndTypeAsync(
+                cmd.Id,
+                CommandType.DecommissionAgent,
+                "Cancelado: o agente foi restaurado da lixeira.",
+                ct);
+
+            if (cancelled > 0)
+            {
+                logger.LogInformation(
+                    "Restauração do agente {AgentId} cancelou {Count} comando(s) de descomissionamento pendente(s).",
+                    cmd.Id, cancelled);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A restauração em si já está commitada. Falhar em cancelar os
+            // comandos é grave (risco de desinstalação indevida), então o erro
+            // sobe como aviso alto no log em vez de ser silenciado.
+            logger.LogError(ex,
+                "Agente {AgentId} restaurado, mas FALHOU o cancelamento dos comandos de descomissionamento pendentes — risco de desinstalação indevida.",
+                cmd.Id);
         }
 
         return Result<VoidResult>.Success(VoidResult.Value);

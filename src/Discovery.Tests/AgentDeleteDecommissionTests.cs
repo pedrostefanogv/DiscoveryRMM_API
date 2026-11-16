@@ -134,6 +134,9 @@ public class AgentDeleteDecommissionTests
             Dispatched.Add(command);
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private static DiscoveryDbContext NewDb()

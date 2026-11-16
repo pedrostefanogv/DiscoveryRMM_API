@@ -190,12 +190,18 @@ public class RemoteSessionLivenessTests
             Commands.Add(command);
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class NoopCommandDispatcher : IAgentCommandDispatcher
     {
         public Task<AgentCommand> DispatchAsync(AgentCommand command, CancellationToken cancellationToken = default)
             => Task.FromResult(command);
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class FakeSessionRepository(RemoteSession seed) : IRemoteSessionRepository

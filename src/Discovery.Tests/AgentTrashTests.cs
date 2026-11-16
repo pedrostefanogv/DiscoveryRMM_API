@@ -183,7 +183,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
@@ -202,7 +202,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
 
         var withoutForce = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
         Assert.That(withoutForce.IsSuccess, Is.False);
@@ -226,7 +226,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -240,7 +240,7 @@ public class AgentTrashTests
         await SeedBaseAsync(db);
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(Guid.NewGuid()), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
@@ -485,5 +485,37 @@ public class AgentTrashTests
             modelBuilder.Entity<Ticket>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<AgentLabel>(entity => entity.HasKey(item => item.Id));
         }
+    }
+
+    /// <summary>
+    /// Stub mínimo de IAgentAuthService para o purge: o handler passou a revogar
+    /// os tokens na exclusão DEFINITIVA (e não mais na lixeira).
+    /// </summary>
+    private sealed class NoopAgentAuthService : IAgentAuthService
+    {
+        public List<Guid> RevokedAgentIds { get; } = [];
+
+        public Task<(AgentToken Token, string RawToken)> CreateTokenAsync(Guid agentId, string? description)
+            => Task.FromResult((new AgentToken { AgentId = agentId }, "raw"));
+
+        public Task<AgentToken?> ValidateTokenAsync(string rawToken) => Task.FromResult<AgentToken?>(null);
+
+        public Task RevokeTokenAsync(Guid tokenId) => Task.CompletedTask;
+
+        public Task RevokeAllTokensAsync(Guid agentId)
+        {
+            RevokedAgentIds.Add(agentId);
+            return Task.CompletedTask;
+        }
+
+        public Task<IEnumerable<AgentToken>> GetTokensByAgentIdAsync(Guid agentId)
+            => Task.FromResult<IEnumerable<AgentToken>>([]);
+
+        public Task<bool> TryAcquireNatsSessionAsync(Guid tokenId, Guid agentId, string userNkey, TimeSpan sessionTtl)
+            => Task.FromResult(true);
+
+        public Task ReleaseNatsSessionAsync(Guid tokenId) => Task.CompletedTask;
+
+        public Task UpdateLastNatsConnectedAsync(Guid tokenId) => Task.CompletedTask;
     }
 }

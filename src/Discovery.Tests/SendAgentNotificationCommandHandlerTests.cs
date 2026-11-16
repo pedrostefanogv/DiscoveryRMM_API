@@ -126,6 +126,9 @@ public class SendAgentNotificationCommandHandlerTests
             Last = command;
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class FakeAgentRepository(Guid? existingAgentId) : IAgentRepository
@@ -156,6 +159,8 @@ public class SendAgentNotificationCommandHandlerTests
 
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Agent>>([]);
+        public Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Agent?> GetByIdForDecommissionAsync(Guid id) => throw new NotSupportedException();
 
         public Task ApproveZeroTouchAsync(Guid agentId)
             => Task.CompletedTask;

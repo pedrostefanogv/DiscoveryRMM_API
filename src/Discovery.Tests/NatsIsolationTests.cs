@@ -575,6 +575,8 @@ public class NatsIsolationTests
         public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id) => throw new NotImplementedException();
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Agent?> GetByIdForDecommissionAsync(Guid id) => throw new NotSupportedException();
         public Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 

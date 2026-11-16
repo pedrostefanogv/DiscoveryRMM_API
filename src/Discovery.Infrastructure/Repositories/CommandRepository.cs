@@ -154,4 +154,27 @@ public class CommandRepository : ICommandRepository
                         ? now
                         : command.CompletedAt));
     }
+
+    public async Task<int> CancelPendingByAgentAndTypeAsync(
+        Guid agentId,
+        CommandType commandType,
+        string reason,
+        CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        // Só estados NÃO confirmados: um comando já terminal (Completed/Failed/
+        // Timeout/Cancelled) não pode ser reescrito — o histórico dele é o que
+        // aconteceu de fato.
+        return await _db.AgentCommands
+            .Where(command => command.AgentId == agentId
+                && command.CommandType == commandType
+                && (command.Status == CommandStatus.Pending
+                    || command.Status == CommandStatus.Sent
+                    || command.Status == CommandStatus.Running))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(command => command.Status, _ => CommandStatus.Cancelled)
+                .SetProperty(command => command.ErrorMessage, _ => reason)
+                .SetProperty(command => command.CompletedAt, _ => now), ct);
+    }
 }

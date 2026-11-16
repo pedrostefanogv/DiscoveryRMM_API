@@ -16,7 +16,15 @@ public sealed record PurgeAgentCommand(Guid Id, bool Force = false) : ICommand<R
 /// o publish NATS é um efeito irreversível e não pode preceder a transação
 /// (TransactionBehavior faz rollback de tudo se algo falhar após o publish).
 /// </summary>
-public sealed record RequestAgentDecommissionCommand(Guid AgentId, string Reason = "trash") : ICommand<Result<VoidResult>>;
+public sealed record RequestAgentDecommissionCommand(Guid AgentId, string Reason = "trash") : ICommand<Result<AgentDecommissionDispatchDto>>;
+
+/// <summary>
+/// Desfecho do pedido de descomissionamento, para o painel poder dizer a
+/// VERDADE ao operador: o comando foi publicado no transporte (Sent) ou apenas
+/// ficou na fila aguardando o agente reconectar (Queued)? Tratar os dois como
+/// sucesso fazia o painel prometer uma desinstalação que nunca aconteceria.
+/// </summary>
+public sealed record AgentDecommissionDispatchDto(bool Sent, bool Queued, string Message);
 
 /// <summary>Tira o agente da lixeira (limpa <c>DeletedAt</c>).</summary>
 public sealed record RestoreAgentCommand(Guid Id) : ICommand<Result<VoidResult>>;

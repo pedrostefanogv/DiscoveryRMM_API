@@ -163,6 +163,9 @@ public class SendScopeNotificationCommandHandlerTests
             Commands.Add(command);
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class FakeAgentRepository : IAgentRepository
@@ -189,6 +192,8 @@ public class SendScopeNotificationCommandHandlerTests
         public Task UpdateAsync(Agent agent) => Task.CompletedTask;
         public Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress) => Task.CompletedTask;
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Agent>>([]);
+        public Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Agent?> GetByIdForDecommissionAsync(Guid id) => throw new NotSupportedException();
         public Task ApproveZeroTouchAsync(Guid agentId) => Task.CompletedTask;
         public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => Task.CompletedTask;

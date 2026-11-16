@@ -186,6 +186,43 @@ public class AgentRepository : IAgentRepository, IAgentSensorSyncRepository
             .ToListAsync(ct);
     }
 
+    /// <summary>
+    /// Agentes online para REENTREGA de comandos, incluindo os da lixeira.
+    ///
+    /// IgnoreQueryFilters é obrigatório: o DbContext tem um filtro global
+    /// (HasQueryFilter(agent => agent.DeletedAt == null)) que esconderia
+    /// exatamente o agente que precisa receber o DecommissionAgent pendente.
+    /// Sem ele, o comando que desinstala o agente na lixeira nunca era
+    /// reentregue — o PC ficava instalado para sempre.
+    ///
+    /// O escopo por tipo de comando fica na guarda da reentrega
+    /// (IsRedeliveryAllowedForAgent): um agente na lixeira só recebe
+    /// DecommissionAgent.
+    /// </summary>
+    public async Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default)
+    {
+        return await _db.Agents
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Where(agent => agent.Status == AgentStatus.Online)
+            .OrderBy(agent => agent.Hostname)
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Lookup que enxerga agentes na lixeira. Usado pela autorização de NATS e
+    /// pelo descomissionamento: sem IgnoreQueryFilters o filtro global
+    /// (DeletedAt == null) devolveria null exatamente para o agente que está
+    /// sendo desinstalado.
+    /// </summary>
+    public async Task<Agent?> GetByIdForDecommissionAsync(Guid id)
+    {
+        return await _db.Agents
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(agent => agent.Id == id);
+    }
+
     public async Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress)
     {
         const int maxAttempts = 2;

@@ -21,6 +21,24 @@ public interface IAgentRepository
     /// </summary>
     Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default);
     Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Agentes online para fins de REENTREGA de comandos, INCLUINDO os que estão
+    /// na lixeira (soft-deleted). É o oposto deliberado de
+    /// <see cref="GetOnlineAsync"/>: um agente na lixeira continua instalado e
+    /// rodando na máquina até o uninstall confirmar, e precisa receber o
+    /// DecommissionAgent que ficou Pending. O filtro por tipo de comando fica a
+    /// cargo da guarda da reentrega (um agente na lixeira só aceita
+    /// DecommissionAgent).
+    /// </summary>
+    Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Busca o agente IGNORANDO o filtro global de soft delete. Usado no
+    /// caminho de descomissionamento: um agente na lixeira continua instalado
+    /// e precisa continuar autenticando até o uninstall confirmar.
+    /// </summary>
+    Task<Agent?> GetByIdForDecommissionAsync(Guid id);
     Task ApproveZeroTouchAsync(Guid agentId);
     Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId);
     Task TransferSiteAsync(Guid agentId, Guid newSiteId);

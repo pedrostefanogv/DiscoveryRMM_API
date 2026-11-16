@@ -465,6 +465,8 @@ public class AgentUpdateServiceTests
         public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Agent?> GetByIdForDecommissionAsync(Guid id) => throw new NotSupportedException();
         public Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
@@ -728,6 +730,9 @@ public class AgentUpdateServiceTests
 
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class FakeObjectStorageProviderFactory : IObjectStorageProviderFactory

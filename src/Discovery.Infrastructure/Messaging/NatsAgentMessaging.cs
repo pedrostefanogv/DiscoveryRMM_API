@@ -131,8 +131,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         if (_authCache.TryGetValue(agentId, out var cached) && now < cached.ExpiresAt)
             return cached.Authorized;
 
-        var tokens = await _agentAuthService.GetTokensByAgentIdAsync(agentId);
-        var authorized = tokens.Any(t => t.IsValid);
+        var authorized = await ComputeAgentAuthorizedAsync(agentId);
 
         _authCache[agentId] = (authorized, now.Add(AuthCacheTtl));
 
@@ -144,6 +143,47 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         }
 
         return authorized;
+    }
+
+    /// <summary>
+    /// Decide se mensagens NATS de um agente são aceitas.
+    ///
+    /// Regra: existe ao menos um token ativo. Um token só é revogado no PURGE
+    /// (exclusão definitiva), não na lixeira — ver DeleteAgentCommandHandler.
+    ///
+    /// Exceção deliberada: um agente na LIXEIRA que ainda tem token válido é
+    /// aceito, porque ele continua instalado e precisa concluir o
+    /// descomissionamento. Sem isto, o agente excluído cai para Offline no
+    /// painel (heartbeat rejeitado) e a reentrega do DecommissionAgent não o
+    /// encontra mais — o PC permanecia instalado para sempre.
+    /// </summary>
+    private async Task<bool> ComputeAgentAuthorizedAsync(Guid agentId)
+    {
+        var tokens = await _agentAuthService.GetTokensByAgentIdAsync(agentId);
+        if (tokens.Any(t => t.IsValid))
+            return true;
+
+        // Token inválido/ausente: aceita apenas se o agente está na lixeira e
+        // ainda pode estar na máquina (aguardando o uninstall). Qualquer outro
+        // caso continua sendo rejeitado como possível spoofing.
+        try
+        {
+            var agent = await _agentRepo.GetByIdForDecommissionAsync(agentId);
+            if (agent is not null && agent.DeletedAt is not null)
+            {
+                _logger.LogDebug(
+                    "NATS: mensagem aceita de agente na lixeira aguardando descomissionamento — AgentId={AgentId}",
+                    agentId);
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Fail-closed: em dúvida sobre a identidade, não aceita a mensagem.
+            _logger.LogDebug(ex, "Falha ao consultar agente {AgentId} para autorização de NATS", agentId);
+        }
+
+        return false;
     }
 
     public bool IsConnected => _connection.ConnectionState == NatsConnectionState.Open;

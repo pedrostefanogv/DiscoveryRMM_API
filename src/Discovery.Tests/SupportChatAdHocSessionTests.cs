@@ -272,6 +272,9 @@ public class SupportChatAdHocSessionTests
             Dispatched.Add(command);
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class RecordingPublisher : ITicketChatEnvelopePublisher

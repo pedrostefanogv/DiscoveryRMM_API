@@ -74,10 +74,14 @@ public class PendingCommandRedeliveryService(
     }
 
     /// <summary>
-    /// Agentes elegíveis a receber reentrega: online (inclui agentes na lixeira,
-    /// que continuam rodando na máquina até o uninstall confirmar).
-    /// `GetOnlineAsync` não filtra soft-deleted; o filtro por comando acontece
-    /// em <see cref="IsRedeliveryAllowedForAgent"/>: um agente na lixeira só deve
+    /// Agentes elegíveis a receber reentrega: online, INCLUINDO os que estão na
+    /// lixeira (continuam rodando na máquina até o uninstall confirmar). A
+    /// consulta que alimenta esta lista é
+    /// <see cref="IAgentRepository.GetOnlineIncludingTrashedAsync"/> — o
+    /// <c>GetOnlineAsync</c> filtra soft-deleted e por isso deixava o agente da
+    /// lixeira sem receber o DecommissionAgent.
+    /// O filtro por comando acontece em
+    /// <see cref="IsRedeliveryAllowedForAgent"/>: um agente na lixeira só deve
     /// receber DecommissionAgent — qualquer outro comando seria contraditório
     /// com a exclusão já commitada no painel.
     /// </summary>
@@ -136,7 +140,10 @@ public class PendingCommandRedeliveryService(
         if (!messaging.IsConnected)
             return;
 
-        var onlineAgents = await agentRepo.GetOnlineAsync(ct);
+        // Inclui agentes na lixeira: é exatamente o agente excluído que precisa
+        // receber o DecommissionAgent pendente. GetOnlineAsync (sem os da
+        // lixeira) devolvia lista vazia e o comando nunca saía da fila.
+        var onlineAgents = await agentRepo.GetOnlineIncludingTrashedAsync(ct);
         var agentIds = SelectRedeliveryAgentIds(onlineAgents);
         if (agentIds.Length == 0)
             return;

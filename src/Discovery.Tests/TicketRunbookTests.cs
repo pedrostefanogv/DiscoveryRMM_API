@@ -217,6 +217,9 @@ public class TicketRunbookTests
             DispatchOrder.Add($"script-{_seq}");
             return Task.FromResult(command);
         }
+
+        public async Task<AgentCommandDispatchResult> DispatchWithOutcomeAsync(AgentCommand command, CancellationToken cancellationToken = default)
+            => new(await DispatchAsync(command, cancellationToken), CommandDispatchOutcome.Sent);
     }
 
     private sealed class FakeScriptService(params Guid[] knownIds) : IAutomationScriptService

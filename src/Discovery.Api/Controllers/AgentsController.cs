@@ -195,7 +195,10 @@ public class AgentsController : ControllerBase
     {
         var result = await _mediator.Send(new RequestAgentDecommissionCommand(id, "resend"), ct);
         return result.Match<IActionResult>(
-            success: _ => NoContent(),
+            // Devolve o desfecho (sent/queued): o painel precisa distinguir
+            // "comando enviado" de "comando enfileirado" para não exibir um
+            // sucesso que não aconteceu.
+            success: dto => Ok(new { sent = dto.Sent, queued = dto.Queued, message = dto.Message }),
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { error = errors[0].Message })
                 : BadRequest(new { error = errors[0].Message }));
