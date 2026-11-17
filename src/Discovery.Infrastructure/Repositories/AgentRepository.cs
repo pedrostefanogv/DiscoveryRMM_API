@@ -233,7 +233,16 @@ public class AgentRepository : IAgentRepository, IAgentSensorSyncRepository
             {
                 var now = DateTime.UtcNow;
 
+                // IgnoreQueryFilters: o filtro global (HasQueryFilter
+                // DeletedAt == null) também se aplica a ExecuteUpdateAsync, então
+                // o UPDATE não atingia o agente na lixeira. Esse agente CONTINUA
+                // RODANDO na máquina e é ele que precisa voltar a Online para a
+                // reentrega encontrá-lo e enviar o DecommissionAgent — sem isto o
+                // caminho "agente offline vai para a lixeira e reconecta depois"
+                // nunca desinstalava nada (o agente publicava heartbeat, mas
+                // seguia Offline no banco).
                 await _db.Agents
+                    .IgnoreQueryFilters()
                     .Where(agent => agent.Id == id)
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(agent => agent.Status, _ => status)

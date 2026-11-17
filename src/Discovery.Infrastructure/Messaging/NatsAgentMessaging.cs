@@ -124,6 +124,37 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Decide se o agente deve ser anunciado como peer P2P do tenant.
+    ///
+    /// Só na transição Offline→Online e com PeerId conhecido. Agente na LIXEIRA é
+    /// excluído: está sendo desinstalado e anunciá-lo como peer só gera ruído e
+    /// entradas de P2P para uma máquina que vai desaparecer. O heartbeat continua
+    /// aceito — é ele que mantém o agente alcançável para o DecommissionAgent.
+    /// </summary>
+    internal static bool ShouldPublishPeerOnline(bool wasTransition, string? peerId, bool isTrashed)
+        => wasTransition && !string.IsNullOrWhiteSpace(peerId) && !isTrashed;
+
+    /// <summary>
+    /// O agente está na lixeira? Consulta tolerante: em falha devolve false (não
+    /// suprime o anúncio P2P) — um agente ATIVO deixar de anunciar-se por
+    /// indisponibilidade do banco seria pior que um agente em desinstalação
+    /// anunciar-se por alguns instantes.
+    /// </summary>
+    private async Task<bool> IsTrashedAgentAsync(Guid agentId)
+    {
+        try
+        {
+            var agent = await _agentRepo.GetByIdForDecommissionAsync(agentId);
+            return agent?.DeletedAt is not null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Falha ao verificar lixeira do agente {AgentId} ao anunciar P2P.", agentId);
+            return false;
+        }
+    }
+
     private async Task<bool> IsAgentAuthorizedAsync(Guid agentId)
     {
         // Cache local (TTL 30s) para evitar DB/Redis hit por heartbeat em alta carga.
@@ -405,8 +436,14 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                                 heartbeat.CpuPercent, heartbeat.MemoryPercent,
                                 heartbeat.DiskPercent, heartbeat.P2pPeers);
 
-                            // Se houve transição Offline→Online e o agent tem PeerId, publica peer.online
-                            if (wasTransition && !string.IsNullOrWhiteSpace(heartbeat.PeerId))
+                            // Se houve transição Offline→Online e o agent tem PeerId, publica peer.online.
+                            //
+                            // Exceto para agente na LIXEIRA: ele está sendo desinstalado e
+                            // anunciá-lo como peer do tenant só gera ruído e entradas de P2P
+                            // para uma máquina que vai desaparecer. O heartbeat continua sendo
+                            // aceito (é o que mantém o agente alcançável para o
+                            // DecommissionAgent) — o que se suprime é apenas o anúncio.
+                            if (ShouldPublishPeerOnline(wasTransition, heartbeat.PeerId, await IsTrashedAgentAsync(agentId.Value)))
                             {
                                 try
                                 {
@@ -843,12 +880,55 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         return null;
     }
 
-    private async Task<string> BuildAgentSubjectAsync(Guid agentId, string messageType)
+    /// <summary>
+    /// Monta o subject unicast do agente.
+    ///
+    /// Usa <see cref="IAgentRepository.GetByIdForDecommissionAsync"/> — o lookup
+    /// que IGNORA o filtro global de soft delete (HasQueryFilter(DeletedAt ==
+    /// null)). Sem isso, todo envio para um agente na LIXEIRA morria aqui com
+    /// "Agent not found": o agente acabou de ser excluído no painel e é
+    /// exatamente ele que precisa receber o DecommissionAgent para se
+    /// desinstalar. O dispatch engolia a exceção (best-effort) e o comando
+    /// ficava Pending para sempre; a reentrega também não salvava, porque ela
+    /// usa este mesmo método para publicar.
+    ///
+    /// O Status/DeletedAt do agente é irrelevante para o subject: o endereço é
+    /// derivado de clientId/siteId/agentId, que não mudam na lixeira.
+    /// </summary>
+    private Task<string> BuildAgentSubjectAsync(Guid agentId, string messageType)
+        => BuildAgentSubjectAsync(_agentRepo, _siteRepo, agentId, messageType);
+
+    /// <summary>
+    /// Versão com repositórios explícitos: permite ao teste dirigir o caminho real
+    /// de resolução do subject contra um repositório de verdade (com o filtro
+    /// global de soft delete ativo), provando que o agente na lixeira continua
+    /// alcançável. Sem esta costura o teste só exercitaria a função pura e
+    /// passaria mesmo com o lookup errado — foi assim que o bug escapou.
+    /// </summary>
+    internal static async Task<string> BuildAgentSubjectAsync(
+        IAgentRepository agentRepo,
+        ISiteRepository siteRepo,
+        Guid agentId,
+        string messageType)
     {
-        var agent = await _agentRepo.GetByIdAsync(agentId)
-            ?? throw new InvalidOperationException($"Agent '{agentId}' not found.");
-        var site = await _siteRepo.GetByIdAsync(agent.SiteId)
-            ?? throw new InvalidOperationException($"Site '{agent.SiteId}' not found for agent.");
+        var agent = await agentRepo.GetByIdForDecommissionAsync(agentId);
+        var site = agent is null ? null : await siteRepo.GetByIdAsync(agent.SiteId);
+
+        return ResolveAgentSubject(agent, site, agentId, messageType);
+    }
+
+    /// <summary>
+    /// Núcleo testável de <see cref="BuildAgentSubjectAsync"/>: recebe os lookups
+    /// já resolvidos para que o teste possa provar que um agente na LIXEIRA
+    /// (DeletedAt preenchido) produz um subject válido. O filtro global de soft
+    /// delete esconderia o agente e o comando de desinstalação nunca sairia.
+    /// </summary>
+    internal static string ResolveAgentSubject(Agent? agent, Site? site, Guid agentId, string messageType)
+    {
+        if (agent is null)
+            throw new InvalidOperationException($"Agent '{agentId}' not found.");
+        if (site is null)
+            throw new InvalidOperationException($"Site '{agent.SiteId}' not found for agent.");
 
         return NatsSubjectBuilder.AgentSubject(site.ClientId, site.Id, agentId, messageType);
     }
@@ -986,7 +1066,12 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         {
             try
             {
-                var agent = await _agentRepo.GetByIdAsync(agentId.Value);
+                // GetByIdForDecommissionAsync (IgnoreQueryFilters): um agente na
+                // LIXEIRA ainda publica eventos (ex.: o próprio heartbeat de saída
+                // antes de desinstalar). Com o lookup filtrado, esses eventos
+                // caíam no subject de fallback "tenant.unscoped" e o dashboard do
+                // tenant não os via.
+                var agent = await _agentRepo.GetByIdForDecommissionAsync(agentId.Value);
                 if (agent is not null)
                 {
                     siteId = agent.SiteId;
