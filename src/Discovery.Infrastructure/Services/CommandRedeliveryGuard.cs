@@ -106,10 +106,15 @@ public sealed class CommandRedeliveryGuard(
     /// do ar fica Pending com SentAt nulo e continua elegível à reentrega —
     /// senão o restart pedido com o NATS caído nunca chegaria ao agente.
     ///
-    /// Limitação aceita: Sent indica que o TRANSPORTE DO SERVIDOR estava
-    /// conectado (AgentCommandDispatcher só olha messaging.IsConnected), não que
-    /// aquele agente recebeu. Um comando de energia publicado com o transporte no
-    /// ar mas o agente offline não será reentregue: ele expira pela janela de
+    /// Nota sobre "publicado": desde a correção do descomissionamento,
+    /// AgentCommandDispatcher NÃO marca mais Sent só por o transporte estar
+    /// conectado — ele também confere o heartbeat do agente (Redis). Logo
+    /// "já publicado" passou a significar de fato "o agente estava alcançável
+    /// quando o comando saiu", o que reduz (mas não elimina) a janela em que um
+    /// comando de energia é publicado com o agente já fora.
+    ///
+    /// Limitação remanescente: entre a leitura do heartbeat e o publish o agente
+    /// pode cair. Nesse caso o comando não será reentregue: expira pela janela de
     /// retenção e é encerrado como Timeout ("Não entregue: agente offline além da
     /// janela de reentrega."), com motivo explícito no histórico e reenvio manual
     /// pelo operador. Trade-off deliberado — um comando não executado e VISÍVEL é

@@ -130,7 +130,7 @@ public class AgentTrashTests
         db.Agents.Add(agent);
         await db.SaveChangesAsync();
 
-        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db));
+        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), NullLogger<RestoreAgentCommandHandler>.Instance);
         var result = await handler.Handle(new RestoreAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -149,7 +149,7 @@ public class AgentTrashTests
         db.Agents.Add(agent);
         await db.SaveChangesAsync();
 
-        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db));
+        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), NullLogger<RestoreAgentCommandHandler>.Instance);
         var result = await handler.Handle(new RestoreAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -162,11 +162,42 @@ public class AgentTrashTests
         using var db = CreateDbContext();
         await SeedBaseAsync(db);
 
-        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db));
+        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), NullLogger<RestoreAgentCommandHandler>.Instance);
         var result = await handler.Handle(new RestoreAgentCommand(Guid.NewGuid()), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
         Assert.That(result.Errors[0].Code, Is.EqualTo("NotFound"));
+    }
+
+    /// <summary>
+    /// Regressão: restaurar um agente PRECISA cancelar o comando de
+    /// descomissionamento que ficou pendente na lixeira.
+    ///
+    /// Sem isso, a reentrega (que agora alcança agentes da lixeira) entregaria o
+    /// comando assim que o agente reconectasse e o PC do agente recém-restaurado
+    /// se desinstalaria sozinho — o oposto do que o operador pediu ao restaurar.
+    /// </summary>
+    [Test]
+    public async Task Restore_CancelsPendingDecommissionCommand()
+    {
+        using var db = CreateDbContext();
+        await SeedBaseAsync(db);
+        var agent = NewAgent("EXCLUIDO", DateTime.UtcNow);
+        db.Agents.Add(agent);
+        await db.SaveChangesAsync();
+
+        var commandRepo = new RecordingCommandRepository();
+        var handler = new RestoreAgentCommandHandler(
+            db, new NoopRedisService(), new FakeSiteRepository(db), commandRepo,
+            NullLogger<RestoreAgentCommandHandler>.Instance);
+
+        var result = await handler.Handle(new RestoreAgentCommand(agent.Id), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(commandRepo.Cancelled, Has.Count.EqualTo(1),
+            "restaurar deve cancelar o DecommissionAgent pendente");
+        Assert.That(commandRepo.Cancelled[0].AgentId, Is.EqualTo(agent.Id));
+        Assert.That(commandRepo.Cancelled[0].Type, Is.EqualTo(CommandType.DecommissionAgent));
     }
 
     // -------------------------------------------------------------------------
@@ -485,6 +516,30 @@ public class AgentTrashTests
             modelBuilder.Entity<Ticket>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<AgentLabel>(entity => entity.HasKey(item => item.Id));
         }
+    }
+
+    /// <summary>
+    /// Stub de ICommandRepository que registra os cancelamentos pedidos pela
+    /// restauração (os comandos de descomissionamento pendentes precisam morrer
+    /// quando o operador desiste da exclusão).
+    /// </summary>
+    private sealed class RecordingCommandRepository : ICommandRepository
+    {
+        public List<(Guid AgentId, CommandType Type, string Reason)> Cancelled { get; } = [];
+
+        public Task<int> CancelPendingByAgentAndTypeAsync(Guid agentId, CommandType commandType, string reason, CancellationToken ct = default)
+        {
+            Cancelled.Add((agentId, commandType, reason));
+            return Task.FromResult(1);
+        }
+
+        public Task<AgentCommand?> GetByIdAsync(Guid id) => throw new NotSupportedException();
+        public Task<IEnumerable<AgentCommand>> GetPendingByAgentIdAsync(Guid agentId) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AgentCommand>> GetRedeliveryCandidatesAsync(IReadOnlyCollection<Guid> agentIds, DateTime createdAfterUtc, DateTime staleBeforeUtc, int limit, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AgentCommand>> GetExpiredUnconfirmedAsync(DateTime createdBeforeUtc, int limit, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IEnumerable<AgentCommand>> GetByAgentIdAsync(Guid agentId, int limit = 50) => throw new NotSupportedException();
+        public Task<AgentCommand> CreateAsync(AgentCommand command) => throw new NotSupportedException();
+        public Task UpdateStatusAsync(Guid id, CommandStatus status, string? result, int? exitCode, string? errorMessage) => throw new NotSupportedException();
     }
 
     /// <summary>

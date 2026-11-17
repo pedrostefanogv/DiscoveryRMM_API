@@ -188,5 +188,8 @@ public class CancelAutomationExecutionTests
         public Task<AgentCommand> CreateAsync(AgentCommand command) => throw new NotSupportedException();
         public Task<IReadOnlyList<AgentCommand>> GetRedeliveryCandidatesAsync(IReadOnlyCollection<Guid> agentIds, DateTime createdAfterUtc, DateTime staleBeforeUtc, int limit, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<AgentCommand>> GetExpiredUnconfirmedAsync(DateTime createdBeforeUtc, int limit, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<int> CancelPendingByAgentAndTypeAsync(Guid agentId, CommandType commandType, string reason, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 }

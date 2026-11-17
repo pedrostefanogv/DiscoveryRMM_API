@@ -28,7 +28,8 @@ public class AgentAuthMiddleware
 
     public async Task InvokeAsync(
         HttpContext context,
-        IAgentAuthService authService)
+        IAgentAuthService authService,
+        IAgentRepository agentLookup)
     {
         var path = context.Request.Path;
         var isAgentApi = path.StartsWithSegments(_agentAuthPathPrefix);
@@ -102,10 +103,66 @@ public class AgentAuthMiddleware
             }
         }
 
+        // Agente na LIXEIRA: o token continua válido de propósito (é a credencial
+        // que permite ao servidor mandar o comando de desinstalação e receber o
+        // heartbeat até o uninstall confirmar — ver DeleteAgentCommandHandler).
+        // Isso NÃO pode virar acesso livre: enquanto está na lixeira o agente só
+        // pode concluir o próprio descomissionamento, que usa exatamente um
+        // endpoint (DELETE /agent-auth/me). Todo o resto (inventário, chamados,
+        // sensores, automação...) é negado.
+        if (await IsTrashedAgentAsync(token.AgentId, agentLookup))
+        {
+            if (!IsDecommissionEndpoint(path))
+            {
+                _logger.LogWarning(
+                    "[AgentAuth] 403: agente {AgentId} está na lixeira e só pode acessar o próprio descomissionamento (pedido: {Path}).",
+                    token.AgentId, path);
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsJsonAsync(new
+                {
+                    error = "Agent is decommissioned; only the decommission endpoint is available."
+                });
+                return;
+            }
+        }
+
         context.Items["AgentId"] = token.AgentId;
         context.Items["TokenId"] = token.Id;
 
         await _next(context);
+    }
+
+    /// <summary>
+    /// O agente está soft-deleted? Consulta tolerante: em falha NÃO bloqueia
+    /// (fail-open) — negar acesso a um agente ativo por indisponibilidade do
+    /// banco seria pior que o risco de um agente já excluído alcançar um
+    /// endpoint por alguns instantes.
+    /// </summary>
+    private async Task<bool> IsTrashedAgentAsync(Guid agentId, IAgentRepository agentRepo)
+    {
+        try
+        {
+            var agent = await agentRepo.GetByIdForDecommissionAsync(agentId);
+            return agent?.DeletedAt is not null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[AgentAuth] Falha ao verificar lixeira do agente {AgentId}.", agentId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Único endpoint que um agente na lixeira pode chamar: o DELETE do próprio
+    /// registro (<c>/api/v1/agent-auth/me</c>), usado pelo descomissionamento.
+    /// </summary>
+    private static bool IsDecommissionEndpoint(PathString path)
+    {
+        if (!path.HasValue)
+            return false;
+
+        var value = path.Value!.TrimEnd('/');
+        return value.EndsWith("/agent-auth/me", StringComparison.OrdinalIgnoreCase);
     }
 }
 
