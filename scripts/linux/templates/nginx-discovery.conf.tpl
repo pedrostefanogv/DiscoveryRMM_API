@@ -100,6 +100,27 @@ client_max_body_size 64m;
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  # Download de instalador de agente (stage2 e generico/zero-touch): o arquivo
+  # tem ~61 MB e, em cache miss, o servidor roda o build NSIS ANTES do primeiro
+  # byte (build frio medido ~54s). Sob o default de 60s do proxy_read_timeout o
+  # nginx cancelava a leitura do upstream no meio da transferencia — o cliente
+  # recebia um arquivo truncado (ou 504) depois do HTTP 200 ja enviado.
+  #
+  # proxy_buffering off: nao spoolar 61 MB pelos buffers do nginx; o corpo vai
+  # direto ao cliente (o disco/soquete ja faz o throttle natural).
+  location ^~ /api/v1/download/agent {
+    proxy_pass http://discovery_api_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 1800s;
+    proxy_send_timeout 1800s;
+    proxy_buffering off;
+  }
+
   # Upload multipart DIRETO no object storage (loja custom): o "/complete" só
   # termina depois de o storage montar o objeto E a API calcular o SHA-256 do
   # arquivo (passada de leitura). O default de 60s do proxy_read_timeout devolvia
