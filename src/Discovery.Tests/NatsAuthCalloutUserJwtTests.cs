@@ -306,6 +306,48 @@ public class NatsAuthCalloutUserJwtTests
     }
 
     [Test]
+    public void ParseAuthRequest_ShouldAcceptRealServerShape_WhereSubIsAccountKey()
+    {
+        // REGRESSÃO (incidente 2026-11-18): o nats-server real (2.10+) monta o
+        // auth request com sub = CHAVE PÚBLICA DA CONTA (não o user nkey —
+        // este vai em nats.user_nkey). A checagem antiga (sub == user_nkey)
+        // rejeitava TODOS os auth requests reais, derrubando console e agentes
+        // (NATS auth_error / "Credencial NATS rejeitada"). Este teste reproduz
+        // o shape capturado de um nats-server 2.10.7 real.
+        using var serverKeyPair = KeyPair.CreatePair(PrefixByte.Server);
+        var serverPub = serverKeyPair.GetPublicKey();
+        var accountPub = KeyPair.CreatePair(PrefixByte.Account).GetPublicKey();
+        var userNkey = KeyPair.CreatePair(PrefixByte.User).GetPublicKey();
+
+        var claims = NatsJwt.NewAuthorizationRequestClaims(userNkey);
+        claims.Subject = accountPub; // ← o nats-server real define sub = account
+        claims.Issuer = serverPub;
+        claims.Audience = "nats-authorization-request";
+        claims.AuthorizationRequest.NatsServer = new NatsServerId
+        {
+            Id = serverPub,
+            Name = "discovery-nats",
+            Host = "0.0.0.0",
+            Version = "2.10.7",
+        };
+        claims.AuthorizationRequest.UserNKey = userNkey;
+        claims.AuthorizationRequest.NatsConnectOptions = new NatsConnectOptions
+        {
+            Token = "mdz_probe_token",
+            Name = "probe",
+            Lang = "py",
+            Protocol = 1,
+        };
+        var jwt = NatsJwt.EncodeAuthorizationRequestClaims(claims, serverKeyPair);
+
+        var parsed = NatsAuthCalloutBackgroundService.ParseAuthRequest(jwt, null, out var failureReason);
+
+        Assert.That(parsed, Is.Not.Null, $"falha: {failureReason}");
+        Assert.That(parsed!.Nats.UserNkey, Is.EqualTo(userNkey));
+        Assert.That(failureReason, Is.Null);
+    }
+
+    [Test]
     public void ParseAuthRequest_ShouldRejectInvalidOrTamperedServerSignature()
     {
         using var serverKeyPair = KeyPair.CreatePair(PrefixByte.Server);

@@ -261,12 +261,13 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             _logger.LogWarning(
                 "Auth callout: Nats:ServerPublicKey vazio — configure a(s) chave(s) públicas do servidor NATS para ancorar a confiança dos auth requests");
         }
-        var request = ParseAuthRequest(requestJwt, expectedServerPublicKey);
+        var request = ParseAuthRequest(requestJwt, expectedServerPublicKey, out var parseFailureReason);
         if (request is null)
         {
             _logger.LogWarning(
-                "Auth callout: failed to parse auth request JWT. JwtLength={JwtLength}",
-                requestJwt?.Length ?? 0);
+                "Auth callout: failed to parse auth request JWT. JwtLength={JwtLength} Reason={Reason}",
+                requestJwt?.Length ?? 0,
+                parseFailureReason ?? "desconhecida");
             return await BuildErrorResponseAsync("Invalid auth request.", null, null, configurationService, ct);
         }
 
@@ -850,36 +851,52 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
     }
 
     internal static AuthorizationRequest? ParseAuthRequest(string jwt, string? expectedServerPublicKey = null)
+        => ParseAuthRequest(jwt, expectedServerPublicKey, out _);
+
+    /// <summary>
+    /// Parse + validação do auth request JWT com razão de falha explícita
+    /// (diagnóstico operacional: sem a razão, o log genérico não diz qual
+    /// verificação rejeitou o request — incidente 2026-11-18, em que o sub
+    /// real do NATS é a chave da CONTA e não o user_nkey, ficou invisível).
+    /// </summary>
+    internal static AuthorizationRequest? ParseAuthRequest(string jwt, string? expectedServerPublicKey, out string? failureReason)
     {
+        string? failure = null;
+        AuthorizationRequest? Fail(string reason)
+        {
+            failure = reason;
+            return null;
+        }
+
         try
         {
             if (!TrySplitAndVerifyHeader(jwt, out var parts, out _))
-                return null;
+                return Fail("cabeçalho/split inválido.");
 
             if (!TryDecodeBase64Url(parts[2], out var sigBytes) || sigBytes.Length != 64)
-                return null;
+                return Fail("assinatura ausente/malformada (não são 64 bytes).");
 
             if (!TryDecodeBase64Url(parts[1], out var payloadBytes))
-                return null;
+                return Fail("payload não é base64url válido.");
 
             using var payloadDoc = JsonDocument.Parse(payloadBytes);
             var root = payloadDoc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return null;
+                return Fail("payload não é um objeto JSON.");
 
             var issuer = TryGetStringClaim(root, "iss");
             if (string.IsNullOrWhiteSpace(issuer) || !IsValidNkeyPublicKey(PrefixByte.Server, issuer))
-                return null;
+                return Fail("iss ausente ou não é um Server NKey válido.");
 
             if (!TryGetNatsElement(root, out var natsElement))
-                return null;
+                return Fail("claim nats ausente.");
 
             var nats = JsonSerializer.Deserialize<AuthRequestNats>(natsElement.GetRawText(), JsonSerializerOptions.Web);
             if (nats is null || nats.Server is null || string.IsNullOrWhiteSpace(nats.Server.Id))
-                return null;
+                return Fail("nats.server.id ausente.");
 
             if (!string.Equals(issuer, nats.Server.Id, StringComparison.Ordinal))
-                return null;
+                return Fail("iss difere de nats.server.id.");
 
             if (!string.IsNullOrWhiteSpace(expectedServerPublicKey))
             {
@@ -887,44 +904,48 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                     ',',
                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (trustedKeys.Length == 0 || !trustedKeys.Contains(issuer, StringComparer.Ordinal))
-                    return null;
+                    return Fail("iss não está na trust list Nats:ServerPublicKey.");
             }
 
-            var sub = TryGetStringClaim(root, "sub");
-            if (!string.IsNullOrWhiteSpace(sub)
-                && !string.IsNullOrWhiteSpace(nats.UserNkey)
-                && !string.Equals(sub, nats.UserNkey, StringComparison.Ordinal))
-            {
-                return null;
-            }
+            // NOTA (correção 2026-11-18): no protocolo REAL do auth callout
+            // (nats-server 2.10+), o claim sub do auth request é a chave
+            // pública da CONTA (ex.: AAHVVKWH...), não o user nkey — o
+            // user nkey vem em nats.user_nkey. A checagem antiga
+            // (sub == user_nkey) rejeitava TODOS os requests reais.
+            // A identidade do usuário vem de nats.user_nkey (validada
+            // adiante); a assinatura do servidor já autentica o request.
 
             var now = DateTimeOffset.UtcNow;
             if (root.TryGetProperty("exp", out _))
             {
                 if (!TryGetUnixTimestamp(root, "exp", out var expUnix))
-                    return null;
+                    return Fail("exp não é um timestamp unix válido.");
                 if (DateTimeOffset.FromUnixTimeSeconds(expUnix) <= now.Subtract(JwtClockSkew))
-                    return null;
+                    return Fail($"exp expirado ({expUnix}).");
             }
 
             if (root.TryGetProperty("nbf", out _))
             {
                 if (!TryGetUnixTimestamp(root, "nbf", out var nbfUnix))
-                    return null;
+                    return Fail("nbf não é um timestamp unix válido.");
                 if (DateTimeOffset.FromUnixTimeSeconds(nbfUnix) > now.Add(JwtClockSkew))
-                    return null;
+                    return Fail($"nbf no futuro ({nbfUnix}).");
             }
 
             var signingInput = Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}");
             using var serverKeyPair = KeyPair.FromPublicKey(issuer.AsSpan());
             if (!serverKeyPair.Verify(signingInput, sigBytes))
-                return null;
+                return Fail("assinatura ed25519 do servidor não verificou.");
 
             return new AuthorizationRequest { Nats = nats };
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            return Fail($"exceção durante o parse: {ex.Message}");
+        }
+        finally
+        {
+            failureReason = failure;
         }
     }
 
