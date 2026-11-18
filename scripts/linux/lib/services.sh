@@ -341,7 +341,7 @@ ensure_nats_fanout_stream() {
   local stream_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
   local stream_subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command}"
   local stream_max_age="${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}"
-  local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}"
+  local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-33554432}"
   local stream_dupe_window="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}"
 
   # Credenciais via ambiente (NATS_URL/NATS_USER/NATS_PASSWORD sao lidas pelo
@@ -557,7 +557,7 @@ setup_nats() {
   local nats_js_enabled="${NATS_JS_ENABLED:-1}"
   local nats_js_store_dir="${NATS_JS_STORE_DIR:-${DISCOVERY_OPS_DIR:-/opt/discovery-ops}/nats/jetstream}"
   local nats_js_max_memory_store="${NATS_JS_MAX_MEMORY_STORE:-64M}"
-  local nats_js_max_file_store="${NATS_JS_MAX_FILE_STORE:-512M}"
+  local nats_js_max_file_store="${NATS_JS_MAX_FILE_STORE:-1024M}"
 
   local jetstream_block=""
   if [[ "$nats_js_enabled" == "1" ]]; then
