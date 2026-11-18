@@ -159,19 +159,66 @@ public class NatsSessionDeduplicationTests
             tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
         Assert.That(first, Is.True);
 
-        // CONTRATO (T2_F01_05): a sessão NATS é vinculada ao par (agente, nkey).
+        // CONTRATO (corrigido 2026-11-18): a sessão NATS é vinculada ao AGENTE.
         // Mesmo tokenId + MESMO agente + MESMO nkey (ex: reconexão/troca de
         // transporte nats→wss mantendo as credenciais) — renova (sobrescreve).
         var second = await service.TryAcquireNatsSessionAsync(
             tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
         Assert.That(second, Is.True, "Mesmo agente com o mesmo nkey deve renovar a sessão.");
 
-        // Mesmo agente com NKEY DIFERENTE — REJEITADO: um segundo processo com
-        // o mesmo token mas par de chaves distinto não pode sequestrar a sessão
-        // NATS do agente original.
-        var hijack = await service.TryAcquireNatsSessionAsync(
-            tokenId, agentId, "other_nkey", TimeSpan.FromMinutes(5));
-        Assert.That(hijack, Is.False, "Nkey diferente do mesmo token não deve assumir a sessão.");
+        // Mesmo agente com NKEY DIFERENTE — TAMBÉM RENOVA.
+        //
+        // Este é o cenário REAL de reconexão: o NATS gera um user_nkey efêmero
+        // novo a cada conexão, então exigir o mesmo nkey rejeitava todo reconnect
+        // legítimo ("Token already in use by another connection.") e prendia o
+        // agente num loop de reconexão. O nkey não identifica o cliente.
+        var reconnected = await service.TryAcquireNatsSessionAsync(
+            tokenId, agentId, "brand_new_ephemeral_nkey", TimeSpan.FromMinutes(5));
+        Assert.That(reconnected, Is.True,
+            "Reconnect do mesmo agente com nkey efêmero novo deve renovar a sessão.");
+    }
+
+    [Test]
+    public async Task TryAcquireNatsSession_SameAgentRotatingEphemeralNkey_StaysAcquired()
+    {
+        // Regressão do incidente 2026-11-18: o agente reconectava a cada ~10s,
+        // cada tentativa trazendo um user_nkey novo (o NATS gera um por conexão).
+        // Antes da correção, apenas a PRIMEIRA adquiria e todas as seguintes
+        // eram recusadas — o agente nunca estabilizava como online.
+        var tokenId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var service = CreateService([]);
+
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var acquired = await service.TryAcquireNatsSessionAsync(
+                tokenId, agentId, $"ephemeral_nkey_{attempt}", TimeSpan.FromMinutes(5));
+            Assert.That(acquired, Is.True,
+                $"Tentativa de reconexão #{attempt} deveria renovar a sessão do mesmo agente.");
+        }
+    }
+
+    [Test]
+    public async Task TryAcquireNatsSession_SameAgentReconnect_RefreshesTtl()
+    {
+        // O reconnect deve RENOVAR o TTL: sem isso a trava expiraria no meio de
+        // uma sessão viva e abriria janela para conexão duplicada.
+        var tokenId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var redis = new FakeRedisService();
+        var service = CreateService([], redis: redis);
+
+        await service.TryAcquireNatsSessionAsync(tokenId, agentId, "nkey_a", TimeSpan.FromSeconds(30));
+
+        // Reconecta com TTL maior — o valor gravado deve refletir o novo TTL.
+        var renewed = await service.TryAcquireNatsSessionAsync(
+            tokenId, agentId, "nkey_b", TimeSpan.FromMinutes(10));
+        Assert.That(renewed, Is.True);
+
+        var stored = await redis.GetAsync($"nats:session:token:{tokenId}");
+        Assert.That(stored, Is.Not.Null, "A sessão deve continuar registrada após o reconnect.");
+        Assert.That(stored, Does.Contain("nkey_b"),
+            "O valor da sessão deve ser sobrescrito com o nkey da conexão mais recente (auditoria).");
     }
 
     [Test]
@@ -187,10 +234,31 @@ public class NatsSessionDeduplicationTests
             tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
         Assert.That(first, Is.True);
 
-        // Mesmo tokenId mas OUTRO agente (roubo/reutilização indevida) — deve falhar
+        // Mesmo tokenId mas OUTRO agente (roubo/reutilização indevida) — deve falhar.
+        // ESTA é a proteção anti-hijack que precisa sobreviver à correção: o que
+        // separa "mesmo agente reconectando" de "token clonado" é o agentId, não
+        // o user_nkey (que é efêmero e muda a cada conexão).
         var stolen = await service.TryAcquireNatsSessionAsync(
             tokenId, otherAgentId, "other_nkey", TimeSpan.FromMinutes(5));
         Assert.That(stolen, Is.False, "Token em uso por outro agente deve ser rejeitado.");
+    }
+
+    [Test]
+    public async Task TryAcquireNatsSession_DifferentAgentCannotHijackEvenWithMatchingNkey()
+    {
+        // Reforço: nem reapresentando o MESMO nkey um agente diferente assume a
+        // sessão. Garante que a remoção do critério de nkey não abriu brecha.
+        var tokenId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var otherAgentId = Guid.NewGuid();
+        var service = CreateService([]);
+
+        Assert.That(await service.TryAcquireNatsSessionAsync(
+            tokenId, agentId, "shared_nkey", TimeSpan.FromMinutes(5)), Is.True);
+
+        Assert.That(await service.TryAcquireNatsSessionAsync(
+            tokenId, otherAgentId, "shared_nkey", TimeSpan.FromMinutes(5)), Is.False,
+            "Outro agente não pode assumir a sessão mesmo reapresentando o mesmo nkey.");
     }
 
     [Test]

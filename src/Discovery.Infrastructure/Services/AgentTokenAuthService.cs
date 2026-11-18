@@ -163,12 +163,24 @@ public class AgentTokenAuthService : IAgentAuthService
             return true;
 
         // Sessão já existe — verifica quem a segura:
-        //   - MESMO agente + MESMO user_nkey: renova a sessão (reconnect do
-        //     mesmo cliente, ex.: troca de transporte nats→wss);
-        //   - MESMO agente + user_nkey DIFERENTE: conexão DUPLICADA usando o
-        //     mesmo token — REJEITA (era aqui que o token "clonado" passava:
-        //     a sobrescrita silenciosamente rouba a sessão da conexão original);
+        //   - MESMO agente: renova a sessão (reconnect legítimo do próprio agente);
         //   - Agente diferente: token está sendo usado por outro agente → rejeitar.
+        //
+        // CORREÇÃO (2026-11-18): o critério anterior exigia TAMBÉM o mesmo
+        // user_nkey, o que tornava o reconnect legítimo impossível. O NATS gera
+        // um user_nkey EFÊMERO NOVO a cada conexão (nats-server auth_callout.go;
+        // o próprio NatsAuthCalloutBackgroundService documenta isso), então a
+        // comparação nunca casava: toda reconexão caía no "return false" e o
+        // servidor respondia "Token already in use by another connection." —
+        // o agente entrava em loop de reconexão (nkey novo a cada tentativa)
+        // enquanto a trava do Redis (TTL 3 min) seguia renovada pela conexão
+        // anterior, ainda viva.
+        //
+        // A proteção anti-hijack continua íntegra: o que separa "mesmo agente
+        // reconectando" de "token roubado por outro agente" é o agentId, que já
+        // é comparado abaixo. O user_nkey não identifica o cliente (muda a cada
+        // conexão) e por isso deixa de ser critério de decisão — permanece
+        // gravado no valor da sessão apenas para auditoria/diagnóstico.
         var existing = await _redisService.GetAsync(sessionKey);
         if (!string.IsNullOrWhiteSpace(existing))
         {
@@ -177,12 +189,10 @@ public class AgentTokenAuthService : IAgentAuthService
                 var existingData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(existing);
                 var sameAgent = existingData.TryGetProperty("agentId", out var existingAgentId)
                     && existingAgentId.GetString() == agentId.ToString();
-                var sameUserNkey = existingData.TryGetProperty("userNkey", out var existingUserNkey)
-                    && string.Equals(existingUserNkey.GetString(), userNkey, StringComparison.Ordinal);
 
-                if (sameAgent && sameUserNkey)
+                if (sameAgent)
                 {
-                    // Renova a sessão do mesmo cliente
+                    // Renova a sessão do mesmo agente (reconnect / troca de transporte)
                     await _redisService.SetAsync(sessionKey, sessionValue, expirySeconds);
                     return true;
                 }
