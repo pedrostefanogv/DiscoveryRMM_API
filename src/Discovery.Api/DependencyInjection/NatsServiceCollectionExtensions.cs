@@ -1,6 +1,7 @@
 using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Messaging;
 using NATS.Client.Core;
 
 namespace Discovery.Api.DependencyInjection;
@@ -20,10 +21,14 @@ public static class NatsServiceCollectionExtensions
             // (antes cada um montava o seu e o health check ficava sem credenciais).
             var opts = NatsOptionsFactory.CreateBase(configuration) with
             {
-                // Reconexao: max 10 tentativas com backoff exponencial (1s -> 2s -> 4s -> ... ate 60s).
+                // Reconexao: backoff exponencial (1s -> 2s -> 4s -> ... ate 60s).
+                // MaxReconnectRetry = -1 => tentativas ILIMITADAS: o agente NAO pode
+                // desistir de reconectar ao broker depois de 10 falhas (o comando
+                // despachado durante uma janela longa de instabilidade do NATS
+                // simplesmente ficava orfao para sempre).
                 ReconnectWaitMin = TimeSpan.FromSeconds(1),
                 ReconnectWaitMax = TimeSpan.FromSeconds(60),
-                MaxReconnectRetry = 10,
+                MaxReconnectRetry = -1,
                 // Ping interval para detectar conexoes mortas rapidamente.
                 PingInterval = TimeSpan.FromMinutes(2),
             };
@@ -45,6 +50,9 @@ public static class NatsServiceCollectionExtensions
 
         services.Configure<NatsCommandRedeliveryOptions>(
             configuration.GetSection(NatsCommandRedeliveryOptions.SectionName));
+
+        services.AddSingleton<INatsTenantStreamProvisioner, NatsTenantStreamProvisioner>();
+        services.AddSingleton<IAgentMessaging, NatsAgentMessaging>();
 
         services.AddHostedService<NatsBackgroundService>();
         services.AddHostedService<NatsFanoutStreamBootstrapService>();

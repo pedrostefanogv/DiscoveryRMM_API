@@ -38,5 +38,11 @@ public enum RemoteSessionRights
     NoDesktop = 16,
 
     /// <summary>Sem eventos de sistema da sessão (auditoria reduzida para o operador).</summary>
-    NoEvents = 32
+    NoEvents = 32,
+
+    /// <summary>Sem túnel proxy TCP (o viewer não ganha os subjects .proxy.req/.proxy.resp).</summary>
+    NoProxy = 64,
+
+    /// <summary>Sem túnel RDP (o viewer não ganha os subjects .tunnel.in/.tunnel.out/.rdp.*).</summary>
+    NoRdp = 128
 }

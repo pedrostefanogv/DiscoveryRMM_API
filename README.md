@@ -53,8 +53,8 @@ O servidor expõe uma **API REST + WebSocket** que se comunica com agents leves 
 ┌─────────────────────────────────────────────────────────┐
 │                  Discovery RMM Server                   │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────┐  │
-│  │  REST API │  │ SignalR  │  │   NATS   │  │  AI   │  │
-│  │ (Scalar) │  │(Realtime)│  │ (Broker) │  │ Chat  │  │
+│  │  REST API │  │   NATS   │  │   SSE    │  │  AI   │  │
+│  │ (Scalar) │  │(JetStream)│ │ (Eventos)│  │ Chat  │  │
 │  └──────────┘  └──────────┘  └──────────┘  └───────┘  │
 │         ↑              ↑            ↑                   │
 │         └──────────────┴────────────┘                   │
@@ -75,7 +75,7 @@ O agent é distribuído como **executável `.exe` para Windows** e realiza:
 - Autenticação mútua com o servidor via JWT + API Key
 - Coleta de inventário de hardware (CPU, RAM, disco, rede)
 - Execução remota de scripts PowerShell/CMD
-- Comunicação em tempo real via **NATS** (com fallback para **SignalR**)
+- Comunicação em tempo real via **NATS/JetStream** (+ REST e SSE)
 - Auto-atualização automática
 
 📦 **Download do Agent:** [Releases do Agent](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases)
@@ -93,7 +93,7 @@ Os módulos abaixo estão em fase **testável / pré-estável**: disponíveis pa
 | 💬 **Chat com IA** | OpenAI/Ollama para análise de tickets | 🧪 Pré-estável |
 | 🎫 **Auto-Tickets** | Motor automático de geração de chamados | 🧪 Pré-estável |
 | 🔧 **Campos Custom** | Campos configuráveis por entidade | 🧪 Pré-estável |
-| 🖥️ **Acesso Remoto** | MeshCentral embed + debug remoto | 🧪 Pré-estável |
+| 🖥️ **Acesso Remoto** | Desktop/Terminal/Arquivos via NATS + Proxy LAN + túnel RDP | 🧪 Pré-estável |
 | 📊 **Relatórios** | Templates personalizáveis com exportação | 🧪 Pré-estável |
 | 🗄️ **Object Storage** | Local, MinIO e S3-compatible | 🧪 Pré-estável |
 | 🚀 **App Store** | Catálogo de apps com deploy automatizado | 🧪 Pré-estável |
@@ -144,10 +144,10 @@ discovery-rmm-server/
 | Cache | Redis (StackExchange.Redis) |
 | ORM | Entity Framework Core 10 + Npgsql |
 | Migrations | FluentMigrator |
-| Realtime | SignalR (WebSocket) |
+| Realtime | NATS 2.x (JetStream) + SSE |
 | IA | OpenAI / Ollama (pgvector embeddings) |
 | Observabilidade | OpenTelemetry (traces + metrics) |
-| Acesso Remoto | MeshCentral |
+| Acesso Remoto | Sessões NATS (desktop/terminal/arquivos), Proxy LAN e túnel RDP |
 | Autenticação | JWT Bearer + API Keys + Argon2 |
 | Validação | FluentValidation |
 | API Docs | Scalar (OpenAPI) |
@@ -381,7 +381,7 @@ The agent is distributed as a **Windows `.exe`** and handles:
 - Mutual authentication with the server via JWT + API Key
 - Hardware inventory collection (CPU, RAM, disk, network)
 - Remote PowerShell/CMD script execution
-- Real-time communication via **NATS** (with **SignalR** fallback)
+- Real-time communication via **NATS/JetStream** (+ REST and SSE)
 - Automatic self-update
 
 📦 **Download Agent:** [Agent Releases](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases)
@@ -397,7 +397,7 @@ The modules below are **testable / pre-stable**: available for validation, but s
 | 💬 **AI Chat** | OpenAI/Ollama for ticket analysis | 🧪 Pre-stable |
 | 🎫 **Auto-Tickets** | Automatic ticket generation engine | 🧪 Pre-stable |
 | 🔧 **Custom Fields** | Configurable fields per entity | 🧪 Pre-stable |
-| 🖥️ **Remote Access** | MeshCentral embed + remote debug | 🧪 Pre-stable |
+| 🖥️ **Remote Access** | Desktop/Terminal/Files over NATS + LAN Proxy + RDP tunnel | 🧪 Pre-stable |
 | 📊 **Reports** | Customizable templates with export | 🧪 Pre-stable |
 | 🗄️ **Object Storage** | Local, MinIO and S3-compatible | 🧪 Pre-stable |
 | 🚀 **App Store** | App catalog with automated deployment | 🧪 Pre-stable |

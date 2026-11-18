@@ -496,7 +496,8 @@ public class RemoteSessionBandwidthCommandHandlerTests
             RemoteSessionKind kind, RemoteTransport transport, QualityProfile quality, RemoteCodec codec,
             string natsSubject, bool force = false, CancellationToken ct = default,
             bool consentRequired = false, DateTime? consentDeadlineAt = null,
-            string? consentPolicySource = null, Guid? id = null)
+            string? consentPolicySource = null, Guid? id = null,
+            RemoteSessionRights rights = RemoteSessionRights.None)
             => throw new NotSupportedException();
 
         public Task<RemoteSession> RenewSessionAsync(Guid sessionId, Guid userId, CancellationToken ct = default)

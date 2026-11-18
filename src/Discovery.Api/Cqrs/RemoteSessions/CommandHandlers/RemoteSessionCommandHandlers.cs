@@ -206,7 +206,7 @@ public sealed class StartRemoteSessionCommandHandler(
             session = await sessionManager.CreateSessionAsync(
                 cmd.AgentId, cmd.UserId, tenantId, siteId,
                 cmd.Kind, cmd.Transport, cmd.Quality, cmd.Codec, natsSubject, cmd.Force, ct,
-                consentRequired, consentDeadline, policy.TopSource(), sessionId);
+                consentRequired, consentDeadline, policy.TopSource(), sessionId, cmd.Rights);
         }
         catch (InvalidOperationException ex)
         {
@@ -262,6 +262,24 @@ public sealed class StartRemoteSessionCommandHandler(
             // agent interpretava start como MODO MANUAL com o override do
             // perfil (unlimited = 75%) e o card nunca saía de 75%.
             auto = true,
+            // Política de túnel PROXY (kind proxy/all): o agent abre os listeners
+            // TCP locais e faz a ponte com os subjects .proxy.req/.proxy.resp.
+            // allowedPorts é a allowlist do agent (defesa em profundidade: o
+            // agent revalida). Sem este bloco o agent não sabia que a sessão é
+            // proxy e o túnel nunca subia.
+            proxy = cmd.Kind is RemoteSessionKind.Proxy or RemoteSessionKind.All
+                ? new
+                {
+                    enabled = true,
+                    allowedPorts = new[] { 3389, 5900, 5985, 5986, 445, 139 }
+                }
+                : null,
+            // Política de túnel RDP (kind rdp/all): o agent ponteia a porta 3389
+            // local com .tunnel.in/.tunnel.out (frames binários com header de 6B
+            // ou controle JSON iniciado por '{').
+            rdp = cmd.Kind is RemoteSessionKind.Rdp or RemoteSessionKind.All
+                ? new { enabled = true, targetPort = 3389 }
+                : null,
             // Bloco de consentimento: só para desktop. O agente novo executa o
             // prompt; o antigo é recusado acima (agent_update_required).
             consent = desktopSession
@@ -324,9 +342,12 @@ public sealed class StartRemoteSessionCommandHandler(
         {
             try
             {
-                // Restrições da sessão (view-only, sem terminal/arquivos...) já vêm
-                // persistidas em session.Rights e viram ACL do NATS nesta credencial.
-                var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(natsSubject, session.Rights);
+                // Restrições da sessão (view-only, sem terminal/arquivos, sem
+                // proxy/rdp...) já vêm persistidas em session.Rights e viram ACL do
+                // NATS nesta credencial. O KIND recorta os subjects de túnel:
+                // .proxy.req/.proxy.resp só em sessões proxy/all; .tunnel.in/.tunnel.out
+                // só em sessões rdp/all.
+                var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(natsSubject, session.Rights, cmd.Kind);
                 var (jwt, nkeySeed, expiresAt) = await credentialsService.IssueSessionCredentialsAsync(
                     pubSubjects,
                     subSubjects,

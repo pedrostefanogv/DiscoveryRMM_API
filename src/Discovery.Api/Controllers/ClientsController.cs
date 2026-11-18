@@ -28,7 +28,7 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
         return note is not null && note.ClientId == clientId;
     }
     [HttpGet]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
     [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
@@ -37,7 +37,7 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetClientByIdQuery(id));

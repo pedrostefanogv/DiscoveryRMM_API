@@ -133,42 +133,19 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                 var xKeySeedPlain = _configuration["Nats:XKeySeed"];
                 xKeySeedPlain = string.IsNullOrWhiteSpace(xKeySeedPlain) ? null : xKeySeedPlain;
 
-                string requestJwt;
                 string? serverXKey = null;
-
-                if (!string.IsNullOrWhiteSpace(xKeySeedPlain))
+                if (msg.Headers != null && msg.Headers.TryGetValue(ServerXKeyHeader, out var xkeyValueRaw))
                 {
-                    // xkey habilitado: decripta payload usando DH curve25519.
-                    // Se o header xkey nao estiver presente ou vazio, rejeita a requisicao
-                    // para evitar bypass de criptografia.
-                    Microsoft.Extensions.Primitives.StringValues xkeyValueRaw;
-                    if (msg.Headers == null || !msg.Headers.TryGetValue(ServerXKeyHeader, out xkeyValueRaw))
-                    {
-                        _logger.LogWarning(
-                            "xkey configurado mas header {Header} ausente na requisicao. Requisicao rejeitada.",
-                            ServerXKeyHeader);
-                        await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, "Auth request rejected (missing xkey header).", ct);
-                        return;
-                    }
-
                     serverXKey = xkeyValueRaw.ToString();
-                    if (string.IsNullOrWhiteSpace(serverXKey))
-                    {
-                        _logger.LogWarning(
-                            "xkey configurado mas header {Header} esta vazio na requisicao. Requisicao rejeitada.",
-                            ServerXKeyHeader);
-                        await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, "Auth request rejected (empty xkey header).", ct);
-                        return;
-                    }
-
-                    using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
-                    var decrypted = xKeyPair.Open(rawData, serverXKey);
-                    requestJwt = Encoding.UTF8.GetString(decrypted);
                 }
-                else
+
+                if (!TryDecryptRequestPayload(rawData, xKeySeedPlain, serverXKey, out var requestJwt, out var decryptError))
                 {
-                    // Sem xkey: payload e o JWT diretamente como UTF-8
-                    requestJwt = Encoding.UTF8.GetString(rawData);
+                    _logger.LogWarning(
+                        "NATS auth callout request rejected during payload decryption: {Reason}",
+                        decryptError);
+                    await ReplyAuthErrorAsync(_natsConnection, msg.ReplyTo, decryptError ?? "Auth request rejected.", ct);
+                    return;
                 }
 
                 var responseJwt = await HandleAuthRequestAsync(
@@ -179,7 +156,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                 if (string.IsNullOrWhiteSpace(msg.ReplyTo))
                     return;
 
-                if (!string.IsNullOrWhiteSpace(xKeySeedPlain) && serverXKey != null)
+                if (!string.IsNullOrWhiteSpace(xKeySeedPlain) && !string.IsNullOrWhiteSpace(serverXKey))
                 {
                     // Encripta resposta para o server usando a chave efemera dele
                     using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
@@ -210,6 +187,27 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
                         var errConfig = errScope.ServiceProvider.GetRequiredService<IConfigurationService>();
                         var errorJwt = await BuildErrorResponseAsync(
                             "Auth callout internal error.", null, null, errConfig, ct);
+
+                        var xKeySeedPlain = _configuration["Nats:XKeySeed"];
+                        string? serverXKey = null;
+                        if (msg.Headers != null && msg.Headers.TryGetValue(ServerXKeyHeader, out var xkeyHdr))
+                            serverXKey = xkeyHdr.ToString();
+
+                        if (!string.IsNullOrWhiteSpace(xKeySeedPlain) && !string.IsNullOrWhiteSpace(serverXKey))
+                        {
+                            try
+                            {
+                                using var xKeyPair = KeyPair.FromSeed(xKeySeedPlain);
+                                var encryptedError = xKeyPair.Seal(Encoding.UTF8.GetBytes(errorJwt), serverXKey);
+                                await _natsConnection.PublishAsync(msg.ReplyTo, encryptedError, cancellationToken: ct);
+                                return;
+                            }
+                            catch (Exception sealEx)
+                            {
+                                _logger.LogDebug(sealEx, "Failed to xkey-seal error response; falling back to plaintext.");
+                            }
+                        }
+
                         await _natsConnection.PublishAsync(msg.ReplyTo, errorJwt, cancellationToken: ct);
                     }
                     catch (Exception pubEx)
@@ -252,7 +250,18 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         IConfigurationService configurationService,
         CancellationToken ct)
     {
-        var request = ParseAuthRequest(requestJwt);
+        var expectedServerPublicKey = _configuration["Nats:ServerPublicKey"];
+        if (string.IsNullOrWhiteSpace(expectedServerPublicKey))
+        {
+            // Defesa em profundidade (R1): sem Nats:ServerPublicKey configurado,
+            // a confiança do auth request fica reduzida à checagem
+            // issuer == nats.Server.Id (o server.id vem do broker genuíno, então
+            // o fluxo real continua seguro) — mas a trust list explícita é a
+            // proteção recomendada contra cenários de rede adversária.
+            _logger.LogWarning(
+                "Auth callout: Nats:ServerPublicKey vazio — configure a(s) chave(s) públicas do servidor NATS para ancorar a confiança dos auth requests");
+        }
+        var request = ParseAuthRequest(requestJwt, expectedServerPublicKey);
         if (request is null)
         {
             _logger.LogWarning(
@@ -413,20 +422,40 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
     /// <summary>
     /// Valida um JWT NATS pré-emitido (agent, user ou sessão) emitido por
-    /// NatsCredentialsService: confere issuer (account public key), exp/nbf e extrai
-    /// as permissões pub/sub do claim "nats". O subject NÃO é comparado com o
-    /// user_nkey do auth request: esse user_nkey é uma chave efêmera gerada pelo NATS
-    /// por conexão, então o handler sempre reemite o JWT com sub = user_nkey (mesmo
-    /// padrão do caminho agent via IssueUserJwtForAgentAsync).
+    /// NatsCredentialsService: verifica assinatura Ed25519 com a AccountSeed,
+    /// header typ=JWT/alg=ed25519-nkey, issuer (account public key), PrefixByte.User
+    /// do subject, exp/nbf e extrai as permissões pub/sub do claim "nats".
+    ///
+    /// Em HandleAuthRequestAsync, expectedUserNkey é null porque o user_nkey do auth
+    /// request é uma chave efêmera gerada pelo NATS por conexão (nats-server auth_callout.go),
+    /// enquanto o sub do JWT pré-emitido é a chave do cliente.
     ///
     /// isSessionToken identifica apenas o rótulo de auditoria (Name = "session:*").
-    ///
-    /// NOTA: Usa decodificação JWT manual (System.IdentityModel.Tokens.Jwt) em vez de
-    /// NatsJwt.DecodeUserClaims porque a versão 1.0.1 da lib NATS.Jwt contém um bug
-    /// que causa NatsJwtException em JWTs válidos gerados por NatsJwt.EncodeUserClaims
-    /// (o claim "nats" com pub.allow faz o DecodeUserClaims falhar).
     /// </summary>
-    internal bool TryValidatePreIssuedNatsJwt(string token, out DateTime expiresAtUtc, out bool isSessionToken, out string jwtSubject, out string[] pubPerms, out string[] subPerms)
+    internal bool TryValidatePreIssuedNatsJwt(
+        string token,
+        out DateTime expiresAtUtc,
+        out bool isSessionToken,
+        out string jwtSubject,
+        out string[] pubPerms,
+        out string[] subPerms)
+        => TryValidatePreIssuedNatsJwt(
+            token,
+            expectedUserNkey: null,
+            out expiresAtUtc,
+            out isSessionToken,
+            out jwtSubject,
+            out pubPerms,
+            out subPerms);
+
+    internal bool TryValidatePreIssuedNatsJwt(
+        string token,
+        string? expectedUserNkey,
+        out DateTime expiresAtUtc,
+        out bool isSessionToken,
+        out string jwtSubject,
+        out string[] pubPerms,
+        out string[] subPerms)
     {
         expiresAtUtc = default;
         isSessionToken = false;
@@ -434,31 +463,13 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         pubPerms = [];
         subPerms = [];
 
-        // Decodificação manual do JWT usando System.IdentityModel.Tokens.Jwt
-        // (já usado em ParseAuthRequest neste mesmo arquivo).
-        // Evita bug do NatsJwt.DecodeUserClaims v1.0.1.
-        System.IdentityModel.Tokens.Jwt.JwtSecurityToken jwtToken;
-        try
+        if (!TrySplitAndVerifyHeader(token, out var parts, out var headerError))
         {
-            var handler = new JwtSecurityTokenHandler();
-            jwtToken = handler.ReadJwtToken(token);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: failed to decode JWT manually.");
+            _logger.LogWarning("TryValidatePreIssuedNatsJwt: {Reason}", headerError);
             return false;
         }
 
-        // Extrai claims do JWT decode manual
-        var sub = jwtToken.Subject ?? jwtToken.Payload.Sub
-            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
-        if (string.IsNullOrWhiteSpace(sub))
-        {
-            _logger.LogWarning("TryValidatePreIssuedNatsJwt: rejected due to empty subject.");
-            return false;
-        }
-
-        // Valida assinatura: verifica issuer (account public key)
+        // Resolve AccountSeed e verifica assinatura Ed25519 ANTES de confiar em qualquer claim.
         var accountSeed = _configuration["Nats:AccountSeed"];
         if (string.IsNullOrWhiteSpace(accountSeed))
         {
@@ -477,87 +488,353 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
             return false;
         }
 
-        var expectedIssuer = accountKeyPair.GetPublicKey();
-        var issuer = jwtToken.Issuer ?? jwtToken.Payload.Iss
-            ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "iss")?.Value;
-        if (string.IsNullOrWhiteSpace(issuer)
-            || !string.Equals(issuer, expectedIssuer, StringComparison.Ordinal))
+        using (accountKeyPair)
         {
-            _logger.LogWarning(
-                "TryValidatePreIssuedNatsJwt: issuer mismatch. Expected={Expected}, Actual={Actual}",
-                expectedIssuer, issuer);
-            return false;
-        }
-
-        // Valida expiração
-        var now = DateTimeOffset.UtcNow;
-        var expUnix = jwtToken.Payload.Expiration
-            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "exp")?.Value, out var e) ? e : null);
-        if (!expUnix.HasValue)
-        {
-            _logger.LogWarning("TryValidatePreIssuedNatsJwt: no expiration claim.");
-            return false;
-        }
-
-        var exp = DateTimeOffset.FromUnixTimeSeconds(expUnix.Value);
-        if (exp <= now.Subtract(JwtClockSkew))
-        {
-            _logger.LogWarning("TryValidatePreIssuedNatsJwt: JWT expired. Exp={ExpUtc}", exp);
-            return false;
-        }
-
-        var nbfUnix = jwtToken.Payload.NotBefore
-            ?? (long.TryParse(jwtToken.Claims.FirstOrDefault(c => c.Type == "nbf")?.Value, out var n) ? n : null);
-        if (nbfUnix.HasValue)
-        {
-            var nbf = DateTimeOffset.FromUnixTimeSeconds(nbfUnix.Value);
-            if (nbf > now.Add(JwtClockSkew))
+            if (!TryDecodeBase64Url(parts[2], out var sigBytes) || sigBytes.Length != 64)
             {
-                _logger.LogWarning("TryValidatePreIssuedNatsJwt: not-before in the future. Nbf={NbfUtc}", nbf);
+                _logger.LogWarning("TryValidatePreIssuedNatsJwt: invalid Ed25519 signature encoding/length.");
+                return false;
+            }
+
+            var signingInput = Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}");
+            try
+            {
+                if (!accountKeyPair.Verify(signingInput, sigBytes))
+                {
+                    _logger.LogWarning("TryValidatePreIssuedNatsJwt: Ed25519 signature verification failed.");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: signature verification threw an exception.");
+                return false;
+            }
+
+            if (!TryDecodeBase64Url(parts[1], out var payloadBytes))
+            {
+                _logger.LogWarning("TryValidatePreIssuedNatsJwt: invalid Base64URL payload.");
+                return false;
+            }
+
+            try
+            {
+                using var payloadDoc = JsonDocument.Parse(payloadBytes);
+                var root = payloadDoc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    _logger.LogWarning("TryValidatePreIssuedNatsJwt: payload is not a JSON object.");
+                    return false;
+                }
+
+                var expectedIssuer = accountKeyPair.GetPublicKey();
+                var issuer = TryGetStringClaim(root, "iss");
+                if (string.IsNullOrWhiteSpace(issuer)
+                    || !string.Equals(issuer, expectedIssuer, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning(
+                        "TryValidatePreIssuedNatsJwt: issuer mismatch. Expected={Expected}, Actual={Actual}",
+                        expectedIssuer, issuer);
+                    return false;
+                }
+
+                var sub = TryGetStringClaim(root, "sub");
+                if (string.IsNullOrWhiteSpace(sub) || !IsValidNkeyPublicKey(PrefixByte.User, sub))
+                {
+                    _logger.LogWarning("TryValidatePreIssuedNatsJwt: rejected due to missing or invalid User NKey subject.");
+                    return false;
+                }
+
+                if (!string.IsNullOrWhiteSpace(expectedUserNkey)
+                    && !string.Equals(sub, expectedUserNkey, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning(
+                        "TryValidatePreIssuedNatsJwt: subject NKey mismatch. Expected={Expected}, Actual={Actual}",
+                        expectedUserNkey, sub);
+                    return false;
+                }
+
+                var now = DateTimeOffset.UtcNow;
+                if (!TryGetUnixTimestamp(root, "exp", out var expUnix))
+                {
+                    _logger.LogWarning("TryValidatePreIssuedNatsJwt: no expiration claim.");
+                    return false;
+                }
+
+                var exp = DateTimeOffset.FromUnixTimeSeconds(expUnix);
+                if (exp <= now.Subtract(JwtClockSkew))
+                {
+                    _logger.LogWarning("TryValidatePreIssuedNatsJwt: JWT expired. Exp={ExpUtc}", exp);
+                    return false;
+                }
+
+                if (root.TryGetProperty("nbf", out _))
+                {
+                    if (!TryGetUnixTimestamp(root, "nbf", out var nbfUnix))
+                    {
+                        _logger.LogWarning("TryValidatePreIssuedNatsJwt: invalid nbf claim.");
+                        return false;
+                    }
+
+                    var nbf = DateTimeOffset.FromUnixTimeSeconds(nbfUnix);
+                    if (nbf > now.Add(JwtClockSkew))
+                    {
+                        _logger.LogWarning("TryValidatePreIssuedNatsJwt: not-before in the future. Nbf={NbfUtc}", nbf);
+                        return false;
+                    }
+                }
+
+                if (!TryGetNatsElement(root, out var natsElement))
+                {
+                    _logger.LogWarning("TryValidatePreIssuedNatsJwt: missing or invalid nats claim.");
+                    return false;
+                }
+
+                if (natsElement.TryGetProperty("type", out var typeProp))
+                {
+                    if (typeProp.ValueKind != JsonValueKind.String
+                        || !string.Equals(typeProp.GetString(), "user", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("TryValidatePreIssuedNatsJwt: unexpected nats.type ({ValueKind}).", typeProp.ValueKind);
+                        return false;
+                    }
+                }
+
+                if (natsElement.TryGetProperty("version", out var versionProp))
+                {
+                    if (versionProp.ValueKind != JsonValueKind.Number
+                        || !versionProp.TryGetInt32(out var version)
+                        || version < 2)
+                    {
+                        _logger.LogWarning("TryValidatePreIssuedNatsJwt: unsupported nats.version ({ValueKind}).", versionProp.ValueKind);
+                        return false;
+                    }
+                }
+
+                var nameClaim = TryGetStringClaim(root, "name") ?? TryGetStringClaim(root, "sub_name");
+                isSessionToken = !string.IsNullOrWhiteSpace(nameClaim)
+                    && nameClaim.StartsWith("session:", StringComparison.OrdinalIgnoreCase);
+
+                pubPerms = ExtractNatsPermissionsFromElement(natsElement, "pub");
+                subPerms = ExtractNatsPermissionsFromElement(natsElement, "sub");
+
+                jwtSubject = sub;
+                expiresAtUtc = exp.UtcDateTime;
+
+                _logger.LogInformation(
+                    "TryValidatePreIssuedNatsJwt: JWT validado. IsSession={IsSession}, Subject={Subject}, " +
+                    "Name={Name}, PubCount={PubCount}, SubCount={SubCount}, Exp={ExpUtc}",
+                    isSessionToken, jwtSubject, nameClaim, pubPerms.Length, subPerms.Length, expiresAtUtc);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "TryValidatePreIssuedNatsJwt: failed to parse or validate JWT payload.");
+                return false;
+            }
+        }
+    }
+
+    internal static bool TryDecryptRequestPayload(
+        byte[] rawData,
+        string? xKeySeed,
+        string? serverXKey,
+        out string requestJwt,
+        out string? errorReason)
+    {
+        requestJwt = string.Empty;
+        errorReason = null;
+
+        if (!string.IsNullOrWhiteSpace(xKeySeed))
+        {
+            if (serverXKey is null)
+            {
+                errorReason = "Auth request rejected (missing xkey header).";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(serverXKey))
+            {
+                errorReason = "Auth request rejected (empty xkey header).";
+                return false;
+            }
+
+            try
+            {
+                using var xKeyPair = KeyPair.FromSeed(xKeySeed);
+                var decrypted = xKeyPair.Open(rawData, serverXKey);
+                requestJwt = Encoding.UTF8.GetString(decrypted);
+                return true;
+            }
+            catch
+            {
+                errorReason = "Auth request rejected (xkey decryption failed).";
                 return false;
             }
         }
 
-        // Detecta JWT de sessão remota pelo padrão "session:" no campo Name (claim "name")
-        var nameClaim = jwtToken.Claims.FirstOrDefault(c => c.Type == "name" || c.Type == "sub_name")?.Value;
-        isSessionToken = !string.IsNullOrWhiteSpace(nameClaim)
-            && nameClaim.StartsWith("session:", StringComparison.OrdinalIgnoreCase);
-
-        // Extrai permissões pub/sub do claim "nats" (JSON object)
-        pubPerms = ExtractNatsClaimPermissions(jwtToken, "pub");
-        subPerms = ExtractNatsClaimPermissions(jwtToken, "sub");
-
-        jwtSubject = sub;
-        expiresAtUtc = exp.UtcDateTime;
-
-        _logger.LogInformation(
-            "TryValidatePreIssuedNatsJwt: JWT validado. IsSession={IsSession}, Subject={Subject}, " +
-            "Name={Name}, PubCount={PubCount}, SubCount={SubCount}, Exp={ExpUtc}",
-            isSessionToken, jwtSubject, nameClaim, pubPerms.Length, subPerms.Length, expiresAtUtc);
-
+        requestJwt = Encoding.UTF8.GetString(rawData);
         return true;
     }
 
-    /// <summary>
-    /// Extrai permissões pub/sub do claim "nats" do JWT.
-    /// O claim "nats" contém um JSON: {"pub":{"allow":[...]},"sub":{"allow":[...]}}
-    /// </summary>
-    private static string[] ExtractNatsClaimPermissions(JwtSecurityToken jwt, string type)
+    private static bool TrySplitAndVerifyHeader(string? token, out string[] parts, out string errorReason)
+    {
+        parts = [];
+        errorReason = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            errorReason = "empty token.";
+            return false;
+        }
+
+        if (token.Length > NatsJwt.MaxTokenSize)
+        {
+            errorReason = $"token exceeds MaxTokenSize ({NatsJwt.MaxTokenSize}).";
+            return false;
+        }
+
+        parts = token.Split('.');
+        if (parts.Length != 3
+            || string.IsNullOrWhiteSpace(parts[0])
+            || string.IsNullOrWhiteSpace(parts[1])
+            || string.IsNullOrWhiteSpace(parts[2]))
+        {
+            errorReason = "malformed 3-part JWT.";
+            return false;
+        }
+
+        if (!TryDecodeBase64Url(parts[0], out var headerBytes))
+        {
+            errorReason = "invalid Base64URL header.";
+            return false;
+        }
+
+        try
+        {
+            using var headerDoc = JsonDocument.Parse(headerBytes);
+            var header = headerDoc.RootElement;
+            if (header.ValueKind != JsonValueKind.Object)
+            {
+                errorReason = "header is not a JSON object.";
+                return false;
+            }
+
+            var typ = TryGetStringClaim(header, "typ");
+            if (!string.Equals(typ, NatsJwt.TokenTypeJwt, StringComparison.OrdinalIgnoreCase))
+            {
+                errorReason = $"unsupported JWT typ '{typ}'.";
+                return false;
+            }
+
+            var alg = TryGetStringClaim(header, "alg");
+            if (!string.Equals(alg, NatsJwt.AlgorithmNkey, StringComparison.Ordinal))
+            {
+                errorReason = $"unsupported JWT alg '{alg}'.";
+                return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            errorReason = "invalid JSON header.";
+            return false;
+        }
+    }
+
+    private static bool TryDecodeBase64Url(string input, out byte[] bytes)
+    {
+        bytes = [];
+        if (string.IsNullOrEmpty(input))
+            return false;
+
+        foreach (var ch in input)
+        {
+            var isValidBase64UrlChar = (ch >= 'A' && ch <= 'Z')
+                || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9')
+                || ch == '-'
+                || ch == '_';
+            if (!isValidBase64UrlChar)
+                return false;
+        }
+
+        try
+        {
+            var base64 = input.Replace('-', '+').Replace('_', '/');
+            switch (base64.Length % 4)
+            {
+                case 2: base64 += "=="; break;
+                case 3: base64 += "="; break;
+                case 1: return false;
+            }
+
+            bytes = Convert.FromBase64String(base64);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsValidNkeyPublicKey(PrefixByte expectedPrefix, string publicKey)
     {
         try
         {
-            var natsClaim = jwt.Claims.FirstOrDefault(c =>
-                c.Type == "nats" || c.Type == "nat");
-            if (natsClaim is null) return [];
+            return KeyPair.IsValidPublicKey(expectedPrefix, publicKey.AsSpan());
+        }
+        catch (NKeysException)
+        {
+            return false;
+        }
+    }
 
-            using var doc = JsonDocument.Parse(natsClaim.Value);
-            var root = doc.RootElement;
+    private static string? TryGetStringClaim(JsonElement root, string propertyName)
+    {
+        if (root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String)
+            return prop.GetString();
+        return null;
+    }
 
-            if (root.TryGetProperty(type, out var typeElement)
+    private static bool TryGetUnixTimestamp(JsonElement root, string propertyName, out long unixSeconds)
+    {
+        unixSeconds = 0;
+        if (!root.TryGetProperty(propertyName, out var prop))
+            return false;
+
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt64(out unixSeconds))
+            return true;
+
+        if (prop.ValueKind == JsonValueKind.String && long.TryParse(prop.GetString(), out unixSeconds))
+            return true;
+
+        return false;
+    }
+
+    private static bool TryGetNatsElement(JsonElement root, out JsonElement natsElement)
+    {
+        if (root.TryGetProperty("nats", out natsElement) && natsElement.ValueKind == JsonValueKind.Object)
+            return true;
+        if (root.TryGetProperty("nat", out natsElement) && natsElement.ValueKind == JsonValueKind.Object)
+            return true;
+        natsElement = default;
+        return false;
+    }
+
+    private static string[] ExtractNatsPermissionsFromElement(JsonElement natsElement, string type)
+    {
+        try
+        {
+            if (natsElement.TryGetProperty(type, out var typeElement)
+                && typeElement.ValueKind == JsonValueKind.Object
                 && typeElement.TryGetProperty("allow", out var allowElement)
                 && allowElement.ValueKind == JsonValueKind.Array)
             {
                 return allowElement.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String)
                     .Select(e => e.GetString())
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .Cast<string>()
@@ -566,24 +843,81 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         }
         catch
         {
-            // Log silencioso — permissões vazias são aceitáveis
+            // Permissões vazias são aceitáveis
         }
 
         return [];
     }
 
-    private static AuthorizationRequest? ParseAuthRequest(string jwt)
+    internal static AuthorizationRequest? ParseAuthRequest(string jwt, string? expectedServerPublicKey = null)
     {
         try
         {
-            var handler = new JwtSecurityTokenHandler();
-            var token = handler.ReadJwtToken(jwt);
-            if (!token.Payload.TryGetValue("nats", out var natsObj))
+            if (!TrySplitAndVerifyHeader(jwt, out var parts, out _))
                 return null;
 
-            var json = JsonSerializer.Serialize(natsObj);
-            var nats = JsonSerializer.Deserialize<AuthRequestNats>(json, JsonSerializerOptions.Web);
-            if (nats is null)
+            if (!TryDecodeBase64Url(parts[2], out var sigBytes) || sigBytes.Length != 64)
+                return null;
+
+            if (!TryDecodeBase64Url(parts[1], out var payloadBytes))
+                return null;
+
+            using var payloadDoc = JsonDocument.Parse(payloadBytes);
+            var root = payloadDoc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var issuer = TryGetStringClaim(root, "iss");
+            if (string.IsNullOrWhiteSpace(issuer) || !IsValidNkeyPublicKey(PrefixByte.Server, issuer))
+                return null;
+
+            if (!TryGetNatsElement(root, out var natsElement))
+                return null;
+
+            var nats = JsonSerializer.Deserialize<AuthRequestNats>(natsElement.GetRawText(), JsonSerializerOptions.Web);
+            if (nats is null || nats.Server is null || string.IsNullOrWhiteSpace(nats.Server.Id))
+                return null;
+
+            if (!string.Equals(issuer, nats.Server.Id, StringComparison.Ordinal))
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(expectedServerPublicKey))
+            {
+                var trustedKeys = expectedServerPublicKey.Split(
+                    ',',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (trustedKeys.Length == 0 || !trustedKeys.Contains(issuer, StringComparer.Ordinal))
+                    return null;
+            }
+
+            var sub = TryGetStringClaim(root, "sub");
+            if (!string.IsNullOrWhiteSpace(sub)
+                && !string.IsNullOrWhiteSpace(nats.UserNkey)
+                && !string.Equals(sub, nats.UserNkey, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (root.TryGetProperty("exp", out _))
+            {
+                if (!TryGetUnixTimestamp(root, "exp", out var expUnix))
+                    return null;
+                if (DateTimeOffset.FromUnixTimeSeconds(expUnix) <= now.Subtract(JwtClockSkew))
+                    return null;
+            }
+
+            if (root.TryGetProperty("nbf", out _))
+            {
+                if (!TryGetUnixTimestamp(root, "nbf", out var nbfUnix))
+                    return null;
+                if (DateTimeOffset.FromUnixTimeSeconds(nbfUnix) > now.Add(JwtClockSkew))
+                    return null;
+            }
+
+            var signingInput = Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}");
+            using var serverKeyPair = KeyPair.FromPublicKey(issuer.AsSpan());
+            if (!serverKeyPair.Verify(signingInput, sigBytes))
                 return null;
 
             return new AuthorizationRequest { Nats = nats };
@@ -596,7 +930,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
     private async Task<string> BuildSuccessResponseAsync(AuthorizationRequest request, string userJwt, DateTime expiresAtUtc, IConfigurationService configurationService, CancellationToken ct)
     {
-        var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
+        using var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
         var response = NatsJwt.NewAuthorizationResponseClaims(request.Nats.UserNkey);
         // O NATS valida que o `aud` da resposta seja a server public key (server_id.id) que enviou a request.
         response.Audience = request.Nats.Server?.Id ?? string.Empty;
@@ -607,9 +941,18 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
 
     private async Task<string> BuildErrorResponseAsync(string error, string? userNkey, string? serverId, IConfigurationService configurationService, CancellationToken ct)
     {
-        var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
+        using var accountKeyPair = await ResolveAccountKeyPairAsync(configurationService, ct);
         var now = DateTime.UtcNow;
-        var response = NatsJwt.NewAuthorizationResponseClaims(userNkey ?? string.Empty);
+        // NatsJwt se recusa a codificar uma resposta sem subject: quando o auth
+        // request está corrompido/ilegível (ParseAuthRequest falhou) ou o erro
+        // acontece antes de sabermos o user_nkey, usamos um subject PLACEHOLDER
+        // para que a NEGAÇÃO chegue ao servidor — antes o throw dentro da
+        // codificação engolia a resposta e o servidor esperava o auth_timeout
+        // inteiro sem resposta (o cliente via "Authentication Timeout" genérico).
+        var subject = !string.IsNullOrWhiteSpace(userNkey)
+            ? userNkey
+            : (!string.IsNullOrWhiteSpace(serverId) ? serverId : "unknown-requester");
+        var response = NatsJwt.NewAuthorizationResponseClaims(subject);
         response.Audience = serverId ?? string.Empty;
         response.Expires = new DateTimeOffset(now.AddMinutes(1));
         response.AuthorizationResponse.Error = error;
@@ -652,12 +995,12 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         return normalized;
     }
 
-    private sealed class AuthorizationRequest
+    internal sealed class AuthorizationRequest
     {
         public AuthRequestNats Nats { get; init; } = new();
     }
 
-    private sealed class AuthRequestNats
+    internal sealed class AuthRequestNats
     {
         [System.Text.Json.Serialization.JsonPropertyName("user_nkey")]
         public string UserNkey { get; init; } = string.Empty;
@@ -669,7 +1012,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         public AuthRequestServerId? Server { get; init; }
     }
 
-    private sealed class AuthRequestServerId
+    internal sealed class AuthRequestServerId
     {
         [System.Text.Json.Serialization.JsonPropertyName("id")]
         public string Id { get; init; } = string.Empty;
@@ -678,7 +1021,7 @@ public class NatsAuthCalloutBackgroundService : BackgroundService
         public string? Name { get; init; }
     }
 
-    private sealed class AuthRequestConnectOptions
+    internal sealed class AuthRequestConnectOptions
     {
         [System.Text.Json.Serialization.JsonPropertyName("auth_token")]
         public string? AuthToken { get; init; }

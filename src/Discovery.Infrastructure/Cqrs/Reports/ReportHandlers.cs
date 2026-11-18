@@ -336,6 +336,17 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
 }
 
 // new — report preview
+
+/// <summary>
+/// Thrown when an inline preview template names a datasetType that does not
+/// resolve to a ReportDatasetType value. Surfaced as a validation failure (400)
+/// rather than falling through to a misleading 404 "template not found".
+/// </summary>
+public sealed class ReportPreviewTemplateInvalidException : Exception
+{
+    public ReportPreviewTemplateInvalidException(string message) : base(message) { }
+}
+
 public sealed class PreviewReportCommandHandler(
     IReportService reportService,
     IReportTemplateRepository templateRepo,
@@ -344,7 +355,15 @@ public sealed class PreviewReportCommandHandler(
 {
     public async Task<Result<ReportPreviewResultDto>> Handle(PreviewReportCommand cmd, CancellationToken ct)
     {
-        var template = await ResolveTemplateAsync(cmd, ct);
+        ReportTemplate? template;
+        try
+        {
+            template = await ResolveTemplateAsync(cmd, ct);
+        }
+        catch (ReportPreviewTemplateInvalidException ex)
+        {
+            return Result<ReportPreviewResultDto>.Failure(Error.Validation("datasetType", ex.Message));
+        }
         if (template is null)
             return Result<ReportPreviewResultDto>.Failure(Error.NotFound("ReportTemplate not found"));
 
@@ -410,7 +429,9 @@ public sealed class PreviewReportCommandHandler(
         var input = cmd.Template;
         var datasetType = ResolveDatasetType(input.DatasetType, input.DatasetKey);
         if (datasetType is null)
-            return null;
+            throw new ReportPreviewTemplateInvalidException(
+                "Unknown datasetType: '" + (input.DatasetType?.ToString() ?? input.DatasetKey ?? string.Empty)
+                + "' does not match any ReportDatasetType value.");
 
         return new ReportTemplate
         {

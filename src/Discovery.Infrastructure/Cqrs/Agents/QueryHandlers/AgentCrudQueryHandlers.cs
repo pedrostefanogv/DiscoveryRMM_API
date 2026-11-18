@@ -4,7 +4,10 @@ using Discovery.Core.Cqrs.Agents.Crud.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -15,13 +18,23 @@ public sealed class GetAgentByIdQueryHandler(
     IAgentRepository agentRepo,
     IHeartbeatCacheService heartbeatCache,
     IConfigurationResolver configResolver,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentByIdQuery, Result<AgentDto>>
 {
     public async Task<Result<AgentDto>> Handle(GetAgentByIdQuery q, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(q.Id);
         if (agent is null)
+            return Result<AgentDto>.Failure(Error.NotFound("Agent not found."));
+
+        // IDOR: o filtro AccessList no endpoint só prova que o usuário possui
+        // Agents.View em ALGUM escopo. O recorte de tenant acontece aqui: um
+        // técnico escopado ao cliente A não pode LER o agente do cliente B —
+        // responde NotFound (sem revelar existência).
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
             return Result<AgentDto>.Failure(Error.NotFound("Agent not found."));
 
         var heartbeat = await heartbeatCache.GetHeartbeatAsync(agent.Id);
@@ -38,7 +51,6 @@ public sealed class GetAgentByIdQueryHandler(
         // Popula o ClientId do agente (o site guarda a associação ao cliente).
         // Necessário para o frontend resolver a cadeia Cliente → Site → Hostname
         // na interface de acesso remoto.
-        var site = await siteRepo.GetByIdAsync(agent.SiteId);
         if (site is not null)
             dto = dto with { ClientId = site.ClientId };
 
@@ -50,11 +62,20 @@ public sealed class GetAgentsBySiteQueryHandler(
     IAgentRepository agentRepo,
     IAgentHardwareRepository hardwareRepo,
     IHeartbeatCacheService heartbeatCache,
-    IConfigurationResolver configResolver
+    IConfigurationResolver configResolver,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentsBySiteQuery, Result<IReadOnlyList<AgentDto>>>
 {
     public async Task<Result<IReadOnlyList<AgentDto>>> Handle(GetAgentsBySiteQuery q, CancellationToken ct)
     {
+        // Recorte de tenant: o site tem de pertencer a um cliente/site permitido
+        // do usuário. Fora do escopo -> Forbidden (o controller devolve 403).
+        var site = await siteRepo.GetByIdAsync(q.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, q.SiteId))
+            return Result<IReadOnlyList<AgentDto>>.Failure(Error.Forbidden("Você não tem acesso a este site."));
+
         var agents = (await agentRepo.GetBySiteIdAsync(q.SiteId)).ToList();
         var heartbeatByAgent = await AgentQueryHelper.GetHeartbeatSnapshotAsync(heartbeatCache, agents.Select(a => a.Id));
         var grace = await AgentQueryHelper.GetOnlineGraceSecondsAsync(configResolver, q.SiteId);
@@ -79,11 +100,17 @@ public sealed class GetAgentsByClientQueryHandler(
     IAgentRepository agentRepo,
     IAgentHardwareRepository hardwareRepo,
     IHeartbeatCacheService heartbeatCache,
-    IConfigurationResolver configResolver
+    IConfigurationResolver configResolver,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentsByClientQuery, Result<IReadOnlyList<AgentDto>>>
 {
     public async Task<Result<IReadOnlyList<AgentDto>>> Handle(GetAgentsByClientQuery q, CancellationToken ct)
     {
+        // Recorte de tenant: cliente fora do escopo do usuário -> Forbidden.
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, q.ClientId, Guid.Empty))
+            return Result<IReadOnlyList<AgentDto>>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+
         var agents = (await agentRepo.GetByClientIdAsync(q.ClientId)).ToList();
         var heartbeatByAgent = await AgentQueryHelper.GetHeartbeatSnapshotAsync(heartbeatCache, agents.Select(a => a.Id));
         var graceBySite = await AgentQueryHelper.GetOnlineGraceSecondsBySiteAsync(configResolver, agents.Select(a => a.SiteId).Distinct());

@@ -68,6 +68,9 @@ internal static class ServiceCollectionExtensions
             // sentido compartilhado entre requests — como scoped ele nao
             // pouparia a consulta por mensagem.
             typeof(IChatUserNameResolver),
+            // Mensageria NATS e provisionamento de streams sao singletons sem DbContext capturado.
+            typeof(IAgentMessaging),
+            typeof(INatsTenantStreamProvisioner),
         };
 
         // Register only interfaces with a single implementation (avoids ambiguity and multi-implementation patterns)

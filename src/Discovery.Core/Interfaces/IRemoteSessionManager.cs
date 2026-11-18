@@ -23,7 +23,8 @@ public interface IRemoteSessionManager
         bool consentRequired = false,
         DateTime? consentDeadlineAt = null,
         string? consentPolicySource = null,
-        Guid? id = null);
+        Guid? id = null,
+        Core.Enums.RemoteSessionRights rights = Core.Enums.RemoteSessionRights.None);
 
     /// <summary>Renova o TTL da sessão.</summary>
     Task<RemoteSession> RenewSessionAsync(Guid sessionId, Guid userId, CancellationToken ct = default);

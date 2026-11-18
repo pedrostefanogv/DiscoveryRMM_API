@@ -96,4 +96,63 @@ public class NatsSubjectBuilderTests
             subject,
             Is.EqualTo($"tenant.{clientId}.site.{siteId}.agent.{agentId}.remote-debug.control"));
     }
+
+    [Test]
+    public void TenantStreamHelpers_ShouldFormatPerTenantNamesAndHyphenatedSubjects()
+    {
+        var clientId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+        Assert.That(NatsSubjectBuilder.TenantFanoutStreamName(clientId),
+            Is.EqualTo($"DISCOVERY_FANOUT_COMMANDS_{clientId:N}"));
+        Assert.That(NatsSubjectBuilder.TenantSupportChatStreamName(clientId),
+            Is.EqualTo($"DISCOVERY_SUPPORT_CHAT_{clientId:N}"));
+        Assert.That(NatsSubjectBuilder.GlobalFanoutStreamName,
+            Is.EqualTo("DISCOVERY_FANOUT_COMMANDS_GLOBAL"));
+        Assert.That(NatsSubjectBuilder.TenantSiteAgentsCommandStreamSubject(clientId),
+            Is.EqualTo($"tenant.{clientId}.site.*.agents.command"));
+        Assert.That(NatsSubjectBuilder.TenantClientAgentsCommandStreamSubject(clientId),
+            Is.EqualTo($"tenant.{clientId}.agents.command"));
+        Assert.That(NatsSubjectBuilder.TenantSupportChatStreamSubject(clientId),
+            Is.EqualTo($"tenant.{clientId}.site.*.agent.*.supportchat.*"));
+    }
+
+    [Test]
+    public void TryParseAgentSubject_ShouldAcceptCanonicalAndRejectInvalidSubjects()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        Assert.That(
+            NatsSubjectBuilder.TryParseAgentSubject(
+                $"tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat",
+                out var parsedClient,
+                out var parsedSite,
+                out var parsedAgent),
+            Is.True);
+        Assert.That(parsedClient, Is.EqualTo(clientId));
+        Assert.That(parsedSite, Is.EqualTo(siteId));
+        Assert.That(parsedAgent, Is.EqualTo(agentId));
+
+        // Multi-segment suffix like supportchat.agent is also valid
+        Assert.That(
+            NatsSubjectBuilder.TryParseAgentSubject(
+                $"tenant.{clientId}.site.{siteId}.agent.{agentId}.supportchat.agent",
+                out _, out _, out _),
+            Is.True);
+
+        // Reject legacy, malformed, wildcard, trailing-dot, and empty-GUID subjects
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"agent.{agentId}.heartbeat", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.not-a-guid.site.{siteId}.agent.{agentId}.heartbeat", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{Guid.Empty}.site.{siteId}.agent.{agentId}.heartbeat", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{Guid.Empty}.agent.{agentId}.heartbeat", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{Guid.Empty}.heartbeat", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{agentId}.", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{agentId}.heartbeat.", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{agentId}..heartbeat", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{agentId}.*", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{agentId}.>", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject($"tenant.{clientId}.site.{siteId}.agent.{agentId}.supportchat.*", out _, out _, out _), Is.False);
+        Assert.That(NatsSubjectBuilder.TryParseAgentSubject(null, out _, out _, out _), Is.False);
+    }
 }

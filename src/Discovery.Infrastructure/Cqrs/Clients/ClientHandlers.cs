@@ -59,6 +59,11 @@ public sealed class CreateClientCommandHandler(
 {
     public async Task<Result<Client>> Handle(CreateClientCommand cmd, CancellationToken ct)
     {
+        // Validação antes de qualquer escrita: um nome vazio/ausente não cria
+        // linha nenhuma e responde 400 em vez de persistir um cliente sem nome.
+        if (string.IsNullOrWhiteSpace(cmd.Name))
+            return Result<Client>.Failure(Error.Validation("Name", "Client name is required."));
+
         var client = new Client { Name = cmd.Name, Notes = cmd.Notes };
         var created = await repo.CreateAsync(client);
         return Result<Client>.Success(created);

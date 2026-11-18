@@ -30,19 +30,13 @@ namespace Discovery.Infrastructure.Messaging;
 /// </summary>
 public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 {
-    private readonly NatsConnection _connection;
-    private readonly IAgentRepository _agentRepo;
-    private readonly ICommandRepository _commandRepo;
-    private readonly ISiteRepository _siteRepo;
-    private readonly IAgentAuthService _agentAuthService;
-    private readonly IHeartbeatCacheService _heartbeatCache;
-    private readonly IAgentHardwareRepository _hardwareRepo;
-    // Resolvido por escopo (não por construtor): AutomationExecutionReportRepository
-    // depende de IAgentMessaging; injetá-lo aqui criaria dependência circular.
+    private readonly NatsConnection? _connection;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DashboardEventContractNormalizer _contractNormalizer;
     private readonly ILogger<NatsAgentMessaging> _logger;
     private readonly IOptionsMonitor<NatsGlobalPongOptions> _globalPongOptions;
+    private readonly INatsTenantStreamProvisioner? _streamProvisioner;
+    private readonly Func<string, string, NatsHeaders?, CancellationToken, ValueTask>? _publishOverride;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -54,60 +48,72 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public NatsAgentMessaging(
         NatsConnection connection,
-        IAgentRepository agentRepo,
-        ICommandRepository commandRepo,
-        ISiteRepository siteRepo,
-        IAgentAuthService agentAuthService,
-        IHeartbeatCacheService heartbeatCache,
-        IAgentHardwareRepository hardwareRepo,
         IServiceScopeFactory scopeFactory,
         DashboardEventContractNormalizer contractNormalizer,
         IOptionsMonitor<NatsGlobalPongOptions> globalPongOptions,
-        ILogger<NatsAgentMessaging> logger)
+        ILogger<NatsAgentMessaging> logger,
+        INatsTenantStreamProvisioner? streamProvisioner = null)
+        : this(connection, scopeFactory, contractNormalizer, globalPongOptions, logger, streamProvisioner, publishOverride: null)
+    {
+    }
+
+    internal NatsAgentMessaging(
+        NatsConnection? connection,
+        IServiceScopeFactory scopeFactory,
+        DashboardEventContractNormalizer contractNormalizer,
+        IOptionsMonitor<NatsGlobalPongOptions> globalPongOptions,
+        ILogger<NatsAgentMessaging> logger,
+        INatsTenantStreamProvisioner? streamProvisioner,
+        Func<string, string, NatsHeaders?, CancellationToken, ValueTask>? publishOverride)
     {
         _connection = connection;
-        _agentRepo = agentRepo;
-        _commandRepo = commandRepo;
-        _siteRepo = siteRepo;
-        _agentAuthService = agentAuthService;
-        _heartbeatCache = heartbeatCache;
-        _hardwareRepo = hardwareRepo;
         _scopeFactory = scopeFactory;
         _contractNormalizer = contractNormalizer;
         _globalPongOptions = globalPongOptions;
         _logger = logger;
+        _streamProvisioner = streamProvisioner;
+        _publishOverride = publishOverride;
+    }
+
+    private ValueTask PublishRawAsync(
+        string subject,
+        string payload,
+        NatsHeaders? headers = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (_publishOverride is not null)
+            return _publishOverride(subject, payload, headers, cancellationToken);
+
+        if (_connection is null)
+            throw new InvalidOperationException("NatsConnection is not initialized.");
+
+        return _connection.PublishAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
     }
 
     /// <summary>
-    /// Verifica que o agent possui ao menos um token ativo.
-    /// Defesa contra spoofing via NATS: mensagens de AgentIds sem token válido são descartadas.
-    /// </summary>
-    /// <summary>
     /// Atualiza o report de execução (update/uninstall de software e automação)
-    /// com o resultado do agent. Resolve o repositório em um escopo próprio porque
-    /// AutomationExecutionReportRepository depende de IAgentMessaging — injetá-lo
-    /// no construtor criaria uma dependência circular.
+    /// com o resultado do agent dentro de um escopo curto já aberto.
     /// </summary>
-    private async Task UpdateAutomationAuditAsync(CommandResultMessage result)
+    private async Task UpdateAutomationAuditAsync(IServiceProvider scopedServices, CommandResultMessage result)
     {
         try
         {
-            // Escopo assíncrono: IAutomationExecutionReportRepository depende de IAgentMessaging,
-            // registrado como scoped; Dispose() síncrono lança InvalidOperationException.
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var reportRepo = scope.ServiceProvider.GetRequiredService<IAutomationExecutionReportRepository>();
-            await reportRepo.UpdateResultFromCommandAsync(
-                result.CommandId,
-                result.ExitCode == 0,
-                result.ExitCode,
-                result.ErrorMessage,
-                result.Output,
-                DateTime.UtcNow);
+            var reportRepo = scopedServices.GetService<IAutomationExecutionReportRepository>();
+            if (reportRepo is not null)
+            {
+                await reportRepo.UpdateResultFromCommandAsync(
+                    result.CommandId,
+                    result.ExitCode == 0,
+                    result.ExitCode,
+                    result.ErrorMessage,
+                    result.Output,
+                    DateTime.UtcNow);
+            }
 
             // Gerenciador de patches: fecha o inventário (Installed/Failed) e o
             // snapshot do agente com base no resultado JSON do comando. Opcional
             // para não derrubar o processamento de resultados se não registrado.
-            var patchResultService = scope.ServiceProvider.GetService<Discovery.Core.Interfaces.IPatchExecutionResultService>();
+            var patchResultService = scopedServices.GetService<IPatchExecutionResultService>();
             if (patchResultService is not null)
             {
                 await patchResultService.HandleCommandResultAsync(
@@ -145,7 +151,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     {
         try
         {
-            var agent = await _agentRepo.GetByIdForDecommissionAsync(agentId);
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+            var agent = await agentRepo.GetByIdForDecommissionAsync(agentId);
             return agent?.DeletedAt is not null;
         }
         catch (Exception ex)
@@ -190,7 +198,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     /// </summary>
     private async Task<bool> ComputeAgentAuthorizedAsync(Guid agentId)
     {
-        var tokens = await _agentAuthService.GetTokensByAgentIdAsync(agentId);
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var agentAuthService = scope.ServiceProvider.GetRequiredService<IAgentAuthService>();
+        var tokens = await agentAuthService.GetTokensByAgentIdAsync(agentId);
         if (tokens.Any(t => t.IsValid))
             return true;
 
@@ -199,7 +209,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         // caso continua sendo rejeitado como possível spoofing.
         try
         {
-            var agent = await _agentRepo.GetByIdForDecommissionAsync(agentId);
+            var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+            var agent = await agentRepo.GetByIdForDecommissionAsync(agentId);
             if (agent is not null && agent.DeletedAt is not null)
             {
                 _logger.LogDebug(
@@ -217,7 +228,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         return false;
     }
 
-    public bool IsConnected => _connection.ConnectionState == NatsConnectionState.Open;
+    public bool IsConnected => _connection?.ConnectionState == NatsConnectionState.Open;
 
     public async Task SendCommandAsync(Guid agentId, Guid commandId, string commandType, string payload)
     {
@@ -229,12 +240,15 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             Payload = payload
         }, JsonOptions);
 
-        await _connection.PublishAsync(subject, message);
+        await PublishRawAsync(subject, message);
         _logger.LogDebug("Command {CommandId} sent to agent {AgentId} via NATS", commandId, agentId);
     }
 
     public async Task PublishSiteFanoutCommandAsync(Guid clientId, Guid siteId, CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
     {
+        if (_streamProvisioner is not null)
+            await _streamProvisioner.EnsureTenantFanoutStreamAsync(clientId, cancellationToken);
+
         var subject = NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId);
         var normalized = envelope with
         {
@@ -248,6 +262,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async Task PublishClientFanoutCommandAsync(Guid clientId, CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
     {
+        if (_streamProvisioner is not null)
+            await _streamProvisioner.EnsureTenantFanoutStreamAsync(clientId, cancellationToken);
+
         var subject = NatsSubjectBuilder.ClientAgentsCommandSubject(clientId);
         var normalized = envelope with
         {
@@ -261,6 +278,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async Task PublishGlobalFanoutCommandAsync(CommandDispatchEnvelope envelope, CancellationToken cancellationToken = default)
     {
+        if (_streamProvisioner is not null)
+            await _streamProvisioner.EnsureGlobalFanoutStreamAsync(cancellationToken);
+
         var subject = NatsSubjectBuilder.GlobalAgentsCommandSubject();
         var normalized = envelope with
         {
@@ -295,14 +315,14 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 siteId = normalized.SiteId,
             }, JsonOptions);
             var subject = NatsSubjectBuilder.DashboardSubject(normalized.ClientId, normalized.SiteId);
-            await _connection.PublishAsync(subject, normalizedPayload);
+            await PublishRawAsync(subject, normalizedPayload);
         }
         else
         {
             // Normalizacao falhou — publica o payload original (comportamento degracioso).
             // Violacoes ja foram logadas pelo normalizador.
             var subject = NatsSubjectBuilder.DashboardSubject(message.ClientId, message.SiteId);
-            await _connection.PublishAsync(subject, payload);
+            await PublishRawAsync(subject, payload);
         }
     }
 
@@ -327,7 +347,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private async Task PublishSyncPingToSubjectAsync(string subject, Guid agentId, SyncInvalidationPingMessage ping, CancellationToken cancellationToken)
     {
         var message = JsonSerializer.Serialize(ping, JsonOptions);
-        await _connection.PublishAsync(subject, message, cancellationToken: cancellationToken);
+        await PublishRawAsync(subject, message, cancellationToken: cancellationToken);
         _logger.LogDebug("Sync ping published to agent {AgentId} for resource {Resource} (revision {Revision}) on subject {Subject}",
             agentId,
             ping.Resource,
@@ -342,7 +362,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             return;
 
         var subject = NatsSubjectBuilder.RemoteDebugControlSubject(clientId, siteId, agentId);
-        await _connection.PublishAsync(subject, payload, cancellationToken: cancellationToken);
+        await PublishRawAsync(subject, payload, cancellationToken: cancellationToken);
         _logger.LogInformation(
             "Remote debug control published to agent {AgentId} on subject {Subject}",
             agentId, subject);
@@ -359,6 +379,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         if (cancellationToken.IsCancellationRequested)
             return;
 
+        if (_streamProvisioner is not null)
+            await _streamProvisioner.EnsureTenantSupportChatStreamAsync(clientId, cancellationToken);
+
         var subject = NatsSubjectBuilder.SupportChatServerSubject(clientId, siteId, agentId);
         var payload = JsonSerializer.Serialize(envelope, JsonOptions);
 
@@ -374,7 +397,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             ["Nats-Msg-Id"] = messageId,
         };
 
-        await _connection.PublishAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
+        await PublishRawAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
         _logger.LogDebug(
             "Support chat envelope {EventType} published to agent {AgentId} on {Subject} (session={SessionId})",
             envelope.EventType, agentId, subject, envelope.SessionId);
@@ -391,7 +414,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             Payload = payload
         }, JsonOptions);
 
-        await _connection.PublishAsync(subject, message);
+        await PublishRawAsync(subject, message);
         _logger.LogInformation(
             "Command {CommandId} ({CommandType}) sent to agent {AgentId} on explicit subject {Subject}",
             commandId, commandType, agentId, subject);
@@ -399,6 +422,9 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async Task SubscribeToAgentMessagesAsync(CancellationToken cancellationToken)
     {
+        if (_connection is null)
+            throw new InvalidOperationException("NatsConnection is not initialized.");
+
         _logger.LogInformation("NATS subscription tasks starting...");
 
         // Subscrever heartbeats: tenant.*.site.*.agent.*.heartbeat
@@ -410,115 +436,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 {
                     try
                     {
-                        var agentId = ExtractAgentId(msg.Subject);
-                        if (agentId.HasValue)
-                        {
-                            if (!await IsAgentAuthorizedAsync(agentId.Value))
-                            {
-                                _logger.LogWarning("NATS: heartbeat rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
-                                continue;
-                            }
-                            var heartbeat = JsonSerializer.Deserialize<AgentHeartbeat>(msg.Data ?? "", JsonOptions);
-                            if (heartbeat is null)
-                            {
-                                _logger.LogWarning("NATS: heartbeat inválido (deserialização falhou) de {Subject}", msg.Subject);
-                                continue;
-                            }
-
-                            // Garante que o AgentId do subject é usado (não confia no payload)
-                            heartbeat = heartbeat with { AgentId = agentId.Value };
-
-                            // Cache no Redis com métricas (write-behind evita escrita direta no PostgreSQL)
-                            var wasTransition = await _heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online);
-
-                            _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress}, CPU:{Cpu}%, Mem:{Mem}%, Disk:{Disk}%, P2P:{P2p})",
-                                agentId.Value, heartbeat.IpAddress,
-                                heartbeat.CpuPercent, heartbeat.MemoryPercent,
-                                heartbeat.DiskPercent, heartbeat.P2pPeers);
-
-                            // Se houve transição Offline→Online e o agent tem PeerId, publica peer.online.
-                            //
-                            // Exceto para agente na LIXEIRA: ele está sendo desinstalado e
-                            // anunciá-lo como peer do tenant só gera ruído e entradas de P2P
-                            // para uma máquina que vai desaparecer. O heartbeat continua sendo
-                            // aceito (é o que mantém o agente alcançável para o
-                            // DecommissionAgent) — o que se suprime é apenas o anúncio.
-                            if (ShouldPublishPeerOnline(wasTransition, heartbeat.PeerId, await IsTrashedAgentAsync(agentId.Value)))
-                            {
-                                try
-                                {
-                                    var clientId = heartbeat.ClientId ?? Guid.Empty;
-                                    // Sequence monotonicamente crescente por cliente via timestamp Unix ms.
-                                    // Idealmente usaria Redis INCR, mas para manter zero dependencia extra,
-                                    // usamos Unix ms (crescente, nao garantidamente gap-free mas suficiente para dedupe).
-                                    var sequence = (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % int.MaxValue);
-
-                                    var onlineEvent = new P2pPeerOnlineEvent
-                                    {
-                                        EventType = "peer.online",
-                                        ClientId = clientId,
-                                        SiteId = heartbeat.SiteId,
-                                        AgentId = agentId.Value,
-                                        PeerId = heartbeat.PeerId!,
-                                        Addrs = heartbeat.Addrs ?? Array.Empty<string>(),
-                                        Port = heartbeat.Port ?? 0,
-                                        GeneratedAtUtc = DateTime.UtcNow,
-                                        Sequence = sequence,
-                                    };
-
-                                    var eventJson = JsonSerializer.Serialize(onlineEvent, JsonOptions);
-                                    var subject = NatsSubjectBuilder.P2pClientEventsSubject(clientId);
-                                    await _connection.PublishAsync(subject, eventJson);
-                                    _logger.LogInformation("Published peer.online for agent {AgentId} (PeerId: {PeerId}, Sequence: {Sequence})", agentId.Value, heartbeat.PeerId, sequence);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogWarning(ex, "Failed to publish peer.online for agent {AgentId}", agentId.Value);
-                                }
-                            }
-
-                            // Propaga heartbeat completo para dashboards via NATS dashboard.events.
-                            // Usa ClientId/SiteId do heartbeat (enviado pelo agent) em vez de DB lookup.
-                            var eventPayload = new
-                            {
-                                AgentId = agentId.Value,
-                                Status = "Online",
-                                ClientId = heartbeat.ClientId,
-                                SiteId = heartbeat.SiteId,
-                                heartbeat.IpAddress,
-                                heartbeat.Hostname,
-                                heartbeat.AgentVersion,
-                                heartbeat.TimestampUtc,
-                                heartbeat.CpuPercent,
-                                heartbeat.CpuTemperatureCelsius,
-                                heartbeat.MemoryPercent,
-                                heartbeat.MemoryTotalGb,
-                                heartbeat.MemoryUsedGb,
-                                heartbeat.DiskPercent,
-                                heartbeat.DiskTotalGb,
-                                heartbeat.DiskUsedGb,
-                                heartbeat.DiskReadPercent,
-                                heartbeat.DiskWritePercent,
-                                heartbeat.DiskResponseMs,
-                                heartbeat.P2pPeers,
-                                heartbeat.UptimeSeconds,
-                                heartbeat.ProcessCount,
-                                heartbeat.UiOnline,
-                                heartbeat.LoggedUser,
-                                heartbeat.LoggedUserSince,
-                                heartbeat.UiOnlineCount
-                            };
-
-                            var dashboardMessage = DashboardEventMessage.Create(
-                                "AgentHeartbeat", eventPayload,
-                                heartbeat.ClientId, heartbeat.SiteId);
-
-                            // Valida conformidade do contrato antes de publicar.
-                            if (!IsValidHeartbeatPayload(heartbeat))
-                                _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=AgentHeartbeat reason=InvalidPayload agentId={AgentId} subject={Subject}", agentId.Value, msg.Subject);
-
-                            await PublishDashboardEventAsync(dashboardMessage, CancellationToken.None);
-                        }
+                        await HandleHeartbeatMessageAsync(msg.Subject, msg.Data, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -545,88 +463,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 {
                     try
                     {
-                        var agentId = ExtractAgentId(msg.Subject);
-                        if (!agentId.HasValue)
-                        {
-                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=MissingAgentId subject={Subject}", msg.Subject);
-                            continue;
-                        }
-
-                        if (!await IsAgentAuthorizedAsync(agentId.Value))
-                        {
-                            _logger.LogWarning("NATS: command result rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
-                            continue;
-                        }
-                        var result = JsonSerializer.Deserialize<CommandResultMessage>(msg.Data ?? "", JsonOptions);
-                        if (result is null)
-                        {
-                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=CommandResult reason=DeserializationFailed agentId={AgentId} subject={Subject}", agentId.Value, msg.Subject);
-                            continue;
-                        }
-
-                        // O output é a fonte de verdade do desfecho: a confirmação
-                        // antecipada de comando de energia usa ExitCode=0 mesmo sem executar.
-                        // Classifica pelo "status" do contrato JSON e cai para o texto livre
-                        // dos agentes antigos ("deferred_to_window nextRunAt=...").
-                        //
-                        // O tipo do comando é necessário para separar power MANUAL de
-                        // automação: para Restart/Shutdown, "deferred_to_window" é inválido
-                        // (a janela não adia comando do operador) e vira Failed em vez do
-                        // Deferred terminal que sumia sem executar. A leitura é best-effort:
-                        // comando ausente (ex.: retenção já apagou) => null => comportamento
-                        // histórico, sem derrubar o processamento do resultado.
-                        CommandType? commandType = null;
-                        try
-                        {
-                            var command = await _commandRepo.GetByIdAsync(result.CommandId);
-                            commandType = command?.CommandType;
-                        }
-                        catch (Exception lookupEx)
-                        {
-                            _logger.LogDebug(
-                                lookupEx,
-                                "Nao foi possivel resolver o CommandType do comando {CommandId}; classificando sem o tipo.",
-                                result.CommandId);
-                        }
-
-                        var classification = PowerCommandResultClassifier.Classify(result.ExitCode, result.Output, commandType);
-                        var status = classification.Status;
-
-                        // Só loga quando o CONTRATO foi reconhecido no output (StatusCode != null):
-                        // falhas genéricas de qualquer comando (exit != 0) já ficam visíveis no
-                        // status persistido e poluiriam o warning a cada comando que falha.
-                        if (classification.StatusCode is not null && PowerCommandResultClassifier.IsNonExecution(status))
-                        {
-                            _logger.LogWarning(
-                                "Comando {CommandId} não executado no agente: status={StatusCode} nextRunAt={NextRunAt} exitCode={ExitCode} DispatchId={DispatchId}",
-                                result.CommandId,
-                                classification.StatusCode ?? "desconhecido",
-                                classification.NextRunAt ?? "-",
-                                result.ExitCode,
-                                result.DispatchId);
-                        }
-
-                        await _commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
-
-                        // Auditoria por execução (resolve por escopo para não criar
-                        // dependência circular de DI).
-                        await UpdateAutomationAuditAsync(result);
-
-                        // Publica dashboard event com dispatchId para agregacao de campanha (contrato secao 2.3).
-                        var resultData = new
-                        {
-                            CommandId = result.CommandId,
-                            result.ExitCode,
-                            result.Output,
-                            result.ErrorMessage,
-                            DispatchId = result.DispatchId,
-                        };
-                        await PublishDashboardEventForAgentAsync(
-                            agentId,
-                            "CommandCompleted",
-                            resultData,
-                            cancellationToken);
-                        _logger.LogDebug("Command result processed: {CommandId} - Exit Code: {ExitCode} (DispatchId: {DispatchId})", result.CommandId, result.ExitCode, result.DispatchId);
+                        await HandleResultMessageAsync(msg.Subject, msg.Data, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -653,104 +490,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 {
                     try
                     {
-                        var agentId = ExtractAgentId(msg.Subject);
-                        if (agentId.HasValue)
-                        {
-                            if (!await IsAgentAuthorizedAsync(agentId.Value))
-                            {
-                                _logger.LogWarning("NATS: hardware report rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
-                                continue;
-                            }
-                            _logger.LogDebug("Hardware report received from agent {AgentId}", agentId.Value);
-
-                            // Persiste inventario de hardware (contrato: hardware report deve ser persistido).
-                            AgentHardwareInfo? hardwareInfo = null;
-                            try
-                            {
-                                var hwData = msg.Data ?? "";
-                                if (!string.IsNullOrWhiteSpace(hwData))
-                                {
-                                    using var doc = System.Text.Json.JsonDocument.Parse(hwData);
-                                    var root = doc.RootElement;
-
-                                    hardwareInfo = new AgentHardwareInfo
-                                    {
-                                        AgentId = agentId.Value,
-                                        InventoryCollectedAt = DateTime.UtcNow,
-                                    };
-
-                                    // Extrai campos do payload do agent (Go) — nomes camelCase.
-                                    // NOTA: hostname e operatingSystem do root NÃO são mapeados para Model/BiosVersion;
-                                    // esses campos vêm dentro do objeto aninhado "hardware" (parsed abaixo).
-                                    if (root.TryGetProperty("osVersion", out var osv)) _ = osv.GetString(); // guarda para log
-
-                                    if (root.TryGetProperty("hardware", out var hw) && hw.ValueKind == JsonValueKind.Object)
-                                    {
-                                        if (hw.TryGetProperty("manufacturer", out var mfr)) hardwareInfo.Manufacturer = mfr.GetString();
-                                        if (hw.TryGetProperty("model", out var mdl)) hardwareInfo.Model = mdl.GetString();
-                                        if (hw.TryGetProperty("serialNumber", out var sn)) hardwareInfo.SerialNumber = sn.GetString();
-                                        if (hw.TryGetProperty("motherboardManufacturer", out var mb)) hardwareInfo.MotherboardManufacturer = mb.GetString();
-                                        if (hw.TryGetProperty("motherboardModel", out var mbMdl)) hardwareInfo.MotherboardModel = mbMdl.GetString();
-                                        if (hw.TryGetProperty("motherboardSerialNumber", out var mbSn)) hardwareInfo.MotherboardSerialNumber = mbSn.GetString();
-                                        if (hw.TryGetProperty("processor", out var cpu)) hardwareInfo.Processor = cpu.GetString();
-                                        if (hw.TryGetProperty("processorCores", out var pc) && pc.TryGetInt32(out var pcVal)) hardwareInfo.ProcessorCores = pcVal;
-                                        if (hw.TryGetProperty("processorThreads", out var pt) && pt.TryGetInt32(out var ptVal)) hardwareInfo.ProcessorThreads = ptVal;
-                                        if (hw.TryGetProperty("processorArchitecture", out var arch)) hardwareInfo.ProcessorArchitecture = arch.GetString();
-                                        if (hw.TryGetProperty("processorTdpWatts", out var tdp) && tdp.TryGetInt32(out var tdpVal)) hardwareInfo.ProcessorTdpWatts = tdpVal;
-                                        if (hw.TryGetProperty("processorSocket", out var sock)) hardwareInfo.ProcessorSocket = sock.GetString();
-                                        if (hw.TryGetProperty("processorFrequencyGhz", out var freq) && freq.TryGetDecimal(out var freqVal)) hardwareInfo.ProcessorFrequencyGhz = freqVal;
-                                        if (hw.TryGetProperty("processorReleaseDate", out var prd)) hardwareInfo.ProcessorReleaseDate = prd.GetString();
-                                        if (hw.TryGetProperty("totalMemoryBytes", out var mem) && mem.TryGetInt64(out var memVal)) hardwareInfo.TotalMemoryBytes = memVal;
-                                        if (hw.TryGetProperty("gpuModel", out var gpu)) hardwareInfo.GpuModel = gpu.GetString();
-                                        if (hw.TryGetProperty("gpuMemoryBytes", out var gpuMem) && gpuMem.TryGetInt64(out var gpuMemVal)) hardwareInfo.GpuMemoryBytes = gpuMemVal;
-                                        if (hw.TryGetProperty("gpuDriverVersion", out var gpuDrv)) hardwareInfo.GpuDriverVersion = gpuDrv.GetString();
-                                        if (hw.TryGetProperty("totalDisksCount", out var dsk) && dsk.TryGetInt32(out var dskVal)) hardwareInfo.TotalDisksCount = dskVal;
-                                        if (hw.TryGetProperty("biosVersion", out var biosV)) hardwareInfo.BiosVersion = biosV.GetString();
-                                        if (hw.TryGetProperty("biosManufacturer", out var biosMfr)) hardwareInfo.BiosManufacturer = biosMfr.GetString();
-                                        if (hw.TryGetProperty("biosDate", out var biosDt)) hardwareInfo.BiosDate = biosDt.GetString();
-                                        if (hw.TryGetProperty("biosSerialNumber", out var biosSn)) hardwareInfo.BiosSerialNumber = biosSn.GetString();
-                                    }
-
-                                    if (root.TryGetProperty("machineScore", out var ms) && ms.TryGetInt32(out var msVal))
-                                        hardwareInfo.MachineScore = msVal;
-
-                                    if (root.TryGetProperty("inventoryRaw", out var inv))
-                                        hardwareInfo.InventoryRaw = inv.GetString();
-
-                                    await _hardwareRepo.UpsertAsync(hardwareInfo);
-                                    _logger.LogDebug("Hardware report persisted for agent {AgentId} (model={Model}, cpu={Cpu})",
-                                        agentId.Value, hardwareInfo.Model, hardwareInfo.Processor);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogWarning(ex, "Failed to persist hardware report for agent {AgentId}", agentId.Value);
-                            }
-
-                            // Propaga para dashboards via NATS dashboard.events com payload enriquecido
-                            // (campos de hardware mapeados explicitamente para consumo direto do frontend).
-                            var hwEventData = new
-                            {
-                                AgentId = agentId.Value,
-                                Processor = hardwareInfo?.Processor,
-                                ProcessorCores = hardwareInfo?.ProcessorCores,
-                                ProcessorThreads = hardwareInfo?.ProcessorThreads,
-                                ProcessorArchitecture = hardwareInfo?.ProcessorArchitecture,
-                                TotalMemoryBytes = hardwareInfo?.TotalMemoryBytes,
-                                MachineScore = hardwareInfo?.MachineScore,
-                                Model = hardwareInfo?.Model,
-                                Manufacturer = hardwareInfo?.Manufacturer,
-                                GpuModel = hardwareInfo?.GpuModel,
-                                GpuMemoryBytes = hardwareInfo?.GpuMemoryBytes,
-                                BiosVersion = hardwareInfo?.BiosVersion,
-                                SerialNumber = hardwareInfo?.SerialNumber,
-                            };
-                            await PublishDashboardEventForAgentAsync(
-                                agentId.Value,
-                                "AgentHardwareReported",
-                                hwEventData,
-                                CancellationToken.None);
-                        }
+                        await HandleHardwareMessageAsync(msg.Subject, msg.Data, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -815,38 +555,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 {
                     try
                     {
-                        var agentId = ExtractAgentId(msg.Subject);
-                        if (!agentId.HasValue)
-                        {
-                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=MissingAgentId subject={Subject}", msg.Subject);
-                            continue;
-                        }
-
-                        if (!await IsAgentAuthorizedAsync(agentId.Value))
-                        {
-                            _logger.LogWarning("NATS: envelope de chat de suporte rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", agentId.Value, msg.Subject);
-                            continue;
-                        }
-
-                        var envelope = JsonSerializer.Deserialize<Discovery.Core.DTOs.TicketChatEnvelope>(msg.Data ?? "", JsonOptions);
-                        if (envelope is null || envelope.SessionId == Guid.Empty)
-                        {
-                            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=SupportChatEnvelope reason=DeserializationFailed agentId={AgentId} subject={Subject}", agentId.Value, msg.Subject);
-                            continue;
-                        }
-
-                        // Resolvido por escopo: o serviço de ingestão depende de
-                        // IAgentMessaging (para publicar de volta), o que criaria
-                        // dependência circular se injetado no construtor.
-                        await using var scope = _scopeFactory.CreateAsyncScope();
-                        var ingest = scope.ServiceProvider.GetService<ITicketChatIngestService>();
-                        if (ingest is null)
-                        {
-                            _logger.LogWarning("NATS: ITicketChatIngestService indisponível; envelope de chat descartado (session={SessionId})", envelope.SessionId);
-                            continue;
-                        }
-
-                        await ingest.HandleAgentEnvelopeAsync(envelope, agentId.Value, cancellationToken);
+                        await HandleSupportChatMessageAsync(msg.Subject, msg.Data, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -870,13 +579,432 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         await Task.WhenAll(heartbeatTask, resultTask, hardwareTask, globalPongTask, supportChatTask);
     }
 
-    private static Guid? ExtractAgentId(string subject)
+    internal async Task HandleHeartbeatMessageAsync(string subject, string? data, CancellationToken cancellationToken)
     {
-        // subject format: tenant.{clientId}.site.{siteId}.agent.{agentId}.{messageType}
-        var parts = subject.Split('.');
-        var agentIndex = Array.FindIndex(parts, part => string.Equals(part, "agent", StringComparison.OrdinalIgnoreCase));
-        if (agentIndex >= 0 && parts.Length > agentIndex + 1 && Guid.TryParse(parts[agentIndex + 1], out var id))
-            return id;
+        if (!NatsSubjectBuilder.TryParseAgentSubject(subject, out var subjectClientId, out var subjectSiteId, out var subjectAgentId))
+        {
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=InvalidAgentSubject subject={Subject}", subject);
+            return;
+        }
+
+        if (!await IsAgentAuthorizedAsync(subjectAgentId))
+        {
+            _logger.LogWarning("NATS: heartbeat rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", subjectAgentId, subject);
+            return;
+        }
+
+        var heartbeat = JsonSerializer.Deserialize<AgentHeartbeat>(data ?? "", JsonOptions);
+        if (heartbeat is null)
+        {
+            _logger.LogWarning("NATS: heartbeat inválido (deserialização falhou) de {Subject}", subject);
+            return;
+        }
+
+        if ((heartbeat.AgentId != Guid.Empty && heartbeat.AgentId != subjectAgentId)
+            || (heartbeat.ClientId.HasValue && heartbeat.ClientId.Value != Guid.Empty && heartbeat.ClientId.Value != subjectClientId)
+            || (heartbeat.SiteId.HasValue && heartbeat.SiteId.Value != Guid.Empty && heartbeat.SiteId.Value != subjectSiteId))
+        {
+            _logger.LogWarning(
+                "[CONTRACT_VIOLATION] component=Server field=AgentHeartbeat reason=SubjectPayloadIdentityMismatch " +
+                "subjectClientId={SubjectClientId} payloadClientId={PayloadClientId} " +
+                "subjectSiteId={SubjectSiteId} payloadSiteId={PayloadSiteId} " +
+                "subjectAgentId={SubjectAgentId} payloadAgentId={PayloadAgentId} subject={Subject}",
+                subjectClientId, heartbeat.ClientId,
+                subjectSiteId, heartbeat.SiteId,
+                subjectAgentId, heartbeat.AgentId,
+                subject);
+        }
+
+        // Identidade autoritativa vem sempre do msg.Subject (nunca do payload JSON).
+        heartbeat = heartbeat with
+        {
+            AgentId = subjectAgentId,
+            ClientId = subjectClientId,
+            SiteId = subjectSiteId,
+        };
+
+        // Cache no Redis com métricas (write-behind evita escrita direta no PostgreSQL)
+        bool wasTransition;
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var heartbeatCache = scope.ServiceProvider.GetRequiredService<IHeartbeatCacheService>();
+            wasTransition = await heartbeatCache.SetHeartbeatAsync(heartbeat, AgentStatus.Online, cancellationToken);
+        }
+
+        _logger.LogDebug("Heartbeat processed from agent {AgentId} (IP: {IpAddress}, CPU:{Cpu}%, Mem:{Mem}%, Disk:{Disk}%, P2P:{P2p})",
+            subjectAgentId, heartbeat.IpAddress,
+            heartbeat.CpuPercent, heartbeat.MemoryPercent,
+            heartbeat.DiskPercent, heartbeat.P2pPeers);
+
+        // Curto-circuita ANTES de chamar IsTrashedAgentAsync: só consulta o banco quando há
+        // transição Offline→Online e PeerId preenchido.
+        if (wasTransition && !string.IsNullOrWhiteSpace(heartbeat.PeerId))
+        {
+            var isTrashed = await IsTrashedAgentAsync(subjectAgentId);
+            if (ShouldPublishPeerOnline(wasTransition, heartbeat.PeerId, isTrashed))
+            {
+                try
+                {
+                    var sequence = (int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() % int.MaxValue);
+
+                    var onlineEvent = new P2pPeerOnlineEvent
+                    {
+                        EventType = "peer.online",
+                        ClientId = subjectClientId,
+                        SiteId = subjectSiteId,
+                        AgentId = subjectAgentId,
+                        PeerId = heartbeat.PeerId!,
+                        Addrs = heartbeat.Addrs ?? Array.Empty<string>(),
+                        Port = heartbeat.Port ?? 0,
+                        GeneratedAtUtc = DateTime.UtcNow,
+                        Sequence = sequence,
+                    };
+
+                    var eventJson = JsonSerializer.Serialize(onlineEvent, JsonOptions);
+                    var p2pSubject = NatsSubjectBuilder.P2pClientEventsSubject(subjectClientId);
+                    await PublishRawAsync(p2pSubject, eventJson, cancellationToken: cancellationToken);
+                    _logger.LogInformation("Published peer.online for agent {AgentId} (PeerId: {PeerId}, Sequence: {Sequence})", subjectAgentId, heartbeat.PeerId, sequence);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to publish peer.online for agent {AgentId}", subjectAgentId);
+                }
+            }
+        }
+
+        var eventPayload = new
+        {
+            AgentId = subjectAgentId,
+            Status = "Online",
+            ClientId = subjectClientId,
+            SiteId = subjectSiteId,
+            heartbeat.IpAddress,
+            heartbeat.Hostname,
+            heartbeat.AgentVersion,
+            heartbeat.TimestampUtc,
+            heartbeat.CpuPercent,
+            heartbeat.CpuTemperatureCelsius,
+            heartbeat.MemoryPercent,
+            heartbeat.MemoryTotalGb,
+            heartbeat.MemoryUsedGb,
+            heartbeat.DiskPercent,
+            heartbeat.DiskTotalGb,
+            heartbeat.DiskUsedGb,
+            heartbeat.DiskReadPercent,
+            heartbeat.DiskWritePercent,
+            heartbeat.DiskResponseMs,
+            heartbeat.P2pPeers,
+            heartbeat.UptimeSeconds,
+            heartbeat.ProcessCount,
+            heartbeat.UiOnline,
+            heartbeat.LoggedUser,
+            heartbeat.LoggedUserSince,
+            heartbeat.UiOnlineCount
+        };
+
+        var dashboardMessage = DashboardEventMessage.Create(
+            "AgentHeartbeat", eventPayload,
+            subjectClientId, subjectSiteId);
+
+        if (!IsValidHeartbeatPayload(heartbeat))
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=AgentHeartbeat reason=InvalidPayload agentId={AgentId} subject={Subject}", subjectAgentId, subject);
+
+        await PublishDashboardEventAsync(dashboardMessage, CancellationToken.None);
+    }
+
+    internal async Task HandleResultMessageAsync(string subject, string? data, CancellationToken cancellationToken)
+    {
+        if (!NatsSubjectBuilder.TryParseAgentSubject(subject, out var subjectClientId, out var subjectSiteId, out var subjectAgentId))
+        {
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=InvalidAgentSubject subject={Subject}", subject);
+            return;
+        }
+
+        if (!await IsAgentAuthorizedAsync(subjectAgentId))
+        {
+            _logger.LogWarning("NATS: command result rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", subjectAgentId, subject);
+            return;
+        }
+
+        var rawJson = data ?? "";
+        var result = JsonSerializer.Deserialize<CommandResultMessage>(rawJson, JsonOptions);
+        if (result is null)
+        {
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=CommandResult reason=DeserializationFailed agentId={AgentId} subject={Subject}", subjectAgentId, subject);
+            return;
+        }
+
+        WarnOnOptionalJsonIdentityMismatch(rawJson, "CommandResult", subject, subjectClientId, subjectSiteId, subjectAgentId);
+
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var commandRepo = scope.ServiceProvider.GetRequiredService<ICommandRepository>();
+
+            CommandType? commandType = null;
+            try
+            {
+                var command = await commandRepo.GetByIdAsync(result.CommandId);
+                commandType = command?.CommandType;
+            }
+            catch (Exception lookupEx)
+            {
+                _logger.LogDebug(
+                    lookupEx,
+                    "Nao foi possivel resolver o CommandType do comando {CommandId}; classificando sem o tipo.",
+                    result.CommandId);
+            }
+
+            var classification = PowerCommandResultClassifier.Classify(result.ExitCode, result.Output, commandType);
+            var status = classification.Status;
+
+            if (classification.StatusCode is not null && PowerCommandResultClassifier.IsNonExecution(status))
+            {
+                _logger.LogWarning(
+                    "Comando {CommandId} não executado no agente: status={StatusCode} nextRunAt={NextRunAt} exitCode={ExitCode} DispatchId={DispatchId}",
+                    result.CommandId,
+                    classification.StatusCode ?? "desconhecido",
+                    classification.NextRunAt ?? "-",
+                    result.ExitCode,
+                    result.DispatchId);
+            }
+
+            await commandRepo.UpdateStatusAsync(result.CommandId, status, result.Output, result.ExitCode, result.ErrorMessage);
+            await UpdateAutomationAuditAsync(scope.ServiceProvider, result);
+        }
+
+        var resultData = new
+        {
+            CommandId = result.CommandId,
+            result.ExitCode,
+            result.Output,
+            result.ErrorMessage,
+            DispatchId = result.DispatchId,
+        };
+        var dashboardMessage = DashboardEventMessage.Create(
+            "CommandCompleted",
+            resultData,
+            subjectClientId,
+            subjectSiteId);
+        await PublishDashboardEventAsync(dashboardMessage, cancellationToken);
+        _logger.LogDebug("Command result processed: {CommandId} - Exit Code: {ExitCode} (DispatchId: {DispatchId})", result.CommandId, result.ExitCode, result.DispatchId);
+    }
+
+    internal async Task HandleHardwareMessageAsync(string subject, string? data, CancellationToken cancellationToken)
+    {
+        if (!NatsSubjectBuilder.TryParseAgentSubject(subject, out var subjectClientId, out var subjectSiteId, out var subjectAgentId))
+        {
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=InvalidAgentSubject subject={Subject}", subject);
+            return;
+        }
+
+        if (!await IsAgentAuthorizedAsync(subjectAgentId))
+        {
+            _logger.LogWarning("NATS: hardware report rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", subjectAgentId, subject);
+            return;
+        }
+
+        _logger.LogDebug("Hardware report received from agent {AgentId}", subjectAgentId);
+
+        AgentHardwareInfo? hardwareInfo = null;
+        try
+        {
+            var hwData = data ?? "";
+            if (!string.IsNullOrWhiteSpace(hwData))
+            {
+                using var doc = JsonDocument.Parse(hwData);
+                var root = doc.RootElement;
+
+                WarnOnOptionalRootIdentityMismatch(root, "HardwareReport", subject, subjectClientId, subjectSiteId, subjectAgentId);
+
+                hardwareInfo = new AgentHardwareInfo
+                {
+                    AgentId = subjectAgentId,
+                    InventoryCollectedAt = DateTime.UtcNow,
+                };
+
+                if (root.TryGetProperty("osVersion", out var osv)) _ = osv.GetString();
+
+                if (root.TryGetProperty("hardware", out var hw) && hw.ValueKind == JsonValueKind.Object)
+                {
+                    if (hw.TryGetProperty("manufacturer", out var mfr)) hardwareInfo.Manufacturer = mfr.GetString();
+                    if (hw.TryGetProperty("model", out var mdl)) hardwareInfo.Model = mdl.GetString();
+                    if (hw.TryGetProperty("serialNumber", out var sn)) hardwareInfo.SerialNumber = sn.GetString();
+                    if (hw.TryGetProperty("motherboardManufacturer", out var mb)) hardwareInfo.MotherboardManufacturer = mb.GetString();
+                    if (hw.TryGetProperty("motherboardModel", out var mbMdl)) hardwareInfo.MotherboardModel = mbMdl.GetString();
+                    if (hw.TryGetProperty("motherboardSerialNumber", out var mbSn)) hardwareInfo.MotherboardSerialNumber = mbSn.GetString();
+                    if (hw.TryGetProperty("processor", out var cpu)) hardwareInfo.Processor = cpu.GetString();
+                    if (hw.TryGetProperty("processorCores", out var pc) && pc.TryGetInt32(out var pcVal)) hardwareInfo.ProcessorCores = pcVal;
+                    if (hw.TryGetProperty("processorThreads", out var pt) && pt.TryGetInt32(out var ptVal)) hardwareInfo.ProcessorThreads = ptVal;
+                    if (hw.TryGetProperty("processorArchitecture", out var arch)) hardwareInfo.ProcessorArchitecture = arch.GetString();
+                    if (hw.TryGetProperty("processorTdpWatts", out var tdp) && tdp.TryGetInt32(out var tdpVal)) hardwareInfo.ProcessorTdpWatts = tdpVal;
+                    if (hw.TryGetProperty("processorSocket", out var sock)) hardwareInfo.ProcessorSocket = sock.GetString();
+                    if (hw.TryGetProperty("processorFrequencyGhz", out var freq) && freq.TryGetDecimal(out var freqVal)) hardwareInfo.ProcessorFrequencyGhz = freqVal;
+                    if (hw.TryGetProperty("processorReleaseDate", out var prd)) hardwareInfo.ProcessorReleaseDate = prd.GetString();
+                    if (hw.TryGetProperty("totalMemoryBytes", out var mem) && mem.TryGetInt64(out var memVal)) hardwareInfo.TotalMemoryBytes = memVal;
+                    if (hw.TryGetProperty("gpuModel", out var gpu)) hardwareInfo.GpuModel = gpu.GetString();
+                    if (hw.TryGetProperty("gpuMemoryBytes", out var gpuMem) && gpuMem.TryGetInt64(out var gpuMemVal)) hardwareInfo.GpuMemoryBytes = gpuMemVal;
+                    if (hw.TryGetProperty("gpuDriverVersion", out var gpuDrv)) hardwareInfo.GpuDriverVersion = gpuDrv.GetString();
+                    if (hw.TryGetProperty("totalDisksCount", out var dsk) && dsk.TryGetInt32(out var dskVal)) hardwareInfo.TotalDisksCount = dskVal;
+                    if (hw.TryGetProperty("biosVersion", out var biosV)) hardwareInfo.BiosVersion = biosV.GetString();
+                    if (hw.TryGetProperty("biosManufacturer", out var biosMfr)) hardwareInfo.BiosManufacturer = biosMfr.GetString();
+                    if (hw.TryGetProperty("biosDate", out var biosDt)) hardwareInfo.BiosDate = biosDt.GetString();
+                    if (hw.TryGetProperty("biosSerialNumber", out var biosSn)) hardwareInfo.BiosSerialNumber = biosSn.GetString();
+                }
+
+                if (root.TryGetProperty("machineScore", out var ms) && ms.TryGetInt32(out var msVal))
+                    hardwareInfo.MachineScore = msVal;
+
+                if (root.TryGetProperty("inventoryRaw", out var inv))
+                    hardwareInfo.InventoryRaw = inv.GetString();
+
+                await using (var scope = _scopeFactory.CreateAsyncScope())
+                {
+                    var hardwareRepo = scope.ServiceProvider.GetRequiredService<IAgentHardwareRepository>();
+                    await hardwareRepo.UpsertAsync(hardwareInfo);
+                }
+
+                _logger.LogDebug("Hardware report persisted for agent {AgentId} (model={Model}, cpu={Cpu})",
+                    subjectAgentId, hardwareInfo.Model, hardwareInfo.Processor);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist hardware report for agent {AgentId}", subjectAgentId);
+        }
+
+        var hwEventData = new
+        {
+            AgentId = subjectAgentId,
+            Processor = hardwareInfo?.Processor,
+            ProcessorCores = hardwareInfo?.ProcessorCores,
+            ProcessorThreads = hardwareInfo?.ProcessorThreads,
+            ProcessorArchitecture = hardwareInfo?.ProcessorArchitecture,
+            TotalMemoryBytes = hardwareInfo?.TotalMemoryBytes,
+            MachineScore = hardwareInfo?.MachineScore,
+            Model = hardwareInfo?.Model,
+            Manufacturer = hardwareInfo?.Manufacturer,
+            GpuModel = hardwareInfo?.GpuModel,
+            GpuMemoryBytes = hardwareInfo?.GpuMemoryBytes,
+            BiosVersion = hardwareInfo?.BiosVersion,
+            SerialNumber = hardwareInfo?.SerialNumber,
+        };
+        var dashboardMessage = DashboardEventMessage.Create(
+            "AgentHardwareReported",
+            hwEventData,
+            subjectClientId,
+            subjectSiteId);
+        await PublishDashboardEventAsync(dashboardMessage, CancellationToken.None);
+    }
+
+    internal async Task HandleSupportChatMessageAsync(string subject, string? data, CancellationToken cancellationToken)
+    {
+        if (!NatsSubjectBuilder.TryParseAgentSubject(subject, out _, out _, out var subjectAgentId))
+        {
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=subject reason=InvalidAgentSubject subject={Subject}", subject);
+            return;
+        }
+
+        if (!await IsAgentAuthorizedAsync(subjectAgentId))
+        {
+            _logger.LogWarning("NATS: envelope de chat de suporte rejeitado de agent sem token válido (possível spoofing) — AgentId={AgentId}, Subject={Subject}", subjectAgentId, subject);
+            return;
+        }
+
+        var envelope = JsonSerializer.Deserialize<TicketChatEnvelope>(data ?? "", JsonOptions);
+        if (envelope is null || envelope.SessionId == Guid.Empty)
+        {
+            _logger.LogWarning("[CONTRACT_VIOLATION] component=Server field=SupportChatEnvelope reason=DeserializationFailed agentId={AgentId} subject={Subject}", subjectAgentId, subject);
+            return;
+        }
+
+        if (envelope.AgentId != Guid.Empty && envelope.AgentId != subjectAgentId)
+        {
+            _logger.LogWarning(
+                "[CONTRACT_VIOLATION] component=Server field=SupportChatEnvelope reason=SubjectPayloadIdentityMismatch " +
+                "subjectAgentId={SubjectAgentId} payloadAgentId={PayloadAgentId} subject={Subject}",
+                subjectAgentId, envelope.AgentId, subject);
+        }
+
+        envelope.AgentId = subjectAgentId;
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var ingest = scope.ServiceProvider.GetService<ITicketChatIngestService>();
+        if (ingest is null)
+        {
+            _logger.LogWarning("NATS: ITicketChatIngestService indisponível; envelope de chat descartado (session={SessionId})", envelope.SessionId);
+            return;
+        }
+
+        await ingest.HandleAgentEnvelopeAsync(envelope, subjectAgentId, cancellationToken);
+    }
+
+    private void WarnOnOptionalJsonIdentityMismatch(
+        string rawJson,
+        string componentField,
+        string subject,
+        Guid subjectClientId,
+        Guid subjectSiteId,
+        Guid subjectAgentId)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                WarnOnOptionalRootIdentityMismatch(doc.RootElement, componentField, subject, subjectClientId, subjectSiteId, subjectAgentId);
+        }
+        catch
+        {
+            // Ignore malformed JSON here — caller already deserialized or handles errors.
+        }
+    }
+
+    private void WarnOnOptionalRootIdentityMismatch(
+        JsonElement root,
+        string componentField,
+        string subject,
+        Guid subjectClientId,
+        Guid subjectSiteId,
+        Guid subjectAgentId)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return;
+
+        var payloadClientId = TryReadOptionalGuid(root, "clientId");
+        var payloadSiteId = TryReadOptionalGuid(root, "siteId");
+        var payloadAgentId = TryReadOptionalGuid(root, "agentId");
+
+        if ((payloadAgentId.HasValue && payloadAgentId.Value != Guid.Empty && payloadAgentId.Value != subjectAgentId)
+            || (payloadClientId.HasValue && payloadClientId.Value != Guid.Empty && payloadClientId.Value != subjectClientId)
+            || (payloadSiteId.HasValue && payloadSiteId.Value != Guid.Empty && payloadSiteId.Value != subjectSiteId))
+        {
+            _logger.LogWarning(
+                "[CONTRACT_VIOLATION] component=Server field={Field} reason=SubjectPayloadIdentityMismatch " +
+                "subjectClientId={SubjectClientId} payloadClientId={PayloadClientId} " +
+                "subjectSiteId={SubjectSiteId} payloadSiteId={PayloadSiteId} " +
+                "subjectAgentId={SubjectAgentId} payloadAgentId={PayloadAgentId} subject={Subject}",
+                componentField,
+                subjectClientId, payloadClientId,
+                subjectSiteId, payloadSiteId,
+                subjectAgentId, payloadAgentId,
+                subject);
+        }
+    }
+
+    private static Guid? TryReadOptionalGuid(JsonElement root, string propertyName)
+    {
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, propertyName, StringComparison.OrdinalIgnoreCase)
+                && prop.Value.ValueKind == JsonValueKind.String
+                && Guid.TryParse(prop.Value.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+        }
+
         return null;
     }
 
@@ -895,8 +1023,13 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     /// O Status/DeletedAt do agente é irrelevante para o subject: o endereço é
     /// derivado de clientId/siteId/agentId, que não mudam na lixeira.
     /// </summary>
-    private Task<string> BuildAgentSubjectAsync(Guid agentId, string messageType)
-        => BuildAgentSubjectAsync(_agentRepo, _siteRepo, agentId, messageType);
+    private async Task<string> BuildAgentSubjectAsync(Guid agentId, string messageType)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var agentRepo = scope.ServiceProvider.GetRequiredService<IAgentRepository>();
+        var siteRepo = scope.ServiceProvider.GetRequiredService<ISiteRepository>();
+        return await BuildAgentSubjectAsync(agentRepo, siteRepo, agentId, messageType);
+    }
 
     /// <summary>
     /// Versão com repositórios explícitos: permite ao teste dirigir o caminho real
@@ -935,7 +1068,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // NatsConnection é singleton no DI e não deve ser descartada por este serviço scoped.
+        // NatsConnection é singleton no DI e não deve ser descartada por este serviço.
         await ValueTask.CompletedTask;
     }
 
@@ -948,7 +1081,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             ["Nats-Msg-Id"] = envelope.IdempotencyKey,
         };
 
-        await _connection.PublishAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
+        await PublishRawAsync(subject, payload, headers: headers, cancellationToken: cancellationToken);
         _logger.LogInformation(
             "Fan-out command dispatch {DispatchId} published to {Subject} (scope={TargetScope})",
             envelope.DispatchId,
@@ -968,7 +1101,7 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
 
         var subject = NatsSubjectBuilder.ServerPongSubject();
         var payload = JsonSerializer.Serialize(pong, JsonOptions);
-        await _connection.PublishAsync(subject, payload, cancellationToken: cancellationToken);
+        await PublishRawAsync(subject, payload, cancellationToken: cancellationToken);
 
         _logger.LogDebug("Global pong published to {Subject} (serverOverloaded={ServerOverloaded})", subject, pong.ServerOverloaded);
     }
@@ -1051,45 +1184,6 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             "Unknown Nats:GlobalPong:OverloadMode value '{Mode}'. Falling back to disabled mode (serverOverloaded omitted).",
             mode);
         return null;
-    }
-
-    private async Task PublishDashboardEventForAgentAsync(
-        Guid? agentId,
-        string eventType,
-        object data,
-        CancellationToken cancellationToken)
-    {
-        Guid? clientId = null;
-        Guid? siteId = null;
-
-        if (agentId.HasValue)
-        {
-            try
-            {
-                // GetByIdForDecommissionAsync (IgnoreQueryFilters): um agente na
-                // LIXEIRA ainda publica eventos (ex.: o próprio heartbeat de saída
-                // antes de desinstalar). Com o lookup filtrado, esses eventos
-                // caíam no subject de fallback "tenant.unscoped" e o dashboard do
-                // tenant não os via.
-                var agent = await _agentRepo.GetByIdForDecommissionAsync(agentId.Value);
-                if (agent is not null)
-                {
-                    siteId = agent.SiteId;
-                    var site = await _siteRepo.GetByIdAsync(agent.SiteId);
-                    clientId = site?.ClientId;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "PublishDashboardEventForAgentAsync: erro ao resolver tenant do agent {AgentId} — propagando sem tenant.",
-                    agentId.Value);
-                // clientId e siteId permanecem null — evento propaga via subject de fallback.
-            }
-        }
-
-        var message = DashboardEventMessage.Create(eventType, data, clientId, siteId);
-        await PublishDashboardEventAsync(message, cancellationToken);
     }
 
     /// <summary>

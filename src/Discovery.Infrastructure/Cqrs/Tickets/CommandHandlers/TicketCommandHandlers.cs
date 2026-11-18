@@ -21,7 +21,7 @@ public sealed class CreateTicketCommandHandler(
             new TicketSubmissionRequest(
                 cmd.ClientId, cmd.DepartmentId, cmd.TemplateId,
                 cmd.Title, cmd.Description, cmd.Category, cmd.Priority.ToString(),
-                cmd.CustomFieldValues, cmd.TemplateAnswers),
+                cmd.CustomFieldValues, cmd.TemplateAnswers, cmd.WorkflowStateId),
             ct);
 
         if (!submission.IsValid)

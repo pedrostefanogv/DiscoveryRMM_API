@@ -1,3 +1,5 @@
+using System.Net.WebSockets;
+using System.Text;
 using Discovery.Api.Filters;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
@@ -7,6 +9,7 @@ using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Services.Remote.Recording;
 using MediatR;
+using NATS.Client.Core;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -25,6 +28,7 @@ public class RemoteSessionsController : ControllerBase
     private readonly IRemoteSessionManager _sessionManager;
     private readonly ILogger<RemoteSessionsController> _logger;
     private readonly RemoteAccessOptions _options;
+    private readonly NatsConnection _natsConnection;
 
     public RemoteSessionsController(
         IMediator mediator,
@@ -32,6 +36,7 @@ public class RemoteSessionsController : ControllerBase
         IScopeContext scopeContext,
         IRemoteSessionManager sessionManager,
         IOptions<RemoteAccessOptions> options,
+        NatsConnection natsConnection,
         ILogger<RemoteSessionsController> logger)
     {
         _mediator = mediator;
@@ -39,6 +44,7 @@ public class RemoteSessionsController : ControllerBase
         _scopeContext = scopeContext;
         _sessionManager = sessionManager;
         _options = options.Value;
+        _natsConnection = natsConnection;
         _logger = logger;
     }
 
@@ -67,7 +73,7 @@ public class RemoteSessionsController : ControllerBase
 
     /// <summary>Inicia uma nova sessão de acesso remoto.</summary>
     [HttpPost("{agentId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> StartSession(Guid agentId, [FromBody] StartRemoteSessionCommand cmd, CancellationToken ct = default)
     {
         var rawUserId = HttpContext.Items["UserId"];
@@ -95,7 +101,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Encerra uma sessão remota ativa.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/stop")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute, AllowPending = true)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> StopSession(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -108,7 +114,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Renova o TTL de uma sessão remota.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/renew")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> RenewSession(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         // Feature flag: renew cria/renova fluxo de acesso — recusado quando o
@@ -125,7 +131,7 @@ public class RemoteSessionsController : ControllerBase
 
     /// <summary>Lista sessões ativas para um agent.</summary>
     [HttpGet("{agentId:guid}/active")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetActiveSessions(Guid agentId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -139,7 +145,7 @@ public class RemoteSessionsController : ControllerBase
     /// Estado do consentimento (o console aguarda a decisão antes de conectar).
     /// </summary>
     [HttpGet("{agentId:guid}/{sessionId:guid}/consent")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetConsentStatus(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -174,7 +180,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Obtém credenciais NATS (JWT + NKey) para o viewer se conectar ao stream.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/nats-credentials")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSessionCredentials(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         // Feature flag: credenciais NATS habilitam o stream — recusado quando o
@@ -195,7 +201,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Inicia a gravação de uma sessão remota.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/recording/start")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> StartRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -208,7 +214,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Para a gravação de uma sessão remota.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/recording/stop")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> StopRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -330,7 +336,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Altera qualidade/codec/FPS de uma sessão ativa. Suporta modo Auto para adaptação dinâmica.</summary>
     [HttpPut("{agentId:guid}/{sessionId:guid}/quality")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ChangeQuality(Guid agentId, Guid sessionId, [FromBody] ChangeRemoteSessionQualityCommand cmd, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -350,7 +356,7 @@ public class RemoteSessionsController : ControllerBase
     /// </summary>
     [HttpPut("{agentId:guid}/{sessionId:guid}/bandwidth")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ChangeBandwidth(Guid agentId, Guid sessionId, [FromBody] ChangeRemoteSessionBandwidthCommand cmd, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -400,6 +406,162 @@ public class RemoteSessionsController : ControllerBase
         return deleted ? NoContent() : NotFound(new { error = "Terminal recording not found." });
     }
 
+    // ── Túnel RDP / Proxy ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gera o arquivo .rdp para o viewer conectar um cliente RDP local ao túnel:
+    /// o "full address" aponta para o LOOPBACK do viewer na porta local do túnel
+    /// (o viewer abre o WS /tunnel/ws e a API faz a ponte com o agent via NATS).
+    /// </summary>
+    [HttpGet("{agentId:guid}/{sessionId:guid}/rdp-file")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetRdpFile(Guid agentId, Guid sessionId, [FromQuery] int localPort, CancellationToken ct = default)
+    {
+        // Porta inválida é erro do chamador (400), não 404 — o sessionId pode ser
+        // perfeitamente válido.
+        if (localPort is < 1 or > 65535)
+            return BadRequest(new { error = "localPort deve estar entre 1 e 65535." });
+
+        var session = await _sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (session is null || session.AgentId != agentId)
+            return NotFound(new { error = "Remote session not found." });
+
+        var rdpContent = new StringBuilder();
+        rdpContent.AppendLine("screen mode id:i:2");
+        rdpContent.AppendLine("use multimon:i:1");
+        rdpContent.AppendLine($"desktopwidth:i:1280");
+        rdpContent.AppendLine($"desktopheight:i:800");
+        rdpContent.AppendLine("session bpp:i:32");
+        rdpContent.AppendLine("winposstr:s:0,3,0,0,800,600");
+        rdpContent.AppendLine("compression:i:1");
+        rdpContent.AppendLine("keyboardhook:i:2");
+        rdpContent.AppendLine("audiocapturemode:i:0");
+        rdpContent.AppendLine("videoplaybackmode:i:1");
+        rdpContent.AppendLine("connection type:i:7");
+        rdpContent.AppendLine("networkautodetect:i:1");
+        rdpContent.AppendLine("bandwidthautodetect:i:1");
+        rdpContent.AppendLine("displayconnectionbar:i:1");
+        rdpContent.AppendLine("disable wallpaper:i:0");
+        rdpContent.AppendLine("allow font smoothing:i:1");
+        rdpContent.AppendLine("allow desktop composition:i:1");
+        rdpContent.AppendLine("disable full window drag:i:0");
+        rdpContent.AppendLine("disable menu anims:i:0");
+        rdpContent.AppendLine("disable themes:i:0");
+        rdpContent.AppendLine("disable cursor setting:i:0");
+        rdpContent.AppendLine("bitmapcachepersistenable:i:1");
+        // O túnel roda no viewer: o cliente RDP aponta para o LOOPBACK na porta
+        // local aberta pelo túnel WebSocket — o endereço real do agent NUNCA
+        // vai no arquivo (o túnel NATS é o transporte).
+        rdpContent.AppendLine($"full address:s:127.0.0.1:{localPort}");
+        rdpContent.AppendLine("audiomode:i:0");
+        rdpContent.AppendLine("redirectprinters:i:0");
+        rdpContent.AppendLine("redirectcomports:i:0");
+        rdpContent.AppendLine("redirectsmartcards:i:0");
+        rdpContent.AppendLine("redirectclipboard:i:1");
+        rdpContent.AppendLine("authentication level:i:0");
+        rdpContent.AppendLine("prompt for credentials:i:0");
+        rdpContent.AppendLine("negotiate security layer:i:1");
+
+        var fileName = $"discovery-rdp-{sessionId:N}.rdp";
+        return File(Encoding.UTF8.GetBytes(rdpContent.ToString()), "application/x-rdp", fileName);
+    }
+
+    /// <summary>
+    /// Túnel WebSocket do viewer: cada frame recebido do cliente é publicado em
+    /// &lt;subject&gt;.tunnel.in (o agent responde em &lt;subject&gt;.tunnel.out) e cada
+    /// mensagem de .tunnel.out é retransmitida ao WebSocket. O contrato do wire
+    /// é do AGENTE: frame binário com header de 6 bytes ([0x01][op][4B streamId])
+    /// ou controle JSON iniciado por '{' — a API é um relay cego (não interpreta).
+    /// </summary>
+    [HttpGet("{agentId:guid}/{sessionId:guid}/tunnel/ws")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> OpenTunnelWebSocket(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        if (!HttpContext.WebSockets.IsWebSocketRequest)
+            return BadRequest(new { error = "Endpoint exige upgrade para WebSocket." });
+
+        var session = await _sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (session is null || session.AgentId != agentId || string.IsNullOrWhiteSpace(session.NatsSubject))
+            return NotFound(new { error = "Remote session not found." });
+
+        // Assina ANTES de aceitar o upgrade — e com SubscribeCoreAsync, que só
+        // retorna quando o SUB foi efetivamente registrado no servidor. O
+        // SubscribeAsync comum devolve um IAsyncEnumerable PREGUIÇOSO: o SUB só
+        // sai quando a iteração começa, então um frame .tunnel.out publicado
+        // pelo agent nesse intervalo era PERDIDO (o viewer ficava esperando o
+        // primeiro frame até o timeout).
+        var consumer = await _natsConnection.SubscribeCoreAsync<byte[]>(
+            $"{session.NatsSubject}.tunnel.out",
+            null,
+            NatsDefaultSerializer<byte[]>.Default,
+            null,
+            ct);
+
+        var webSocket = await HttpContext.WebSockets.AcceptWebSocketAsync();
+
+        // Pump NATS -> WebSocket.
+        var pumpTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var msg in consumer.Msgs.ReadAllAsync(ct))
+                {
+                    if (webSocket.State != WebSocketState.Open)
+                        break;
+
+                    var data = msg.Data ?? [];
+                    await webSocket.SendAsync(
+                        data,
+                        data.Length > 0 && data[0] == (byte)'{' ? WebSocketMessageType.Text : WebSocketMessageType.Binary,
+                        endOfMessage: true,
+                        ct);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (WebSocketException) { }
+        }, ct);
+
+        try
+        {
+            // Pump WebSocket -> NATS.
+            var buffer = new byte[64 * 1024];
+            while (webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+            {
+                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                if (result.MessageType == WebSocketMessageType.Close)
+                    break;
+
+                if (result.Count <= 0)
+                    continue;
+
+                var frame = result.Count == buffer.Length || result.EndOfMessage
+                    ? buffer.AsSpan(0, result.Count).ToArray()
+                    : buffer.AsSpan(0, result.Count).ToArray();
+                await _natsConnection.PublishAsync($"{session.NatsSubject}.tunnel.in", frame, cancellationToken: ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (WebSocketException) { }
+        finally
+        {
+            try { await consumer.DisposeAsync(); } catch { }
+            try { await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "tunnel closed", CancellationToken.None); } catch { }
+        }
+
+        try
+        {
+            await pumpTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch
+        {
+            // Pump encerrado de forma assíncrona — nada a fazer.
+        }
+
+        return new EmptyResult();
+    }
+
     private Guid GetUserId()
     {
         if (HttpContext.Items["UserId"] is Guid uid) return uid;
@@ -412,7 +574,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Cria uma nova aba de terminal na sessão.</summary>
     [HttpPost("{agentId:guid}/{sessionId:guid}/terminal/tabs")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateTerminalTab(Guid agentId, Guid sessionId, [FromBody] CreateTerminalTabRequest req, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -425,7 +587,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Fecha uma aba de terminal.</summary>
     [HttpDelete("{agentId:guid}/{sessionId:guid}/terminal/tabs/{tabId:guid}")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> CloseTerminalTab(Guid agentId, Guid sessionId, Guid tabId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -438,7 +600,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Lista shells disponíveis no agent (inclui WSL se instalado).</summary>
     [HttpGet("{agentId:guid}/{sessionId:guid}/terminal/shells")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.View)]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public IActionResult GetAvailableShells(Guid agentId, Guid sessionId)
     {
         // Retorna shells padrão; WSL availability vem do agent via NATS term.ready

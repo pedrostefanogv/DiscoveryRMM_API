@@ -73,19 +73,33 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet("by-site/{siteId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.FromRoute)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetBySite(Guid siteId)
     {
         var result = await _mediator.Send(new GetAgentsBySiteQuery(siteId));
-        return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                "NotFound" => NotFound(),
+                _ => BadRequest()
+            });
     }
 
     [HttpGet("by-client/{clientId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.FromRoute)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetByClient(Guid clientId)
     {
         var result = await _mediator.Send(new GetAgentsByClientQuery(clientId));
-        return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                "NotFound" => NotFound(),
+                _ => BadRequest()
+            });
     }
 
     /// <summary>
@@ -109,7 +123,7 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await _mediator.Send(new GetAgentByIdQuery(id));
@@ -638,13 +652,18 @@ public class AgentsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/commands")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> SendCommand(Guid id, [FromBody] SendAgentCommandCommand cmd)
     {
         var result = await _mediator.Send(cmd with { AgentId = id });
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetCommands), new { id }, dto),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpGet("{id:guid}/tokens")]
@@ -729,13 +748,21 @@ public class AgentsController : ControllerBase
     // ── Power Management ──────────────────────────────────────────────────
 
     [HttpPost("{id:guid}/restart")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
-    public async Task<IActionResult> RestartAgent(Guid id, [FromBody] RestartAgentCommand cmd)
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> RestartAgent(Guid id, [FromBody] RestartAgentCommand? cmd)
     {
-        var result = await _mediator.Send(cmd with { AgentId = id });
+        // Corpo opcional: o endpoint é um "trigger" (POST sem body é uso legítimo
+        // do console/CLI) — sem isso um POST sem corpo devolvia 415 em vez de
+        // executar com os defaults do comando.
+        var result = await _mediator.Send((cmd ?? new RestartAgentCommand(id)) with { AgentId = id });
         return result.Match<IActionResult>(
             success: commandId => Accepted(new { agentId = id, commandType = "restart", commandId }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("{id:guid}/shutdown")]

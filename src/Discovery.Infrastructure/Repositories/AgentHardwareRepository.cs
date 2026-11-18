@@ -89,52 +89,61 @@ public class AgentHardwareRepository : IAgentHardwareRepository
             hardware.HardwareComponentsJson = JsonSerializer.Serialize(components, JsonOptions);
 
         var existing = await _db.AgentHardwareInfos
+            .AsNoTracking()
             .SingleOrDefaultAsync(info => info.AgentId == hardware.AgentId);
 
         if (existing is null)
         {
             hardware.Id = IdGenerator.NewId();
             _db.AgentHardwareInfos.Add(hardware);
-        }
-        else
-        {
-            existing.Manufacturer = hardware.Manufacturer;
-            existing.Model = hardware.Model;
-            existing.SerialNumber = hardware.SerialNumber;
-            existing.MotherboardManufacturer = hardware.MotherboardManufacturer;
-            existing.MotherboardModel = hardware.MotherboardModel;
-            existing.MotherboardSerialNumber = hardware.MotherboardSerialNumber;
-            existing.Processor = hardware.Processor;
-            existing.ProcessorCores = hardware.ProcessorCores;
-            existing.ProcessorThreads = hardware.ProcessorThreads;
-            existing.ProcessorArchitecture = hardware.ProcessorArchitecture;
-            existing.ProcessorTdpWatts = hardware.ProcessorTdpWatts;
-            existing.ProcessorSocket = hardware.ProcessorSocket;
-            existing.ProcessorFrequencyGhz = hardware.ProcessorFrequencyGhz;
-            existing.ProcessorReleaseDate = hardware.ProcessorReleaseDate;
-            existing.TotalMemoryBytes = hardware.TotalMemoryBytes;
-            existing.GpuModel = hardware.GpuModel;
-            existing.GpuMemoryBytes = hardware.GpuMemoryBytes;
-            existing.GpuDriverVersion = hardware.GpuDriverVersion;
-            existing.BiosVersion = hardware.BiosVersion;
-            existing.BiosManufacturer = hardware.BiosManufacturer;
-            existing.BiosDate = hardware.BiosDate;
-            existing.BiosSerialNumber = hardware.BiosSerialNumber;
-            existing.MachineScore = hardware.MachineScore;
-            existing.OsName = hardware.OsName;
-            existing.OsVersion = hardware.OsVersion;
-            existing.OsBuild = hardware.OsBuild;
-            existing.OsArchitecture = hardware.OsArchitecture;
-            existing.InventoryRaw = hardware.InventoryRaw;
-            existing.HardwareComponentsJson = hardware.HardwareComponentsJson;
-            existing.InventorySchemaVersion = hardware.InventorySchemaVersion;
-            existing.InventoryCollectedAt = hardware.InventoryCollectedAt;
-            existing.CollectedAt = hardware.CollectedAt;
-            existing.UpdatedAt = hardware.UpdatedAt;
-            existing.TotalDisksCount = hardware.TotalDisksCount;
+            await _db.SaveChangesAsync();
+            _db.Entry(hardware).State = EntityState.Detached;
+            return;
         }
 
+        existing.Manufacturer = hardware.Manufacturer;
+        existing.Model = hardware.Model;
+        existing.SerialNumber = hardware.SerialNumber;
+        existing.MotherboardManufacturer = hardware.MotherboardManufacturer;
+        existing.MotherboardModel = hardware.MotherboardModel;
+        existing.MotherboardSerialNumber = hardware.MotherboardSerialNumber;
+        existing.Processor = hardware.Processor;
+        existing.ProcessorCores = hardware.ProcessorCores;
+        existing.ProcessorThreads = hardware.ProcessorThreads;
+        existing.ProcessorArchitecture = hardware.ProcessorArchitecture;
+        existing.ProcessorTdpWatts = hardware.ProcessorTdpWatts;
+        existing.ProcessorSocket = hardware.ProcessorSocket;
+        existing.ProcessorFrequencyGhz = hardware.ProcessorFrequencyGhz;
+        existing.ProcessorReleaseDate = hardware.ProcessorReleaseDate;
+        existing.TotalMemoryBytes = hardware.TotalMemoryBytes;
+        existing.GpuModel = hardware.GpuModel;
+        existing.GpuMemoryBytes = hardware.GpuMemoryBytes;
+        existing.GpuDriverVersion = hardware.GpuDriverVersion;
+        existing.BiosVersion = hardware.BiosVersion;
+        existing.BiosManufacturer = hardware.BiosManufacturer;
+        existing.BiosDate = hardware.BiosDate;
+        existing.BiosSerialNumber = hardware.BiosSerialNumber;
+        existing.MachineScore = hardware.MachineScore;
+        existing.OsName = hardware.OsName;
+        existing.OsVersion = hardware.OsVersion;
+        existing.OsBuild = hardware.OsBuild;
+        existing.OsArchitecture = hardware.OsArchitecture;
+        existing.InventoryRaw = hardware.InventoryRaw;
+        existing.HardwareComponentsJson = hardware.HardwareComponentsJson;
+        existing.InventorySchemaVersion = hardware.InventorySchemaVersion;
+        existing.InventoryCollectedAt = hardware.InventoryCollectedAt;
+        existing.CollectedAt = hardware.CollectedAt;
+        existing.UpdatedAt = hardware.UpdatedAt;
+        existing.TotalDisksCount = hardware.TotalDisksCount;
+
+        var localTracked = _db.ChangeTracker.Entries<AgentHardwareInfo>()
+            .FirstOrDefault(e => e.Entity.Id == existing.Id);
+        if (localTracked is not null)
+            localTracked.State = EntityState.Detached;
+
+        _db.AgentHardwareInfos.Update(existing);
         await _db.SaveChangesAsync();
+        _db.Entry(existing).State = EntityState.Detached;
     }
 
     private static AgentHardwareComponents? DeserializeComponents(string? json)

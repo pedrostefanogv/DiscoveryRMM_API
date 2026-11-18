@@ -32,7 +32,9 @@ public sealed record TicketSubmissionRequest(
     string? Priority,
     IReadOnlyDictionary<Guid, JsonElement>? CustomFieldValues,
     /// <summary>Respostas do mini questionário do template (chave da pergunta → valor).</summary>
-    IReadOnlyDictionary<string, JsonElement>? TemplateAnswers = null);
+    IReadOnlyDictionary<string, JsonElement>? TemplateAnswers = null,
+    /// <summary>Estado inicial explícito do workflow (opcional). Validado quando informado.</summary>
+    Guid? WorkflowStateId = null);
 
 public sealed record TicketAnswerDraft(
     string QuestionKey,

@@ -3,10 +3,20 @@ using System.Text.Json.Serialization;
 namespace Discovery.Core.Cqrs;
 
 /// <summary>
+/// Non-generic outcome contract implemented by <see cref="Result{TResponse}"/>
+/// so pipeline behaviors can inspect success/failure without reflection.
+/// </summary>
+public interface ICqrsResult
+{
+    bool IsSuccess { get; }
+    bool IsFailure { get; }
+}
+
+/// <summary>
 /// Represents the result of a command or query execution.
 /// Encapsulates success/failure state with typed response and errors.
 /// </summary>
-public readonly record struct Result<TResponse>
+public readonly record struct Result<TResponse> : ICqrsResult
     where TResponse : notnull
 {
     /// <summary>

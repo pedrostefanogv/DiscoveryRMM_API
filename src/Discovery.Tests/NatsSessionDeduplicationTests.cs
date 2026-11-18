@@ -159,10 +159,19 @@ public class NatsSessionDeduplicationTests
             tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
         Assert.That(first, Is.True);
 
-        // Mesmo tokenId + MESMO agente (ex: troca de transporte nats→wss) — deve sobrescrever
+        // CONTRATO (T2_F01_05): a sessão NATS é vinculada ao par (agente, nkey).
+        // Mesmo tokenId + MESMO agente + MESMO nkey (ex: reconexão/troca de
+        // transporte nats→wss mantendo as credenciais) — renova (sobrescreve).
         var second = await service.TryAcquireNatsSessionAsync(
+            tokenId, agentId, "test_nkey", TimeSpan.FromMinutes(5));
+        Assert.That(second, Is.True, "Mesmo agente com o mesmo nkey deve renovar a sessão.");
+
+        // Mesmo agente com NKEY DIFERENTE — REJEITADO: um segundo processo com
+        // o mesmo token mas par de chaves distinto não pode sequestrar a sessão
+        // NATS do agente original.
+        var hijack = await service.TryAcquireNatsSessionAsync(
             tokenId, agentId, "other_nkey", TimeSpan.FromMinutes(5));
-        Assert.That(second, Is.True, "Mesmo agente trocando de transporte deve readquirir a sessão.");
+        Assert.That(hijack, Is.False, "Nkey diferente do mesmo token não deve assumir a sessão.");
     }
 
     [Test]

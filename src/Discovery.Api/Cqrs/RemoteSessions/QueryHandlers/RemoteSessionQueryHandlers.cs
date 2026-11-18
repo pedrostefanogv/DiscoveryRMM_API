@@ -62,7 +62,8 @@ public sealed class GetSessionCredentialsQueryHandler(
         // Fonte única de pub/sub e TTL (a resposta de start usa a MESMA lista).
         // As restrições da sessão são REAPLICADAS aqui: uma credencial pedida depois
         // (reconexão, nova aba) não pode ganhar capacidades que o start negou.
-        var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(session.NatsSubject, session.Rights);
+        // O KIND recorta os subjects de túnel (proxy/rdp) igual ao start.
+        var (pubSubjects, subSubjects) = RemoteSessionViewerPermissions.Build(session.NatsSubject, session.Rights, session.Kind);
         var ttlMinutes = RemoteSessionViewerPermissions.TtlMinutes(session.ExpiresAt);
 
         var (jwt, nkeySeed, _) = await credentialsService.IssueSessionCredentialsAsync(

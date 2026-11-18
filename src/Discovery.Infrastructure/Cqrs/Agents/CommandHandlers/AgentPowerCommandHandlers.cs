@@ -4,21 +4,31 @@ using Discovery.Core.Cqrs.Agents.PowerManagement.Commands;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 
 public sealed class RestartAgentCommandHandler(
     IAgentRepository agentRepo,
-    IAgentCommandDispatcher dispatcher
+    IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<RestartAgentCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(RestartAgentCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<Guid>.Failure(Error.NotFound("Agent not found."));
+
+        // Recorte de tenant: restart/shutdown só no próprio escopo do usuário.
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<Guid>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var payload = JsonSerializer.Serialize(new
         {

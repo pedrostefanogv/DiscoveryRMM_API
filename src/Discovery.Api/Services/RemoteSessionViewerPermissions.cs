@@ -39,8 +39,13 @@ public static class RemoteSessionViewerPermissions
     /// remover só do pub deixaria o viewer recebendo dados que não deveria (ex.: ver
     /// o terminal sem poder digitar ainda é leitura de dados do cliente), e remover
     /// só do sub faria o viewer tentar operar e falhar com -ERR.
+    ///
+    /// PROXY/RDP: os subjects de túnel são concedidos conforme o KIND da sessão —
+    /// .proxy.req/.proxy.resp só para Proxy/All; .tunnel.in/.tunnel.out só para
+    /// Rdp/All — e são REMOVIDOS pelos bits NoProxy (64) / NoRdp (128). Chamar sem
+    /// kind (legado) preserva o comportamento anterior (proxy concedido).
     /// </summary>
-    public static (string[] Publish, string[] Subscribe) Build(string natsSubject, RemoteSessionRights rights)
+    public static (string[] Publish, string[] Subscribe) Build(string natsSubject, RemoteSessionRights rights, RemoteSessionKind? kind = null)
     {
         var viewOnly = rights.HasFlag(RemoteSessionRights.ViewOnly);
         var limitedInput = rights.HasFlag(RemoteSessionRights.LimitedInput);
@@ -48,6 +53,12 @@ public static class RemoteSessionViewerPermissions
         var noFiles = rights.HasFlag(RemoteSessionRights.NoFiles);
         var noDesktop = rights.HasFlag(RemoteSessionRights.NoDesktop);
         var noEvents = rights.HasFlag(RemoteSessionRights.NoEvents);
+        var noProxy = rights.HasFlag(RemoteSessionRights.NoProxy);
+        var noRdp = rights.HasFlag(RemoteSessionRights.NoRdp);
+
+        // kind null = chamador legado (comportamento anterior: proxy concedido).
+        var proxyAllowed = !noProxy && (kind is null || kind is RemoteSessionKind.Proxy or RemoteSessionKind.All);
+        var rdpAllowed = !noRdp && kind is RemoteSessionKind.Rdp or RemoteSessionKind.All;
 
         var pub = new List<string>
         {
@@ -73,7 +84,10 @@ public static class RemoteSessionViewerPermissions
         if (!noFiles)
             pub.Add($"{natsSubject}.files.req");
 
-        pub.Add($"{natsSubject}.proxy.req");
+        if (proxyAllowed)
+            pub.Add($"{natsSubject}.proxy.req");
+        if (rdpAllowed)
+            pub.Add($"{natsSubject}.tunnel.in");
         pub.Add($"{natsSubject}.proc.req");
 
         if (!viewOnly)
@@ -115,7 +129,10 @@ public static class RemoteSessionViewerPermissions
             sub.Add($"{natsSubject}.files.progress");
         }
 
-        sub.Add($"{natsSubject}.proxy.resp");
+        if (proxyAllowed)
+            sub.Add($"{natsSubject}.proxy.resp");
+        if (rdpAllowed)
+            sub.Add($"{natsSubject}.tunnel.out");
         sub.Add($"{natsSubject}.proc.resp");
         sub.Add($"{natsSubject}.proc.ready");
 

@@ -90,8 +90,15 @@ public class AgentTokenAuthService : IAgentAuthService
             return null;
         }
 
-        // Agents soft-deleted in the system must not authenticate with stale tokens.
-        var agent = await _agentRepo.GetByIdAsync(token.AgentId);
+        // Agents SOFT-DELETED (lixeira) continuam autenticáveis de propósito: o
+        // token é a credencial que permite ao servidor mandar o comando de
+        // desinstalação e o agent concluir o descomissionamento — o
+        // AgentAuthMiddleware recorta o acesso (403 em tudo exceto
+        // DELETE /agent-auth/me). O GetByIdAsync aplica o query filter global e
+        // DEVOLVIA null para agente na lixeira, o que REVOGAVA o token e
+        // devolvia 401 antes do 403 do middleware. Usar a leitura sem filtro:
+        // só revoga quando o agent NÃO existe de verdade (hard delete).
+        var agent = await _agentRepo.GetByIdForDecommissionAsync(token.AgentId);
         if (agent is null)
         {
             await _tokenRepo.RevokeAsync(token.Id);
@@ -155,17 +162,27 @@ public class AgentTokenAuthService : IAgentAuthService
         if (acquired)
             return true;
 
-        // Sessão já existe — verifica se é o MESMO agente (ex: troca de transporte nats→wss)
+        // Sessão já existe — verifica quem a segura:
+        //   - MESMO agente + MESMO user_nkey: renova a sessão (reconnect do
+        //     mesmo cliente, ex.: troca de transporte nats→wss);
+        //   - MESMO agente + user_nkey DIFERENTE: conexão DUPLICADA usando o
+        //     mesmo token — REJEITA (era aqui que o token "clonado" passava:
+        //     a sobrescrita silenciosamente rouba a sessão da conexão original);
+        //   - Agente diferente: token está sendo usado por outro agente → rejeitar.
         var existing = await _redisService.GetAsync(sessionKey);
         if (!string.IsNullOrWhiteSpace(existing))
         {
             try
             {
                 var existingData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(existing);
-                if (existingData.TryGetProperty("agentId", out var existingAgentId) &&
-                    existingAgentId.GetString() == agentId.ToString())
+                var sameAgent = existingData.TryGetProperty("agentId", out var existingAgentId)
+                    && existingAgentId.GetString() == agentId.ToString();
+                var sameUserNkey = existingData.TryGetProperty("userNkey", out var existingUserNkey)
+                    && string.Equals(existingUserNkey.GetString(), userNkey, StringComparison.Ordinal);
+
+                if (sameAgent && sameUserNkey)
                 {
-                    // Mesmo agente trocando de transporte — sobrescreve a sessão
+                    // Renova a sessão do mesmo cliente
                     await _redisService.SetAsync(sessionKey, sessionValue, expirySeconds);
                     return true;
                 }
@@ -173,7 +190,6 @@ public class AgentTokenAuthService : IAgentAuthService
             catch { /* fall through to rejection */ }
         }
 
-        // AgentId diferente — token está sendo usado por outro agente → rejeitar
         return false;
     }
 

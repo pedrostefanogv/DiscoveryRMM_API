@@ -45,7 +45,11 @@ public class AutomaticLoggingOptions
     /// </summary>
     public List<string> ExcludePatterns { get; set; } = new()
     {
-        "/health", "/metrics", "/swagger"
+        "/health", "/metrics", "/swagger",
+        // Hot path de agentes (heartbeat/auth a cada poucos segundos): logar
+        // cada request gerava 1-2 INSERTs de LogEntry por batida — ruído e
+        // writes desnecessários no banco (plano P1, gargalo de escala).
+        "/api/v1/agent-auth"
     };
 
     /// <summary>

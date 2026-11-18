@@ -42,7 +42,7 @@ public class SitesController(IMediator mediator, INoteService noteService) : Con
     /// tela /sites — evita o N+1 de buscar sites cliente a cliente.
     /// </summary>
     [HttpGet("/api/v{version:apiVersion}/sites")]
-    [RequirePermission(ResourceType.Sites, ActionType.View)]
+    [RequirePermission(ResourceType.Sites, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAll([FromQuery] bool includeInactive = false)
     {
         var result = await mediator.Send(new GetAllSitesQuery(includeInactive));

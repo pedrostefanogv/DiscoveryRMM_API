@@ -111,7 +111,12 @@ public class McpToolExecutor : IMcpToolExecutor
     private readonly IConfigurationResolver? _configurationResolver;
 
     private readonly ConcurrentDictionary<string, Func<McpToolCallContext, Task<string>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, int> _rateLimitCounters = new(StringComparer.OrdinalIgnoreCase);
+
+    // P1: o executor é Scoped (depende de repositórios scoped) — contadores de
+    // instância zeravam a cada request HTTP, tornando o rate limit de tools
+    // MCP inefetivo. Estáticos: o teto sobrevive aos requests (chave inclui
+    // tool/client/site/agent; expira via TryRemove após 1 min).
+    private static readonly ConcurrentDictionary<string, int> RateLimitCounters = new(StringComparer.OrdinalIgnoreCase);
 
     public McpToolExecutor(
         IMcpToolPolicyRepository policyRepo,
@@ -263,12 +268,12 @@ public class McpToolExecutor : IMcpToolExecutor
         }
 
         var rateKey = $"{toolName}:{clientId}:{siteId}:{agentId}";
-        var currentCount = _rateLimitCounters.AddOrUpdate(rateKey, 1, (_, v) => v + 1);
+        var currentCount = RateLimitCounters.AddOrUpdate(rateKey, 1, (_, v) => v + 1);
 
         // Reset simples (não é sliding window, mas evita a necessidade de Redis para este caso)
         _ = Task.Delay(TimeSpan.FromMinutes(1)).ContinueWith(t =>
         {
-            _rateLimitCounters.TryRemove(rateKey, out var removed);
+            RateLimitCounters.TryRemove(rateKey, out var removed);
         });
 
         if (currentCount > effectiveMaxCallsPerMinute)

@@ -13,8 +13,8 @@ public class RemoteAccessOptions
     /// <summary>Duração máxima total de uma sessão (inclui renovações). 0 = ilimitado.</summary>
     public int MaxSessionDurationMinutes { get; set; } = 120;
 
-    /// <summary>Máximo de sessões simultâneas por agent (1 = uma sessão por vez, forçando sobreposição).</summary>
-    public int MaxConcurrentSessionsPerAgent { get; set; } = 1;
+    /// <summary>Máximo de sessões simultâneas por agent, POR KIND (terminal/rdp/screen/...).</summary>
+    public int MaxConcurrentSessionsPerAgent { get; set; } = 5;
 
     /// <summary>Máximo de sessões simultâneas por usuário.</summary>
     public int MaxConcurrentSessionsPerUser { get; set; } = 5;

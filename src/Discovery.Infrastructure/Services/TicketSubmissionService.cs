@@ -56,6 +56,37 @@ public class TicketSubmissionService(
         var departmentId = request.DepartmentId ?? template?.DepartmentId;
         var errors = new List<DepartmentFieldValidationError>();
 
+        // ── Cliente precisa EXISTIR ──────────────────────────────────────────
+        // Sem esta checagem um clientId inexistente chegava à FK na gravação e
+        // virava 500 (DbUpdateException) em vez de 400 com o campo apontado.
+        var clientExists = await db.Clients
+            .AsNoTracking()
+            .AnyAsync(c => c.Id == request.ClientId, cancellationToken);
+        if (!clientExists)
+        {
+            errors.Add(new DepartmentFieldValidationError(
+                Guid.Empty, "ClientId", "Cliente informado não existe."));
+        }
+
+        // ── Estado inicial explícito: informado TEM que existir ──────────────
+        // Um workflowStateId inventado era silenciosamente DESCARTADO pelo bind
+        // (o comando nem tinha o campo) e o chamado nascia no estado inicial
+        // default — a API fingia aceitar um estado que não existe. Agora o
+        // comando carrega o valor e a validação recusa estado inexistente ou de
+        // outro cliente (estados globais, client_id NULL, valem para todos).
+        if (request.WorkflowStateId.HasValue)
+        {
+            var stateExists = await db.WorkflowStates
+                .AsNoTracking()
+                .AnyAsync(s => s.Id == request.WorkflowStateId.Value
+                    && (s.ClientId == null || s.ClientId == request.ClientId), cancellationToken);
+            if (!stateExists)
+            {
+                errors.Add(new DepartmentFieldValidationError(
+                    Guid.Empty, "WorkflowStateId", "Estado de workflow inválido para este cliente."));
+            }
+        }
+
         // ── Escopo do template ────────────────────────────────────────────────
         // Existir não basta: o template precisa ser aplicável a este cliente e
         // a este departamento (a UI filtra, a API confere).
@@ -77,10 +108,22 @@ public class TicketSubmissionService(
 
         // ── Departamento obrigatório ──────────────────────────────────────────
         // O departamento define responsável (auto-atribuição) e perfil/SLA.
+        // A exigência só se aplica quando o cliente TEM departamentos aplicáveis
+        // (próprios ou globais) disponíveis: sem nenhum departamento configurado
+        // exigir a seleção tornava impossível abrir chamado via API/integração
+        // em instalações que não usam o módulo (400 "Selecione um departamento"
+        // para todo POST /tickets sem departmentId).
         if (departmentId is null)
         {
-            errors.Add(new DepartmentFieldValidationError(
-                Guid.Empty, "DepartmentId", "Selecione um departamento para abrir o chamado."));
+            var hasApplicableDepartments = await db.Departments
+                .AsNoTracking()
+                .AnyAsync(d => d.IsActive && (d.ClientId == null || d.ClientId == request.ClientId), cancellationToken);
+
+            if (hasApplicableDepartments)
+            {
+                errors.Add(new DepartmentFieldValidationError(
+                    Guid.Empty, "DepartmentId", "Selecione um departamento para abrir o chamado."));
+            }
         }
         else
         {

@@ -25,19 +25,22 @@ public class NatsCredentialsService : INatsCredentialsService
     private readonly IConfigurationService _configurationService;
     private readonly IConfiguration _configuration;
     private readonly ILogger<NatsCredentialsService> _logger;
+    private readonly INatsTenantStreamProvisioner? _streamProvisioner;
 
     public NatsCredentialsService(
         IAgentRepository agentRepository,
         ISiteRepository siteRepository,
         IConfigurationService configurationService,
         IConfiguration configuration,
-        ILogger<NatsCredentialsService> logger)
+        ILogger<NatsCredentialsService> logger,
+        INatsTenantStreamProvisioner? streamProvisioner = null)
     {
         _agentRepository = agentRepository;
         _siteRepository = siteRepository;
         _configurationService = configurationService;
         _configuration = configuration;
         _logger = logger;
+        _streamProvisioner = streamProvisioner;
     }
 
     public async Task<NatsCredentialsResponse> IssueForAgentAsync(Guid agentId, CancellationToken ct = default)
@@ -49,6 +52,7 @@ public class NatsCredentialsService : INatsCredentialsService
 
         var config = await _configurationService.GetServerConfigAsync();
         EnsureEnabled(config);
+        await EnsureTenantStreamsBestEffortAsync(site.ClientId, ct);
 
         var ttlMinutes = Math.Max(1, config.NatsAgentJwtTtlMinutes);
         var subjects = BuildAgentSubjects(site.ClientId, site.Id, agent.Id);
@@ -69,6 +73,7 @@ public class NatsCredentialsService : INatsCredentialsService
 
         var config = await _configurationService.GetServerConfigAsync();
         EnsureEnabled(config);
+        await EnsureTenantStreamsBestEffortAsync(site.ClientId, ct);
 
         var subjects = BuildAgentSubjects(site.ClientId, site.Id, agent.Id);
         return IssueUserJwtForPublicKey(
@@ -77,6 +82,25 @@ public class NatsCredentialsService : INatsCredentialsService
             subjects.Publish,
             subjects.Subscribe,
             $"agent:{agent.Id}");
+    }
+
+    private async Task EnsureTenantStreamsBestEffortAsync(Guid clientId, CancellationToken ct)
+    {
+        if (_streamProvisioner is null)
+            return;
+
+        try
+        {
+            await _streamProvisioner.EnsureTenantFanoutStreamAsync(clientId, ct);
+            await _streamProvisioner.EnsureTenantSupportChatStreamAsync(clientId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Best-effort JetStream stream bootstrap failed while issuing NATS credentials for client {ClientId}.",
+                clientId);
+        }
     }
 
     public async Task<(string Jwt, DateTime ExpiresAtUtc)> IssueUserJwtForUserAsync(
@@ -261,23 +285,32 @@ public class NatsCredentialsService : INatsCredentialsService
         // matching RemoteSessionCommandHandlers and the agent NATS stream.
         publishSubjects.Add(
             $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>");
+        var tenantFanoutStream = NatsSubjectBuilder.TenantFanoutStreamName(clientId);
+        var globalFanoutStream = NatsSubjectBuilder.GlobalFanoutStreamName;
+        var tenantSupportChatStream = NatsSubjectBuilder.TenantSupportChatStreamName(clientId);
+
         publishSubjects.Add("$JS.API.STREAM.NAMES");
-        publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>");
-        publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>");
-        publishSubjects.Add("$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>");
-        // ACK dos consumers duráveis. Sem estas permissões o `msg.Ack()` do agent
-        // falha com "Permissions Violation": o consumer nunca avança, a mensagem
-        // é reentregue a cada AckWait (30s) e o MaxAckPending pode saturar.
-        // (O fan-out já sofria disso antes do chat de suporte — mesma causa.)
-        publishSubjects.Add("$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>");
-        publishSubjects.Add("$JS.ACK.DISCOVERY_SUPPORT_CHAT.>");
+        publishSubjects.Add($"$JS.API.STREAM.INFO.{tenantFanoutStream}");
+        publishSubjects.Add($"$JS.API.CONSUMER.INFO.{tenantFanoutStream}.>");
+        publishSubjects.Add($"$JS.API.CONSUMER.CREATE.{tenantFanoutStream}.>");
+        publishSubjects.Add($"$JS.API.CONSUMER.MSG.NEXT.{tenantFanoutStream}.>");
+        publishSubjects.Add($"$JS.ACK.{tenantFanoutStream}.>");
+
+        publishSubjects.Add($"$JS.API.STREAM.INFO.{globalFanoutStream}");
+        publishSubjects.Add($"$JS.API.CONSUMER.INFO.{globalFanoutStream}.>");
+        publishSubjects.Add($"$JS.API.CONSUMER.CREATE.{globalFanoutStream}.>");
+        publishSubjects.Add($"$JS.API.CONSUMER.MSG.NEXT.{globalFanoutStream}.>");
+        publishSubjects.Add($"$JS.ACK.{globalFanoutStream}.>");
+
         // Chat de suporte: o agent publica as mensagens do usuário final e a
-        // resposta ao convite; o consumer durável do stream lê as mensagens do
-        // atendente (replay sem perda após reconexão/restart).
+        // resposta ao convite; o consumer durável do stream isolado por tenant lê
+        // as mensagens do atendente (replay sem perda após reconexão/restart).
         publishSubjects.Add(NatsSubjectBuilder.SupportChatAgentSubject(clientId, siteId, agentId));
-        publishSubjects.Add("$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>");
-        publishSubjects.Add("$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>");
-        publishSubjects.Add("$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>");
+        publishSubjects.Add($"$JS.API.STREAM.INFO.{tenantSupportChatStream}");
+        publishSubjects.Add($"$JS.API.CONSUMER.INFO.{tenantSupportChatStream}.>");
+        publishSubjects.Add($"$JS.API.CONSUMER.CREATE.{tenantSupportChatStream}.>");
+        publishSubjects.Add($"$JS.API.CONSUMER.MSG.NEXT.{tenantSupportChatStream}.>");
+        publishSubjects.Add($"$JS.ACK.{tenantSupportChatStream}.>");
 
         subscribeSubjects.Add(NatsSubjectBuilder.AgentSubject(clientId, siteId, agentId, SubscribeCommand));
         subscribeSubjects.Add(NatsSubjectBuilder.SiteAgentsCommandSubject(clientId, siteId));

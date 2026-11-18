@@ -43,19 +43,16 @@ public class NatsIsolationTests
         Assert.That(overlap, Is.EquivalentTo(new[]
         {
             "$JS.API.STREAM.NAMES",
-            "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
-            "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
-            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
-            "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
+            $"$JS.API.STREAM.INFO.{NatsSubjectBuilder.GlobalFanoutStreamName}",
+            $"$JS.API.CONSUMER.INFO.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
+            $"$JS.API.CONSUMER.CREATE.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
+            $"$JS.API.CONSUMER.MSG.NEXT.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
+            $"$JS.ACK.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
         }),
-            "Subjects de tenants distintos nao devem se sobrepor, exceto o canal global de fan-out.");
+            "Subjects de tenants distintos não devem se sobrepor, exceto o canal global de fan-out.");
     }
 
     [Test]
@@ -77,12 +74,12 @@ public class NatsIsolationTests
     }
 
     [Test]
-    public void AgentSubjects_ContainInfraSubjects_FourteenPublishTwelveSubscribe()
+    public void AgentSubjects_ContainInfraSubjects_TwentyThreePublishTwelveSubscribe()
     {
         var (pub, sub) = BuildAgentSubjectLists(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
 
-        Assert.That(pub, Has.Count.EqualTo(16),
-            "Agente deve publicar em 16 subjects: 4 telemetrias canônicas + remote-debug.control + remote.session + supportchat.agent + 4 lookup JetStream do fan-out + 3 lookup JetStream do chat de suporte + 2 ACK de consumer durável.");
+        Assert.That(pub, Has.Count.EqualTo(23),
+            "Agente deve publicar em 23 subjects: 7 do próprio agente + $JS.API.STREAM.NAMES + 5 ACLs do fan-out por tenant + 5 ACLs do fan-out global + 5 ACLs do chat de suporte por tenant.");
         Assert.That(sub, Has.Count.EqualTo(12),
             "Agente deve assinar em 12 subjects: comandos + p2p + remote-debug.control + remote.session + supportchat.server + inbox.");
     }
@@ -96,6 +93,9 @@ public class NatsIsolationTests
 
         var (pub, sub) = BuildAgentSubjectLists(clientId, siteId, agentId);
         var expectedPrefix = $"tenant.{clientId}.site.{siteId}.agent.{agentId}.";
+        var tenantFanout = NatsSubjectBuilder.TenantFanoutStreamName(clientId);
+        var globalFanout = NatsSubjectBuilder.GlobalFanoutStreamName;
+        var tenantSupportChat = NatsSubjectBuilder.TenantSupportChatStreamName(clientId);
 
         Assert.That(
             pub,
@@ -109,16 +109,23 @@ public class NatsIsolationTests
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 expectedPrefix + "supportchat.agent",
                 "$JS.API.STREAM.NAMES",
-                "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
-                "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
-                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
-                "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
+                $"$JS.API.STREAM.INFO.{tenantFanout}",
+                $"$JS.API.CONSUMER.INFO.{tenantFanout}.>",
+                $"$JS.API.CONSUMER.CREATE.{tenantFanout}.>",
+                $"$JS.API.CONSUMER.MSG.NEXT.{tenantFanout}.>",
+                $"$JS.ACK.{tenantFanout}.>",
+                $"$JS.API.STREAM.INFO.{globalFanout}",
+                $"$JS.API.CONSUMER.INFO.{globalFanout}.>",
+                $"$JS.API.CONSUMER.CREATE.{globalFanout}.>",
+                $"$JS.API.CONSUMER.MSG.NEXT.{globalFanout}.>",
+                $"$JS.ACK.{globalFanout}.>",
+                $"$JS.API.STREAM.INFO.{tenantSupportChat}",
+                $"$JS.API.CONSUMER.INFO.{tenantSupportChat}.>",
+                $"$JS.API.CONSUMER.CREATE.{tenantSupportChat}.>",
+                $"$JS.API.CONSUMER.MSG.NEXT.{tenantSupportChat}.>",
+                $"$JS.ACK.{tenantSupportChat}.>",
             }),
-            "Publish subjects devem conter somente os message types canônicos.");
+            "Publish subjects devem conter somente os message types canônicos e ACLs JetStream isoladas por tenant.");
 
         Assert.That(
             sub,
@@ -169,14 +176,11 @@ public class NatsIsolationTests
         Assert.That(overlap, Is.EquivalentTo(new[]
         {
             "$JS.API.STREAM.NAMES",
-            "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
-            "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
-            "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
-            "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
-            "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
+            $"$JS.API.STREAM.INFO.{NatsSubjectBuilder.GlobalFanoutStreamName}",
+            $"$JS.API.CONSUMER.INFO.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
+            $"$JS.API.CONSUMER.CREATE.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
+            $"$JS.API.CONSUMER.MSG.NEXT.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
+            $"$JS.ACK.{NatsSubjectBuilder.GlobalFanoutStreamName}.>",
             "_INBOX.>",
             NatsSubjectBuilder.GlobalAgentsCommandSubject(),
             NatsSubjectBuilder.ServerPongSubject(),
@@ -205,8 +209,21 @@ public class NatsIsolationTests
 
         foreach (var s in creds.PublishSubjects)
         {
+            Assert.That(s, Does.Not.Contain("DISCOVERY_FANOUT_COMMANDS.>"),
+                $"Wildcard cross-tenant legado encontrado em '{s}'.");
+            Assert.That(s, Does.Not.Contain("DISCOVERY_SUPPORT_CHAT.>"),
+                $"Wildcard cross-tenant legado encontrado em '{s}'.");
+
             if (s.StartsWith("$JS.", StringComparison.Ordinal))
+            {
+                var isAllowedJs = s == "$JS.API.STREAM.NAMES"
+                    || s.Contains(NatsSubjectBuilder.GlobalFanoutStreamName, StringComparison.Ordinal)
+                    || s.Contains(clientIdNoHyphens, StringComparison.Ordinal);
+
+                Assert.That(isAllowedJs, Is.True,
+                    $"Subject JetStream '{s}' não está restrito ao tenant '{clientIdNoHyphens}' nem ao stream global.");
                 continue;
+            }
 
             Assert.That(
                 s.Contains(agentId.ToString(), StringComparison.Ordinal)
@@ -217,6 +234,22 @@ public class NatsIsolationTests
                 || s.Contains(clientIdNoHyphens, StringComparison.Ordinal),
                 $"Publish subject '{s}' não contém o clientId correto.");
         }
+    }
+
+    [Test]
+    public async Task AgentCredentials_ProvisionStreamsOnDemand_WhenProvisionerPresent()
+    {
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+        var provisioner = new RecordingStreamProvisioner();
+
+        var service = BuildCredentialsService(agentId, siteId, clientId, provisioner);
+        await service.IssueForAgentAsync(agentId);
+        await service.IssueUserJwtForAgentAsync(KeyPair.CreatePair(PrefixByte.User).GetPublicKey(), agentId);
+
+        Assert.That(provisioner.FanoutClients, Is.EqualTo(new[] { clientId, clientId }));
+        Assert.That(provisioner.SupportChatClients, Is.EqualTo(new[] { clientId, clientId }));
     }
 
     [Test]
@@ -465,6 +498,10 @@ public class NatsIsolationTests
     private static (List<string> Publish, List<string> Subscribe) BuildAgentSubjectLists(
         Guid clientId, Guid siteId, Guid agentId)
     {
+        var tenantFanout = NatsSubjectBuilder.TenantFanoutStreamName(clientId);
+        var globalFanout = NatsSubjectBuilder.GlobalFanoutStreamName;
+        var tenantSupportChat = NatsSubjectBuilder.TenantSupportChatStreamName(clientId);
+
         // Espelha exatamente o que NatsCredentialsService.BuildAgentSubjects faz
         return (
             Publish:
@@ -477,14 +514,21 @@ public class NatsIsolationTests
                 $"tenant.{clientId:N}.site.{siteId:N}.agent.{agentId:N}.remote.session.>",
                 NatsSubjectBuilder.SupportChatAgentSubject(clientId, siteId, agentId),
                 "$JS.API.STREAM.NAMES",
-                "$JS.API.CONSUMER.INFO.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.API.CONSUMER.CREATE.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>",
-                "$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>",
-                "$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>",
-                "$JS.ACK.DISCOVERY_FANOUT_COMMANDS.>",
-                "$JS.ACK.DISCOVERY_SUPPORT_CHAT.>",
+                $"$JS.API.STREAM.INFO.{tenantFanout}",
+                $"$JS.API.CONSUMER.INFO.{tenantFanout}.>",
+                $"$JS.API.CONSUMER.CREATE.{tenantFanout}.>",
+                $"$JS.API.CONSUMER.MSG.NEXT.{tenantFanout}.>",
+                $"$JS.ACK.{tenantFanout}.>",
+                $"$JS.API.STREAM.INFO.{globalFanout}",
+                $"$JS.API.CONSUMER.INFO.{globalFanout}.>",
+                $"$JS.API.CONSUMER.CREATE.{globalFanout}.>",
+                $"$JS.API.CONSUMER.MSG.NEXT.{globalFanout}.>",
+                $"$JS.ACK.{globalFanout}.>",
+                $"$JS.API.STREAM.INFO.{tenantSupportChat}",
+                $"$JS.API.CONSUMER.INFO.{tenantSupportChat}.>",
+                $"$JS.API.CONSUMER.CREATE.{tenantSupportChat}.>",
+                $"$JS.API.CONSUMER.MSG.NEXT.{tenantSupportChat}.>",
+                $"$JS.ACK.{tenantSupportChat}.>",
             ],
             Subscribe:
             [
@@ -506,7 +550,7 @@ public class NatsIsolationTests
     }
 
     private static NatsCredentialsService BuildCredentialsService(
-        Guid agentId, Guid siteId, Guid clientId)
+        Guid agentId, Guid siteId, Guid clientId, INatsTenantStreamProvisioner? provisioner = null)
     {
         var agent = new Agent { Id = agentId, SiteId = siteId };
         var site = new Site { Id = siteId, ClientId = clientId };
@@ -522,7 +566,30 @@ public class NatsIsolationTests
             siteRepository: new StubSiteRepository(site),
             configurationService: new StubConfigurationService(),
             configuration: configuration,
-            logger: NullLogger<NatsCredentialsService>.Instance);
+            logger: NullLogger<NatsCredentialsService>.Instance,
+            streamProvisioner: provisioner);
+    }
+
+    private sealed class RecordingStreamProvisioner : INatsTenantStreamProvisioner
+    {
+        public List<Guid> FanoutClients { get; } = [];
+        public List<Guid> SupportChatClients { get; } = [];
+
+        public Task EnsureGlobalFanoutStreamAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task EnsureTenantFanoutStreamAsync(Guid clientId, CancellationToken ct = default)
+        {
+            FanoutClients.Add(clientId);
+            return Task.CompletedTask;
+        }
+
+        public Task EnsureTenantSupportChatStreamAsync(Guid clientId, CancellationToken ct = default)
+        {
+            SupportChatClients.Add(clientId);
+            return Task.CompletedTask;
+        }
+
+        public Task MigrateLegacyWildcardStreamsAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     // ── Fakes inline ──────────────────────────────────────────────────────────

@@ -284,7 +284,7 @@ public class RemoteSessionsControllerTerminalRecordingAccessTests
     private static RemoteSessionsController BuildController(
         ITerminalRecordingService service,
         IScopeContext scopeContext)
-        => new(new ThrowingMediator(), service, scopeContext, null!, Options.Create(new RemoteAccessOptions()), NullLogger<RemoteSessionsController>.Instance)
+        => new(new ThrowingMediator(), service, scopeContext, null!, Options.Create(new RemoteAccessOptions()), null!, NullLogger<RemoteSessionsController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

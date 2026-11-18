@@ -1,28 +1,29 @@
-using System.Globalization;
 using Discovery.Core.Configuration;
-using Discovery.Core.Helpers;
+using Discovery.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using NATS.Client.Core;
-using NATS.Client.JetStream;
-using NATS.Client.JetStream.Models;
 
 namespace Discovery.Api.Services;
 
 /// <summary>
-/// Garante no startup a criacao/atualizacao idempotente do stream de fan-out.
+/// Garante no startup a migração de streams legados e a criação/atualização
+/// idempotente dos streams JetStream de fan-out isolados por tenant e global.
 /// </summary>
 public class NatsFanoutStreamBootstrapService : BackgroundService
 {
-    private readonly NatsConnection _connection;
+    private readonly INatsTenantStreamProvisioner _provisioner;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOptionsMonitor<NatsFanoutStreamOptions> _optionsMonitor;
     private readonly ILogger<NatsFanoutStreamBootstrapService> _logger;
 
     public NatsFanoutStreamBootstrapService(
-        NatsConnection connection,
+        INatsTenantStreamProvisioner provisioner,
+        IServiceScopeFactory scopeFactory,
         IOptionsMonitor<NatsFanoutStreamOptions> optionsMonitor,
         ILogger<NatsFanoutStreamBootstrapService> logger)
     {
-        _connection = connection;
+        _provisioner = provisioner;
+        _scopeFactory = scopeFactory;
         _optionsMonitor = optionsMonitor;
         _logger = logger;
     }
@@ -36,43 +37,6 @@ public class NatsFanoutStreamBootstrapService : BackgroundService
             return;
         }
 
-        var streamName = string.IsNullOrWhiteSpace(options.Name)
-            ? "DISCOVERY_FANOUT_COMMANDS"
-            : options.Name.Trim();
-
-        var subjects = (options.Subjects ?? Array.Empty<string>())
-            .Where(subject => !string.IsNullOrWhiteSpace(subject))
-            .Select(subject => subject.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (subjects.Length == 0)
-        {
-            // tenant.*.agents.command ja captura mensagens publicadas em tenant.global.agents.command
-            // (wildcard * casa com o token literal "global").
-            // Incluir ambos causa overlap rejeitado pelo NATS: "subject overlaps with".
-            subjects =
-            [
-                NatsSubjectBuilder.SiteAgentsCommandStreamSubject,
-                NatsSubjectBuilder.ClientAgentsCommandStreamSubject,
-            ];
-        }
-
-        var maxAge = ParseFlexibleDuration(options.MaxAge, TimeSpan.FromHours(24), "Nats:FanoutStream:MaxAge");
-        var duplicateWindow = ParseFlexibleDuration(options.DuplicateWindow, TimeSpan.FromMinutes(2), "Nats:FanoutStream:DuplicateWindow");
-        var maxBytes = options.MaxBytes > 0 ? options.MaxBytes : 134_217_728;
-
-        var streamConfig = new StreamConfig(name: streamName, subjects: subjects)
-        {
-            Retention = StreamConfigRetention.Limits,
-            Discard = StreamConfigDiscard.Old,
-            Storage = StreamConfigStorage.File,
-            MaxAge = maxAge,
-            MaxBytes = maxBytes,
-            DuplicateWindow = duplicateWindow,
-        };
-
-        var js = new NatsJSContext(_connection);
         var attempts = 0;
 
         while (!stoppingToken.IsCancellationRequested)
@@ -81,14 +45,23 @@ public class NatsFanoutStreamBootstrapService : BackgroundService
 
             try
             {
-                await js.CreateOrUpdateStreamAsync(streamConfig, stoppingToken);
+                await _provisioner.MigrateLegacyWildcardStreamsAsync(stoppingToken);
+                await _provisioner.EnsureGlobalFanoutStreamAsync(stoppingToken);
+
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var clientRepo = scope.ServiceProvider.GetRequiredService<IClientRepository>();
+                var clients = await clientRepo.GetAllAsync(includeInactive: true);
+
+                var count = 0;
+                foreach (var client in clients)
+                {
+                    await _provisioner.EnsureTenantFanoutStreamAsync(client.Id, stoppingToken);
+                    count++;
+                }
+
                 _logger.LogInformation(
-                    "JetStream fan-out stream ensured on startup: {StreamName} (subjects={Subjects}, maxAge={MaxAge}, maxBytes={MaxBytes}, dupeWindow={DuplicateWindow})",
-                    streamName,
-                    string.Join(',', subjects),
-                    maxAge,
-                    maxBytes,
-                    duplicateWindow);
+                    "JetStream per-tenant fan-out streams ensured on startup (global + {TenantCount} tenant stream(s)).",
+                    count);
                 return;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -99,28 +72,19 @@ public class NatsFanoutStreamBootstrapService : BackgroundService
             {
                 if (options.MaxRetryAttempts > 0 && attempts >= options.MaxRetryAttempts)
                 {
-                    // Não desiste: um comando de fan-out emitido sem stream NÃO é
-                    // persistido em lugar nenhum (perda silenciosa). Em vez de
-                    // abandonar, continua tentando em backoff crescente (até 5x o
-                    // delay base), registrando o erro crítico uma única vez para
-                    // não poluir o log.
                     _logger.LogError(
                         ex,
-                        "Unable to ensure JetStream fan-out stream {StreamName} after {Attempts} attempts. Commands dispatched while the stream is absent are LOST. Continuing to retry in the background.",
-                        streamName,
+                        "Unable to ensure JetStream per-tenant fan-out streams after {Attempts} attempts. Continuing to retry in the background.",
                         attempts);
                 }
                 else
                 {
                     _logger.LogWarning(
                         ex,
-                        "Failed to ensure JetStream fan-out stream {StreamName} (attempt {Attempt}). Retrying...",
-                        streamName,
+                        "Failed to ensure JetStream per-tenant fan-out streams (attempt {Attempt}). Retrying...",
                         attempts);
                 }
 
-                // Backoff crescente: attempt 1..N usa o delay configurado; depois
-                // do limite, cresce até 5x (teto) para não martelar o servidor NATS.
                 var baseDelay = Math.Max(1, options.RetryDelaySeconds);
                 var multiplier = options.MaxRetryAttempts > 0 && attempts >= options.MaxRetryAttempts
                     ? Math.Min(5, 1 + ((attempts - options.MaxRetryAttempts) / 10))
@@ -130,48 +94,5 @@ public class NatsFanoutStreamBootstrapService : BackgroundService
                 await Task.Delay(TimeSpan.FromSeconds(retryDelaySeconds), stoppingToken);
             }
         }
-    }
-
-    private TimeSpan ParseFlexibleDuration(string? raw, TimeSpan fallback, string optionName)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return fallback;
-
-        var value = raw.Trim();
-
-        if (TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out var parsedTimeSpan) && parsedTimeSpan >= TimeSpan.Zero)
-            return parsedTimeSpan;
-
-        if (value.EndsWith("ms", StringComparison.OrdinalIgnoreCase)
-            && double.TryParse(value[..^2], NumberStyles.Float, CultureInfo.InvariantCulture, out var ms)
-            && ms >= 0)
-            return TimeSpan.FromMilliseconds(ms);
-
-        if (value.Length > 1
-            && double.TryParse(value[..^1], NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
-            && number >= 0)
-        {
-            return char.ToLowerInvariant(value[^1]) switch
-            {
-                's' => TimeSpan.FromSeconds(number),
-                'm' => TimeSpan.FromMinutes(number),
-                'h' => TimeSpan.FromHours(number),
-                'd' => TimeSpan.FromDays(number),
-                _ => LogDurationFallback(optionName, value, fallback),
-            };
-        }
-
-        return LogDurationFallback(optionName, value, fallback);
-    }
-
-    private TimeSpan LogDurationFallback(string optionName, string rawValue, TimeSpan fallback)
-    {
-        _logger.LogWarning(
-            "Invalid duration value '{Value}' for {Option}. Using fallback {Fallback}.",
-            rawValue,
-            optionName,
-            fallback);
-
-        return fallback;
     }
 }

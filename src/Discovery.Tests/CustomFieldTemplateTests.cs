@@ -13,7 +13,7 @@ namespace Discovery.Tests;
 
 /// <summary>
 /// Modelos de campos personalizados (catálogo pré-configurado) e preparação do
-/// chamado por template: validação, serialização de opções e snapshot/erros.
+/// chamado por template: validação, serialização de opçµes e snapshot/erros.
 /// </summary>
 public class CustomFieldTemplateTests
 {
@@ -92,7 +92,7 @@ public class CustomFieldTemplateTests
 
         var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
         var result = await service.PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             Title: null, Description: null, Category: null, Priority: null,
             CustomFieldValues: null,
             TemplateAnswers: new Dictionary<string, JsonElement>
@@ -141,7 +141,7 @@ public class CustomFieldTemplateTests
 
         var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
         var result = await service.PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             Title: null, Description: null, Category: null, Priority: null,
             CustomFieldValues: null));
 
@@ -160,7 +160,7 @@ public class CustomFieldTemplateTests
         var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
 
         var result = await service.PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: null, TemplateId: null,
+            TestClientId, DepartmentId: null, TemplateId: null,
             "T", "D", null, "Medium",
             new Dictionary<Guid, JsonElement>
             {
@@ -184,7 +184,7 @@ public class CustomFieldTemplateTests
         var service = new TicketSubmissionService(db, new FakeDepartmentCustomFieldService(), NullLogger<TicketSubmissionService>.Instance);
 
         var result = await service.PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: null,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: null,
             "Título", "Descrição", null, "High", null));
 
         Assert.Multiple(() =>
@@ -203,6 +203,15 @@ public class CustomFieldTemplateTests
         await using var db = CreateDb();
         var fieldId = Guid.NewGuid();
         var departmentId = Guid.NewGuid();
+        db.Departments.Add(new Department
+        {
+            Id = departmentId,
+            ClientId = TestClientId,
+            Name = "Suporte Local",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
         db.CustomFieldDefinitions.Add(new CustomFieldDefinition
         {
             Id = fieldId,
@@ -215,7 +224,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: departmentId, TemplateId: null,
+            TestClientId, DepartmentId: departmentId, TemplateId: null,
             "Computador", "Solicito cotação para compra de 3 computadores", null, "Medium",
             new Dictionary<Guid, JsonElement>
             {
@@ -249,7 +258,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             "T", "D", null, "Medium", null));
 
         Assert.Multiple(() =>
@@ -270,7 +279,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             "T", "D", null, "Medium", null));
 
         Assert.Multiple(() =>
@@ -290,7 +299,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             "T", "D", null, "Medium", null));
 
         Assert.Multiple(() =>
@@ -309,7 +318,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             "T", "D", null, "Medium", null));
 
         Assert.That(result.IsValid, Is.True);
@@ -329,7 +338,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: Guid.NewGuid(), TemplateId: templateId,
+            TestClientId, DepartmentId: TestDepartmentId, TemplateId: templateId,
             "T", "D", null, "Medium", null));
 
         Assert.Multiple(() =>
@@ -356,14 +365,18 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: departmentId, TemplateId: null,
+            TestClientId, DepartmentId: departmentId, TemplateId: null,
             "T", "D", null, "Medium", null));
 
         Assert.Multiple(() =>
         {
             Assert.That(result.IsValid, Is.False);
             Assert.That(result.Errors.Select(e => e.FieldName), Contains.Item("DepartmentId"));
-            Assert.That(result.Errors.First(e => e.FieldName == "DepartmentId").ErrorMessage, Does.Contain("não pertence"));
+            // A lookup com escopo de tenant devolve "não encontrado" para departamento
+            // de outro cliente (não revela existência cross-tenant).
+            Assert.That(
+                result.Errors.First(e => e.FieldName == "DepartmentId").ErrorMessage,
+                Does.Contain("não pertence").Or.Contain("não encontrado"));
         });
     }
 
@@ -408,7 +421,7 @@ public class CustomFieldTemplateTests
         await db.SaveChangesAsync();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: departmentId, TemplateId: null,
+            TestClientId, DepartmentId: departmentId, TemplateId: null,
             "T", "D", null, "Medium", null));
 
         Assert.That(result.IsValid, Is.True);
@@ -420,7 +433,7 @@ public class CustomFieldTemplateTests
         await using var db = CreateDb();
 
         var result = await NewService(db).PrepareAsync(new TicketSubmissionRequest(
-            Guid.NewGuid(), DepartmentId: null, TemplateId: null,
+            TestClientId, DepartmentId: null, TemplateId: null,
             "T", "D", null, "Medium", null));
 
         Assert.Multiple(() =>
@@ -448,12 +461,40 @@ public class CustomFieldTemplateTests
         UpdatedAt = DateTime.UtcNow,
     };
 
+    // Cliente fixo usado pelos PrepareAsync: a validação pós-F06 ("Cliente
+    // informado não existe" → 400) exige que o clientId informado exista.
+    private static readonly Guid TestClientId = Guid.NewGuid();
+
+    // Departamento do cliente fixo: pós-F05 o departamento só é obrigatório
+    // quando o cliente TEM departamentos — e a existência do departamento
+    // informado é validada.
+    private static readonly Guid TestDepartmentId = Guid.NewGuid();
+
     private static DiscoveryDbContext CreateDb()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
             .UseInMemoryDatabase($"custom-field-template-tests-{Guid.NewGuid():N}")
             .Options;
-        return new TemplateTestDbContext(options);
+        var db = new TemplateTestDbContext(options);
+        db.Clients.Add(new Client
+        {
+            Id = TestClientId,
+            Name = "Cliente dos testes",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        db.Departments.Add(new Department
+        {
+            Id = TestDepartmentId,
+            ClientId = TestClientId,
+            Name = "Suporte",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        db.SaveChanges();
+        return db;
     }
 
     private sealed class TemplateTestDbContext(DbContextOptions<DiscoveryDbContext> options) : DiscoveryDbContext(options)
@@ -467,6 +508,9 @@ public class CustomFieldTemplateTests
                 typeof(CustomFieldValue),
                 // BuildSnapshot consulta o departamento para o snapshot com o nome.
                 typeof(Department),
+                // Departamento só é obrigatório quando o cliente TEM departamentos
+                // (pós-F05): PrepareAsync consulta Clients para decidir.
+                typeof(Client),
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -481,6 +525,7 @@ public class CustomFieldTemplateTests
             modelBuilder.Entity<CustomFieldDefinition>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<CustomFieldValue>(entity => entity.HasKey(item => item.Id));
             modelBuilder.Entity<Department>(entity => entity.HasKey(item => item.Id));
+            modelBuilder.Entity<Client>(entity => entity.HasKey(item => item.Id));
         }
     }
 

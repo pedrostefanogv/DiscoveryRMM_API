@@ -104,7 +104,7 @@ public class TicketsController(
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetById(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -115,7 +115,7 @@ public class TicketsController(
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Create, ScopeSource.AccessList)]
     public async Task<IActionResult> Create([FromBody] CreateTicketCommand command)
     {
         // Escopo no create: usuário restrito só cria para cliente/site permitidos.

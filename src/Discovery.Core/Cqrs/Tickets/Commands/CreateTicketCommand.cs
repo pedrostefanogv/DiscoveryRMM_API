@@ -24,5 +24,7 @@ public sealed record CreateTicketCommand(
     /// <summary>Respostas do mini questionário do template (chave da pergunta → JSON), opcional.</summary>
     IReadOnlyDictionary<string, JsonElement>? TemplateAnswers = null,
     /// <summary>Solicitante (quem abriu). Preenchido pela console com o usuário autenticado.</summary>
-    Guid? RequesterUserId = null
+    Guid? RequesterUserId = null,
+    /// <summary>Estado inicial explícito do workflow (opcional). Informado e inexistente/inaplicável -> 400.</summary>
+    Guid? WorkflowStateId = null
 ) : ICommand<Result<TicketDetailDto>>;

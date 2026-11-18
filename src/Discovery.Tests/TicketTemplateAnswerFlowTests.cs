@@ -19,12 +19,25 @@ namespace Discovery.Tests;
 /// </summary>
 public class TicketTemplateAnswerFlowTests
 {
+    // Cliente fixo: a validação pós-F06 exige que o clientId informado exista.
+    private static readonly Guid TestClientId = Guid.NewGuid();
+
     private static DiscoveryDbContext CreateDb()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
             .UseInMemoryDatabase($"template-answer-flow-{Guid.NewGuid():N}")
             .Options;
-        return new FlowTestDbContext(options);
+        var db = new FlowTestDbContext(options);
+        db.Clients.Add(new Client
+        {
+            Id = TestClientId,
+            Name = "Cliente dos testes",
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        db.SaveChanges();
+        return db;
     }
 
     private static Guid SeedDepartment(DiscoveryDbContext db)
@@ -60,7 +73,7 @@ public class TicketTemplateAnswerFlowTests
 
     private static TicketSubmissionRequest Request(Guid departmentId, Guid templateId, JsonElement answer)
         => new(
-            ClientId: Guid.NewGuid(),
+            ClientId: TestClientId,
             DepartmentId: departmentId,
             TemplateId: templateId,
             Title: "Criacao de login",
@@ -134,6 +147,7 @@ public class TicketTemplateAnswerFlowTests
             var allowed = new HashSet<Type>
             {
                 typeof(Department), typeof(CustomFieldDefinition), typeof(TicketTemplate),
+                typeof(Client),
             };
 
             foreach (var entityType in typeof(Client).Assembly.GetTypes()
@@ -147,6 +161,7 @@ public class TicketTemplateAnswerFlowTests
             modelBuilder.Entity<Department>(e => e.HasKey(d => d.Id));
             modelBuilder.Entity<CustomFieldDefinition>(e => e.HasKey(d => d.Id));
             modelBuilder.Entity<TicketTemplate>(e => e.HasKey(t => t.Id));
+            modelBuilder.Entity<Client>(e => e.HasKey(c => c.Id));
         }
     }
 

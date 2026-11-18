@@ -31,8 +31,7 @@ public class NatsBackgroundService : BackgroundService
         {
             try
             {
-                await using var scope = _services.CreateAsyncScope();
-                var messaging = scope.ServiceProvider.GetRequiredService<IAgentMessaging>();
+                var messaging = _services.GetRequiredService<IAgentMessaging>();
 
                 _logger.LogInformation("Starting NATS subscriptions...");
 

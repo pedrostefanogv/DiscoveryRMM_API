@@ -50,15 +50,22 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         bool consentRequired = false,
         DateTime? consentDeadlineAt = null,
         string? consentPolicySource = null,
-        Guid? id = null)
+        Guid? id = null,
+        RemoteSessionRights rights = RemoteSessionRights.None)
     {
         var activeSessions = (await _repo.GetActiveByAgentAsync(agentId, ct)).ToList();
-        var activeCount = activeSessions.Count;
+        // O teto de concorrência é POR KIND (screen/terminal/files/proxy/rdp/all):
+        // um atendimento real combina sessões simultâneas de tipos diferentes no
+        // mesmo agente (terminal + RDP, por exemplo). Contar TODAS as sessões
+        // ativas recusava qualquer segunda sessão legítima com 400
+        // "Agent already has N active session(s)" mesmo com o agente livre no
+        // tipo pedido — o start sem force virava impossível.
+        var activeCount = activeSessions.Count(s => s.Kind == kind);
 
         if (activeCount >= _options.MaxConcurrentSessionsPerAgent)
         {
             if (!force)
-                throw new InvalidOperationException($"Agent already has {activeCount} active session(s) (max {_options.MaxConcurrentSessionsPerAgent}). Use force=true to override.");
+                throw new InvalidOperationException($"Agent already has {activeCount} active {kind} session(s) (max {_options.MaxConcurrentSessionsPerAgent}). Use force=true to override.");
 
             // Força o encerramento de todas as sessões ativas antes de criar a nova
             foreach (var existing in activeSessions)
@@ -91,7 +98,8 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
             LastActivityAt = now,
             ConsentRequired = consentRequired,
             ConsentDeadlineAt = consentDeadlineAt,
-            ConsentPolicySource = consentPolicySource
+            ConsentPolicySource = consentPolicySource,
+            Rights = rights
         };
 
         var created = await _repo.CreateAsync(session, ct);

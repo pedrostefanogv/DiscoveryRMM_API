@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 using FluentValidation;
-using FluentValidation.AspNetCore;
+using SharpGrip.FluentValidation.AutoValidation.Mvc.Extensions;
 using Discovery.Api;
 using Discovery.Api.Cqrs.DependencyInjection;
 using Discovery.Api.DependencyInjection;
@@ -561,7 +561,6 @@ app.UseWebSockets(new WebSocketOptions
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 app.UseRateLimiter();
-app.UseOutputCache();
 app.UseCors("DefaultApi");
 app.UseSecurityHeaders();
 
@@ -571,6 +570,10 @@ app.UseAgentAuth();
 // API key e JWT user auth (para todos os demais endpoints)
 app.UseApiTokenAuth();
 app.UseUserAuth();
+
+// OutputCache deve rodar após CORS, SecurityHeaders e todos os middlewares de auth
+// para nunca servir respostas em cache sem headers ou vazar/bypassear autenticação.
+app.UseOutputCache();
 
 app.MapControllers();
 

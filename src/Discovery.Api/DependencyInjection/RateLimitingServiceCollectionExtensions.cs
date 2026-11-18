@@ -106,8 +106,22 @@ public static class RateLimitingServiceCollectionExtensions
 
                 if (path.StartsWithSegments("/api/v1/agent-auth", StringComparison.OrdinalIgnoreCase))
                 {
+                    // P1 (escala): particiona por X-Agent-ID quando presente —
+                    // clientes corporativos com centenas de agentes atrás do
+                    // mesmo NAT não podem estrangular uns aos outros por IP.
+                    // Limita o tamanho da chave para evitar cardinalidade
+                    // descontrolada com headers maliciosos.
+                    var agentIdHeader = httpContext.Request.Headers["X-Agent-ID"].FirstOrDefault() ?? string.Empty;
+                    agentIdHeader = agentIdHeader.Trim();
+                    if (agentIdHeader.Length > 64)
+                    {
+                        agentIdHeader = agentIdHeader[..64];
+                    }
+                    var agentPartition = agentIdHeader.Length > 0
+                        ? $"agent-id:{agentIdHeader}"
+                        : $"agent:{ip}";
                     return RateLimitPartition.GetFixedWindowLimiter(
-                        partitionKey: $"agent:{ip}",
+                        partitionKey: agentPartition,
                         factory: _ => new FixedWindowRateLimiterOptions
                         {
                             PermitLimit = agentPermit,

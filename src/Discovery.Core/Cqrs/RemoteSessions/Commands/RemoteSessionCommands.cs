@@ -20,7 +20,9 @@ public sealed record StartRemoteSessionCommand(
     int? TermCols = 120,
     int? TermRows = 40,
     string? RootPath = "C:\\",
-    int? MonitorIndex = null
+    int? MonitorIndex = null,
+    /// <summary>Restrições da sessão (RemoteSessionRights): viram ACL NATS na credencial do viewer.</summary>
+    RemoteSessionRights Rights = RemoteSessionRights.None
 ) : ICommand<Result<RemoteSessionResponseDto>>;
 
 public sealed record StopRemoteSessionCommand(

@@ -7,6 +7,71 @@ public static class NatsSubjectBuilder
     public const string GlobalAgentsCommandStreamSubject = "tenant.global.agents.command";
     public const string GlobalPongSubject = "tenant.global.pong";
 
+    public const string GlobalFanoutStreamName = "DISCOVERY_FANOUT_COMMANDS_GLOBAL";
+    public const string LegacyFanoutStreamName = "DISCOVERY_FANOUT_COMMANDS";
+    public const string LegacySupportChatStreamName = "DISCOVERY_SUPPORT_CHAT";
+
+    public static string TenantFanoutStreamName(Guid clientId)
+        => $"DISCOVERY_FANOUT_COMMANDS_{clientId:N}";
+
+    public static string TenantSupportChatStreamName(Guid clientId)
+        => $"DISCOVERY_SUPPORT_CHAT_{clientId:N}";
+
+    public static string TenantSiteAgentsCommandStreamSubject(Guid clientId)
+        => $"tenant.{clientId}.site.*.agents.command";
+
+    public static string TenantClientAgentsCommandStreamSubject(Guid clientId)
+        => $"tenant.{clientId}.agents.command";
+
+    public static string TenantSupportChatStreamSubject(Guid clientId)
+        => $"tenant.{clientId}.site.*.agent.*.supportchat.*";
+
+    /// <summary>
+    /// Faz o parse autoritativo do subject canônico de agente:
+    /// <c>tenant.{clientId}.site.{siteId}.agent.{agentId}.{suffix...}</c>.
+    /// Rejeita subjects fora do padrão ou com GUIDs vazios.
+    /// </summary>
+    public static bool TryParseAgentSubject(
+        string? subject,
+        out Guid clientId,
+        out Guid siteId,
+        out Guid agentId)
+    {
+        clientId = Guid.Empty;
+        siteId = Guid.Empty;
+        agentId = Guid.Empty;
+
+        if (string.IsNullOrWhiteSpace(subject) || subject.EndsWith('.'))
+            return false;
+
+        var parts = subject.Split('.');
+        if (parts.Length < 7)
+            return false;
+
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var seg = parts[i];
+            if (string.IsNullOrWhiteSpace(seg) || seg == "*" || seg == ">")
+                return false;
+        }
+
+        if (!string.Equals(parts[0], "tenant", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(parts[2], "site", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(parts[4], "agent", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!Guid.TryParse(parts[1], out clientId) || clientId == Guid.Empty)
+            return false;
+        if (!Guid.TryParse(parts[3], out siteId) || siteId == Guid.Empty)
+            return false;
+        if (!Guid.TryParse(parts[5], out agentId) || agentId == Guid.Empty)
+            return false;
+
+        return true;
+    }
+
     /// <summary>
     /// Subject do stream JetStream do chat de suporte (captura as duas direções).
     /// Um ÚNICO wildcard: incluir variantes com overlap faz o NATS rejeitar o
