@@ -32,5 +32,11 @@ public enum ResourceType
     // Operações sobre a sessão remota em si (hoje: Execute = preemptar a sessão de
     // OUTRO técnico). Recurso separado de Agents porque abrir a própria sessão e
     // derrubar a de um colega são privilégios de risco bem diferente.
-    RemoteSession
+    RemoteSession,
+
+    // Editor de Registro do Windows (aba "Registro" do acesso remoto).
+    // Recurso próprio porque LER o registro (diagnóstico frequente, baixo risco)
+    // e ALTERAR (risco de quebrar o SO) são privilégios diferentes: View e
+    // Execute são concedidos separadamente no RBAC.
+    Registry
 }

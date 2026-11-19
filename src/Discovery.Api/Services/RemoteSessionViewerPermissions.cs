@@ -49,6 +49,12 @@ public static class RemoteSessionViewerPermissions
     /// WEBRDP: sessões Rdp recebem também o canal DEDICADO do RDCleanPath
     /// (.rdp.cleanpath.in/.out), usado pelo WebRDP no navegador via IronRDP WASM.
     /// É separado do túnel multiplexado de propósito — ver TunnelSubjects.
+    ///
+    /// REGISTRO: os subjects .registry.req/.resp/.ready são concedidos SOMENTE
+    /// para sessões de kind Registry (e removidos por NoRegistry). É mais
+    /// restritivo que .proc.*, que hoje é concedido a qualquer sessão — o
+    /// registro contém configuração sensível do sistema, e uma sessão de tela
+    /// não tem motivo para lê-lo.
     /// </summary>
     public static (string[] Publish, string[] Subscribe) Build(string natsSubject, RemoteSessionRights rights, RemoteSessionKind? kind = null)
     {
@@ -60,11 +66,17 @@ public static class RemoteSessionViewerPermissions
         var noEvents = rights.HasFlag(RemoteSessionRights.NoEvents);
         var noProxy = rights.HasFlag(RemoteSessionRights.NoProxy);
         var noRdp = rights.HasFlag(RemoteSessionRights.NoRdp);
+        var noRegistry = rights.HasFlag(RemoteSessionRights.NoRegistry);
 
         // kind null = chamador legado (comportamento anterior: proxy concedido).
         var proxyAllowed = !noProxy && (kind is null || kind is RemoteSessionKind.Proxy or RemoteSessionKind.All);
         var rdpAllowed = !noRdp && kind is RemoteSessionKind.Rdp or RemoteSessionKind.All;
         var tunnelAllowed = proxyAllowed || rdpAllowed;
+        // REGISTRO: concedido SOMENTE quando o kind é Registry. Um kind null
+        // (chamador legado) NÃO recebe — ao contrário de proxy, aqui o default é
+        // negar, porque acesso ao registro não era parte do contrato anterior e
+        // concedê-lo ampliaria silenciosamente o que uma sessão de tela pode ver.
+        var registryAllowed = !noRegistry && kind is RemoteSessionKind.Registry;
 
         var pub = new List<string>
         {
@@ -100,6 +112,9 @@ public static class RemoteSessionViewerPermissions
         if (rdpAllowed)
             pub.Add($"{natsSubject}.{TunnelSubjects.Rdp.In}");
         pub.Add($"{natsSubject}.proc.req");
+
+        if (registryAllowed)
+            pub.Add($"{natsSubject}.registry.req");
 
         if (!viewOnly)
             pub.Add($"{natsSubject}.clipboard.req");
@@ -152,6 +167,12 @@ public static class RemoteSessionViewerPermissions
             sub.Add($"{natsSubject}.{TunnelSubjects.Rdp.Out}");
         sub.Add($"{natsSubject}.proc.resp");
         sub.Add($"{natsSubject}.proc.ready");
+
+        if (registryAllowed)
+        {
+            sub.Add($"{natsSubject}.registry.resp");
+            sub.Add($"{natsSubject}.registry.ready");
+        }
 
         return (pub.ToArray(), sub.ToArray());
     }

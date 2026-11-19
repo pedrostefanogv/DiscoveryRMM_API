@@ -44,5 +44,14 @@ public enum RemoteSessionRights
     NoProxy = 64,
 
     /// <summary>Sem túnel RDP (o viewer não ganha os subjects .tunnel.in/.tunnel.out/.rdp.*).</summary>
-    NoRdp = 128
+    NoRdp = 128,
+
+    /// <summary>
+    /// Sem editor de Registro (o viewer não ganha os subjects .registry.req/.resp).
+    ///
+    /// Diferente de NoProxy/NoRdp, o canal do registro é concedido SOMENTE para
+    /// sessões cujo kind é Registry — uma sessão de tela não precisa de acesso ao
+    /// registro do endpoint. Este bit permite revogar também nesse caso.
+    /// </summary>
+    NoRegistry = 256
 }

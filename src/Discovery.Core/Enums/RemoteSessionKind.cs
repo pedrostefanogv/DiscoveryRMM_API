@@ -14,5 +14,14 @@ public enum RemoteSessionKind
 
     /// <summary>Túnel RDP: o viewer conecta um cliente RDP local a um túnel
     /// WebSocket/NATS que alcança a porta 3389 do agente (via .tunnel.in/.tunnel.out).</summary>
-    Rdp = 6
+    Rdp = 6,
+
+    /// <summary>
+    /// Editor/visualizador do Registro do Windows (subjects .registry.req/.resp).
+    ///
+    /// Valor 7 é ADITIVO: não renumerar os anteriores. Sessões antigas gravadas
+    /// com kind 0..6 continuam válidas. O agente espelha este valor em
+    /// remotesession/session_tunnel_policy.go (RemoteSessionKindRegistry).
+    /// </summary>
+    Registry = 7
 }

@@ -24,7 +24,18 @@ public sealed class RemoteConsentPolicy
     public Dictionary<string, RemoteConsentSource> Sources { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Sessões que exibem/acessam recursos interativos do endpoint usam consentimento.</summary>
+    /// <summary>
+    /// Sessões que exibem/acessam recursos interativos do endpoint usam consentimento.
+    ///
+    /// <b>Registry fica FORA de propósito</b> (decisão de produto: escrita exige
+    /// confirmação explícita na UI do console + auditoria, sem prompt no
+    /// endpoint). A razão é operacional: um editor de registro faz dezenas de
+    /// operações por sessão (navegar, ler, editar), e um prompt local por escrita
+    /// inviabilizaria o uso — o operador não está na frente da máquina. O
+    /// controle de risco fica em três outras camadas: o guard fail-closed do
+    /// agente (SAM/SECURITY/LSA nunca, Run/RunOnce só leitura), a confirmação
+    /// obrigatória na UI e a auditoria por operação.
+    /// </summary>
     public static bool AppliesTo(RemoteSessionKind kind) =>
         kind is RemoteSessionKind.Screen or RemoteSessionKind.Rdp or RemoteSessionKind.Proxy or RemoteSessionKind.All;
 
