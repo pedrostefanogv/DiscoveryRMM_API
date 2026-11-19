@@ -45,6 +45,10 @@ public static class RemoteSessionViewerPermissions
     /// .tunnel.out para Proxy/Rdp/All — e são REMOVIDOS pelos bits NoProxy (64) /
     /// NoRdp (128). Chamar sem kind (legado) preserva o comportamento anterior
     /// (proxy concedido).
+    ///
+    /// WEBRDP: sessões Rdp recebem também o canal DEDICADO do RDCleanPath
+    /// (.rdp.cleanpath.in/.out), usado pelo WebRDP no navegador via IronRDP WASM.
+    /// É separado do túnel multiplexado de propósito — ver TunnelSubjects.
     /// </summary>
     public static (string[] Publish, string[] Subscribe) Build(string natsSubject, RemoteSessionRights rights, RemoteSessionKind? kind = null)
     {
@@ -90,6 +94,11 @@ public static class RemoteSessionViewerPermissions
             pub.Add($"{natsSubject}.proxy.req");
         if (tunnelAllowed)
             pub.Add($"{natsSubject}.tunnel.in");
+        // WebRDP no navegador (RDCleanPath): canal DEDICADO, só para sessões RDP.
+        // Sem estes subjects o browser tomaria -ERR ao assinar .rdp.cleanpath.out
+        // e o canvas nunca receberia o response do handshake.
+        if (rdpAllowed)
+            pub.Add($"{natsSubject}.{TunnelSubjects.Rdp.In}");
         pub.Add($"{natsSubject}.proc.req");
 
         if (!viewOnly)
@@ -139,6 +148,8 @@ public static class RemoteSessionViewerPermissions
             sub.Add($"{natsSubject}.proxy.ready");
             sub.Add($"{natsSubject}.tunnel.out");
         }
+        if (rdpAllowed)
+            sub.Add($"{natsSubject}.{TunnelSubjects.Rdp.Out}");
         sub.Add($"{natsSubject}.proc.resp");
         sub.Add($"{natsSubject}.proc.ready");
 

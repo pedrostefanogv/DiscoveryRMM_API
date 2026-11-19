@@ -5,6 +5,7 @@ using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
+using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
@@ -509,10 +510,20 @@ public class RemoteSessionsController : ControllerBase
 
     /// <summary>
     /// Túnel WebSocket do viewer: cada frame recebido do cliente é publicado em
-    /// &lt;subject&gt;.tunnel.in (o agent responde em &lt;subject&gt;.tunnel.out) e cada
-    /// mensagem de .tunnel.out é retransmitida ao WebSocket. O contrato do wire
-    /// é do AGENTE: frame binário com header de 6 bytes ([0x01][op][4B streamId])
-    /// ou controle JSON iniciado por '{' — a API é um relay cego (não interpreta).
+    /// &lt;subject&gt;.&lt;entrada&gt; e cada mensagem de &lt;subject&gt;.&lt;saída&gt;
+    /// é retransmitida ao WebSocket. A API é um relay cego (não interpreta bytes).
+    ///
+    /// Há DOIS pares de subjects, escolhidos pelo <c>kind</c> da sessão:
+    /// <list type="bullet">
+    /// <item><c>rdp</c>: <c>.rdp.cleanpath.in/.out</c> — WebRDP no navegador via
+    /// RDCleanPath (IronRDP WASM). O wire é DER (ASN.1 SEQUENCE <c>0x30</c>) no
+    /// handshake e bytes RDP crus no relay.</item>
+    /// <item>demais (proxy LAN): <c>.tunnel.in/.out</c> — frames multiplexados
+    /// <c>[0x01][op][4B streamId]</c> ou controle JSON <c>0x7B</c>.</item>
+    /// </list>
+    ///
+    /// Os canais são SEPARADOS de propósito: o agent roda sessões distintas por
+    /// subject, e misturá-los faria cada parser descartar os bytes do outro.
     /// </summary>
     [HttpGet("{agentId:guid}/{sessionId:guid}/tunnel/ws")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
@@ -530,14 +541,18 @@ public class RemoteSessionsController : ControllerBase
             || string.IsNullOrWhiteSpace(session.NatsSubject))
             return NotFound(new { error = "Remote session not found." });
 
+        // Sessões RDP falam RDCleanPath (WebRDP no navegador); as demais usam o
+        // túnel multiplexado do proxy LAN. Ver o comentário do endpoint.
+        var subjects = TunnelSubjects.For(session.Kind);
+
         // Assina ANTES de aceitar o upgrade — e com SubscribeCoreAsync, que só
         // retorna quando o SUB foi efetivamente registrado no servidor. O
         // SubscribeAsync comum devolve um IAsyncEnumerable PREGUIÇOSO: o SUB só
-        // sai quando a iteração começa, então um frame .tunnel.out publicado
-        // pelo agent nesse intervalo era PERDIDO (o viewer ficava esperando o
-        // primeiro frame até o timeout).
+        // sai quando a iteração começa, então um frame publicado pelo agent
+        // nesse intervalo era PERDIDO (o viewer ficava esperando o primeiro
+        // frame até o timeout).
         var consumer = await _natsConnection.SubscribeCoreAsync<byte[]>(
-            $"{session.NatsSubject}.tunnel.out",
+            $"{session.NatsSubject}.{subjects.Out}",
             null,
             NatsDefaultSerializer<byte[]>.Default,
             null,
@@ -575,7 +590,7 @@ public class RemoteSessionsController : ControllerBase
             closedWithError = await RelayWebSocketToNatsAsync(
                 webSocket,
                 _options.Nats.MaxPayloadBytes,
-                (frame, token) => _natsConnection.PublishAsync($"{session.NatsSubject}.tunnel.in", frame, cancellationToken: token),
+                (frame, token) => _natsConnection.PublishAsync($"{session.NatsSubject}.{subjects.In}", frame, cancellationToken: token),
                 ct);
         }
         catch (OperationCanceledException) { }
