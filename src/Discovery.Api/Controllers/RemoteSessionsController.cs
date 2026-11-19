@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using Discovery.Api.Filters;
+using Discovery.Api.Services;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs.RemoteSessions.Commands;
 using Discovery.Core.Cqrs.RemoteSessions.Queries;
@@ -29,6 +30,7 @@ public class RemoteSessionsController : ControllerBase
     private readonly ILogger<RemoteSessionsController> _logger;
     private readonly RemoteAccessOptions _options;
     private readonly NatsConnection _natsConnection;
+    private readonly ITunnelTicketService? _tunnelTickets;
 
     public RemoteSessionsController(
         IMediator mediator,
@@ -37,7 +39,8 @@ public class RemoteSessionsController : ControllerBase
         IRemoteSessionManager sessionManager,
         IOptions<RemoteAccessOptions> options,
         NatsConnection natsConnection,
-        ILogger<RemoteSessionsController> logger)
+        ILogger<RemoteSessionsController> logger,
+        ITunnelTicketService? tunnelTickets = null)
     {
         _mediator = mediator;
         _terminalRecordings = terminalRecordings;
@@ -46,6 +49,7 @@ public class RemoteSessionsController : ControllerBase
         _options = options.Value;
         _natsConnection = natsConnection;
         _logger = logger;
+        _tunnelTickets = tunnelTickets;
     }
 
     /// <summary>
@@ -55,7 +59,7 @@ public class RemoteSessionsController : ControllerBase
     /// leve e sem estado: nao consulta sessao nem banco.
     /// </summary>
     [HttpGet("bandwidth-policy")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.Global)]
     public IActionResult GetBandwidthPolicy()
     {
         var bw = _options.Quality.Bandwidth;
@@ -227,7 +231,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Obtém URL de download da gravação de uma sessão.</summary>
     [HttpGet("{agentId:guid}/{sessionId:guid}/recording/download")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.View)]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetRecordingDownload(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         var userId = GetUserId();
@@ -369,7 +373,7 @@ public class RemoteSessionsController : ControllerBase
     /// <summary>Exclui a gravação de uma sessão (LGPD Art. 18).</summary>
     [HttpDelete("{agentId:guid}/{sessionId:guid}/recording")]
     [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> DeleteRecording(Guid agentId, Guid sessionId, CancellationToken ct = default)
     {
         // LGPD Art. 18: só o dono da sessão pode excluir a gravação. Sem UserId
@@ -468,6 +472,42 @@ public class RemoteSessionsController : ControllerBase
     }
 
     /// <summary>
+    /// Emite um ticket opaco de uso único e TTL curto (60s) vinculado a
+    /// (userId, agentId, sessionId) para autenticar o handshake WebSocket em
+    /// /tunnel/ws sem expor o JWT de sessão na query string.
+    /// </summary>
+    [HttpPost("{agentId:guid}/{sessionId:guid}/tunnel/ticket")]
+    [RemoteSessionAuthorize(RequiredAction = ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> IssueTunnelTicket(Guid agentId, Guid sessionId, CancellationToken ct = default)
+    {
+        if (!_options.Enabled)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Remote access is disabled." });
+
+        var userId = GetUserId();
+        if (userId == Guid.Empty)
+            return Unauthorized(new { error = "User not authenticated." });
+
+        var session = await _sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (session is null || session.AgentId != agentId || session.UserId != userId || string.IsNullOrWhiteSpace(session.NatsSubject))
+            return NotFound(new { error = "Remote session not found." });
+
+        if (!string.Equals(session.Status, Discovery.Core.Enums.RemoteSessionStatus.Active, StringComparison.OrdinalIgnoreCase))
+            return Conflict(new { error = "Remote session is not active." });
+
+        _scopeContext.SetUserId(userId);
+        var access = await _scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (access is null || !RemoteSessionScopePolicy.Allows(access, session.TenantId, session.SiteId))
+            return NotFound(new { error = "Remote session not found." });
+
+        if (_tunnelTickets is null)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Tunnel ticket service is not configured." });
+
+        var issued = await _tunnelTickets.IssueAsync(userId, agentId, sessionId, ct);
+        return Ok(new TunnelTicketResponseDto(issued.Ticket, issued.ExpiresInSeconds, issued.ExpiresAtUtc));
+    }
+
+    /// <summary>
     /// Túnel WebSocket do viewer: cada frame recebido do cliente é publicado em
     /// &lt;subject&gt;.tunnel.in (o agent responde em &lt;subject&gt;.tunnel.out) e cada
     /// mensagem de .tunnel.out é retransmitida ao WebSocket. O contrato do wire
@@ -482,8 +522,12 @@ public class RemoteSessionsController : ControllerBase
         if (!HttpContext.WebSockets.IsWebSocketRequest)
             return BadRequest(new { error = "Endpoint exige upgrade para WebSocket." });
 
+        var userId = GetUserId();
         var session = await _sessionManager.GetRawSessionAsync(sessionId, ct);
-        if (session is null || session.AgentId != agentId || string.IsNullOrWhiteSpace(session.NatsSubject))
+        if (session is null
+            || session.AgentId != agentId
+            || (userId != Guid.Empty && session.UserId != userId)
+            || string.IsNullOrWhiteSpace(session.NatsSubject))
             return NotFound(new { error = "Remote session not found." });
 
         // Assina ANTES de aceitar o upgrade — e com SubscribeCoreAsync, que só
@@ -523,31 +567,26 @@ public class RemoteSessionsController : ControllerBase
             catch (WebSocketException) { }
         }, ct);
 
+        var closedWithError = false;
         try
         {
-            // Pump WebSocket -> NATS.
-            var buffer = new byte[64 * 1024];
-            while (webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
-            {
-                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
-                if (result.MessageType == WebSocketMessageType.Close)
-                    break;
-
-                if (result.Count <= 0)
-                    continue;
-
-                var frame = result.Count == buffer.Length || result.EndOfMessage
-                    ? buffer.AsSpan(0, result.Count).ToArray()
-                    : buffer.AsSpan(0, result.Count).ToArray();
-                await _natsConnection.PublishAsync($"{session.NatsSubject}.tunnel.in", frame, cancellationToken: ct);
-            }
+            // Pump WebSocket -> NATS com remontagem de frames fragmentados (!EndOfMessage)
+            // até o limite configurado em RemoteAccess:Nats:MaxPayloadBytes.
+            closedWithError = await RelayWebSocketToNatsAsync(
+                webSocket,
+                _options.Nats.MaxPayloadBytes,
+                (frame, token) => _natsConnection.PublishAsync($"{session.NatsSubject}.tunnel.in", frame, cancellationToken: token),
+                ct);
         }
         catch (OperationCanceledException) { }
         catch (WebSocketException) { }
         finally
         {
             try { await consumer.DisposeAsync(); } catch { }
-            try { await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "tunnel closed", CancellationToken.None); } catch { }
+            if (!closedWithError && webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            {
+                try { await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "tunnel closed", CancellationToken.None); } catch { }
+            }
         }
 
         try
@@ -560,6 +599,71 @@ public class RemoteSessionsController : ControllerBase
         }
 
         return new EmptyResult();
+    }
+
+    internal static async Task<bool> RelayWebSocketToNatsAsync(
+        WebSocket webSocket,
+        int maxPayloadBytes,
+        Func<byte[], CancellationToken, ValueTask> publishAsync,
+        CancellationToken ct)
+    {
+        var effectiveMax = maxPayloadBytes > 0 ? maxPayloadBytes : 2 * 1024 * 1024;
+        var buffer = new byte[64 * 1024];
+        using var accumulator = new MemoryStream();
+
+        while (webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested)
+        {
+            accumulator.SetLength(0);
+            WebSocketReceiveResult result;
+            WebSocketMessageType? messageType = null;
+
+            do
+            {
+                result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ct);
+                if (result.MessageType == WebSocketMessageType.Close)
+                    return false;
+
+                messageType ??= result.MessageType;
+
+                if (result.Count > 0)
+                {
+                    if (accumulator.Length + result.Count > effectiveMax)
+                    {
+                        try
+                        {
+                            if (webSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                            {
+                                await webSocket.CloseAsync(
+                                    WebSocketCloseStatus.MessageTooBig,
+                                    $"Tunnel message exceeds max payload size ({effectiveMax} bytes).",
+                                    CancellationToken.None);
+                            }
+                        }
+                        catch (OperationCanceledException) { }
+                        catch (WebSocketException) { }
+                        return true;
+                    }
+
+                    if (result.EndOfMessage && accumulator.Length == 0)
+                    {
+                        var singleFrame = buffer.AsSpan(0, result.Count).ToArray();
+                        await publishAsync(singleFrame, ct);
+                        break;
+                    }
+
+                    accumulator.Write(buffer, 0, result.Count);
+                }
+            }
+            while (!result.EndOfMessage && webSocket.State == WebSocketState.Open && !ct.IsCancellationRequested);
+
+            if (result.EndOfMessage && accumulator.Length > 0)
+            {
+                var fullFrame = accumulator.ToArray();
+                await publishAsync(fullFrame, ct);
+            }
+        }
+
+        return false;
     }
 
     private Guid GetUserId()
@@ -614,3 +718,6 @@ public class RemoteSessionsController : ControllerBase
 
 /// <summary>Request para criar uma nova aba de terminal.</summary>
 public record CreateTerminalTabRequest(string Shell = "powershell", int Cols = 120, int Rows = 40);
+
+/// <summary>Resposta de emissão de ticket efêmero de uso único para /tunnel/ws.</summary>
+public record TunnelTicketResponseDto(string Ticket, int ExpiresInSeconds, DateTime ExpiresAtUtc);

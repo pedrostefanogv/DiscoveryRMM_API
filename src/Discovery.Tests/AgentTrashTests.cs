@@ -130,7 +130,7 @@ public class AgentTrashTests
         db.Agents.Add(agent);
         await db.SaveChangesAsync();
 
-        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), NullLogger<RestoreAgentCommandHandler>.Instance);
+        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), F02ScopeContextStub.Global(), NullLogger<RestoreAgentCommandHandler>.Instance);
         var result = await handler.Handle(new RestoreAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -149,7 +149,7 @@ public class AgentTrashTests
         db.Agents.Add(agent);
         await db.SaveChangesAsync();
 
-        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), NullLogger<RestoreAgentCommandHandler>.Instance);
+        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), F02ScopeContextStub.Global(), NullLogger<RestoreAgentCommandHandler>.Instance);
         var result = await handler.Handle(new RestoreAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -162,7 +162,7 @@ public class AgentTrashTests
         using var db = CreateDbContext();
         await SeedBaseAsync(db);
 
-        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), NullLogger<RestoreAgentCommandHandler>.Instance);
+        var handler = new RestoreAgentCommandHandler(db, new NoopRedisService(), new FakeSiteRepository(db), new RecordingCommandRepository(), F02ScopeContextStub.Global(), NullLogger<RestoreAgentCommandHandler>.Instance);
         var result = await handler.Handle(new RestoreAgentCommand(Guid.NewGuid()), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
@@ -189,6 +189,7 @@ public class AgentTrashTests
         var commandRepo = new RecordingCommandRepository();
         var handler = new RestoreAgentCommandHandler(
             db, new NoopRedisService(), new FakeSiteRepository(db), commandRepo,
+            F02ScopeContextStub.Global(),
             NullLogger<RestoreAgentCommandHandler>.Instance);
 
         var result = await handler.Handle(new RestoreAgentCommand(agent.Id), CancellationToken.None);
@@ -214,7 +215,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), F02ScopeContextStub.Global(), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);
@@ -233,7 +234,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), F02ScopeContextStub.Global(), NullLogger<PurgeAgentCommandHandler>.Instance);
 
         var withoutForce = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
         Assert.That(withoutForce.IsSuccess, Is.False);
@@ -257,7 +258,7 @@ public class AgentTrashTests
         await db.SaveChangesAsync();
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), F02ScopeContextStub.Global(), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -271,7 +272,7 @@ public class AgentTrashTests
         await SeedBaseAsync(db);
 
         var purge = new FakePurgeService();
-        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), NullLogger<PurgeAgentCommandHandler>.Instance);
+        var handler = new PurgeAgentCommandHandler(db, purge, new NoopRedisService(), new FakeSiteRepository(db), new NoopAgentAuthService(), F02ScopeContextStub.Global(), NullLogger<PurgeAgentCommandHandler>.Instance);
         var result = await handler.Handle(new PurgeAgentCommand(Guid.NewGuid()), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.False);

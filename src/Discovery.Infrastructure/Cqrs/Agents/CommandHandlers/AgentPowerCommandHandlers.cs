@@ -47,13 +47,20 @@ public sealed class RestartAgentCommandHandler(
 
 public sealed class ShutdownAgentCommandHandler(
     IAgentRepository agentRepo,
-    IAgentCommandDispatcher dispatcher
+    IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<ShutdownAgentCommand, Result<Guid>>
 {
     public async Task<Result<Guid>> Handle(ShutdownAgentCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<Guid>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<Guid>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -72,16 +79,22 @@ public sealed class ShutdownAgentCommandHandler(
 public sealed class WakeOnLanCommandHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,
-    IAgentMessaging messaging
+    IAgentMessaging messaging,
+    IScopeContext scopeContext
 ) : IRequestHandler<WakeOnLanCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(WakeOnLanCommand cmd, CancellationToken ct)
     {
-        if (!messaging.IsConnected)
-            return Result<VoidResult>.Failure(Error.Validation("NATS", "NATS realtime transport unavailable."));
-
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
+        if (!messaging.IsConnected)
+            return Result<VoidResult>.Failure(Error.Validation("NATS", "NATS realtime transport unavailable."));
 
         if (string.IsNullOrWhiteSpace(agent.MacAddress))
             return Result<VoidResult>.Failure(Error.Validation("MacAddress", "Agent does not have a registered MAC address."));
@@ -92,7 +105,6 @@ public sealed class WakeOnLanCommandHandler(
         if (onlineAgents.Count == 0)
             return Result<VoidResult>.Failure(Error.Validation("SiteId", "No online agents available in the same site to relay the Wake-on-LAN packet."));
 
-        var site = await siteRepo.GetByIdAsync(agent.SiteId);
         var dispatchId = IdGenerator.NewId();
         var issuedAtUtc = DateTime.UtcNow;
         var expiresAtUtc = issuedAtUtc.AddSeconds(60);

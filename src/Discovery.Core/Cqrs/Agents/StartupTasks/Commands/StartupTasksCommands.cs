@@ -1,7 +1,10 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using System.Text.Json;
 
@@ -44,13 +47,20 @@ public sealed record ScheduledTaskActionCommand(
 
 public sealed class StartupItemActionCommandHandler(
     IAgentRepository agentRepo,
-    IAgentCommandDispatcher dispatcher
+    IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<StartupItemActionCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(StartupItemActionCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -70,13 +80,20 @@ public sealed class StartupItemActionCommandHandler(
 
 public sealed class ScheduledTaskActionCommandHandler(
     IAgentRepository agentRepo,
-    IAgentCommandDispatcher dispatcher
+    IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<ScheduledTaskActionCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(ScheduledTaskActionCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         object? edit = null;
         if (cmd.Action.Equals("edit", StringComparison.OrdinalIgnoreCase))

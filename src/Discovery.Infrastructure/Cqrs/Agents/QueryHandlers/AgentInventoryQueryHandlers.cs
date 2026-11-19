@@ -2,8 +2,10 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Inventory.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Cqrs.AgentAuth.Handlers;
 using MediatR;
 
@@ -61,7 +63,9 @@ public sealed class GetAgentHardwareQueryHandler(
 /// </summary>
 public sealed class GetAgentHardwareReportQueryHandler(
     IAgentRepository agentRepo,
-    IAgentHardwareRepository hardwareRepo
+    IAgentHardwareRepository hardwareRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentHardwareReportQuery, Result<AgentHardwareReportDto>>
 {
     public async Task<Result<AgentHardwareReportDto>> Handle(GetAgentHardwareReportQuery q, CancellationToken ct)
@@ -69,6 +73,11 @@ public sealed class GetAgentHardwareReportQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentHardwareReportDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentHardwareReportDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var hardware = await hardwareRepo.GetByAgentIdAsync(q.AgentId);
         AgentHardwareDto? hwDto = null;
@@ -295,7 +304,9 @@ public static class AgentSoftwareItemMappers
 
 public sealed class GetAgentSoftwarePageQueryHandler(
     IAgentRepository agentRepo,
-    IAgentSoftwareRepository softwareRepo
+    IAgentSoftwareRepository softwareRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentSoftwarePageQuery, Result<AgentSoftwarePageDto>>
 {
     public async Task<Result<AgentSoftwarePageDto>> Handle(GetAgentSoftwarePageQuery q, CancellationToken ct)
@@ -303,6 +314,11 @@ public sealed class GetAgentSoftwarePageQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentSoftwarePageDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentSoftwarePageDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var safePage = Math.Max(1, q.Page);
         var safePageSize = Math.Clamp(q.PageSize, 1, 2000);
@@ -323,7 +339,9 @@ public sealed class GetAgentSoftwarePageQueryHandler(
 
 public sealed class GetAgentSoftwareSnapshotQueryHandler(
     IAgentRepository agentRepo,
-    IAgentSoftwareRepository softwareRepo
+    IAgentSoftwareRepository softwareRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentSoftwareSnapshotQuery, Result<AgentSoftwareSnapshotDto>>
 {
     public async Task<Result<AgentSoftwareSnapshotDto>> Handle(GetAgentSoftwareSnapshotQuery q, CancellationToken ct)
@@ -331,6 +349,11 @@ public sealed class GetAgentSoftwareSnapshotQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentSoftwareSnapshotDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentSoftwareSnapshotDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var snapshot = await softwareRepo.GetSnapshotByAgentIdAsync(q.AgentId);
         var updateCount = await softwareRepo.GetUpdateAvailableCountByAgentIdAsync(q.AgentId);
@@ -342,7 +365,9 @@ public sealed class GetAgentSoftwareSnapshotQueryHandler(
 
 public sealed class GetAgentHardwareComponentsQueryHandler(
     IAgentRepository agentRepo,
-    IAgentHardwareRepository hardwareRepo
+    IAgentHardwareRepository hardwareRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentHardwareComponentsQuery, Result<AgentHardwareComponentsDto>>
 {
     public async Task<Result<AgentHardwareComponentsDto>> Handle(GetAgentHardwareComponentsQuery q, CancellationToken ct)
@@ -350,6 +375,11 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentHardwareComponentsDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentHardwareComponentsDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
         var hardware = await hardwareRepo.GetByAgentIdAsync(q.AgentId);
@@ -440,7 +470,9 @@ internal static class AgentNetworkPageFilter
 /// </summary>
 public sealed class GetAgentListeningPortsPageQueryHandler(
     IAgentRepository agentRepo,
-    IAgentHardwareRepository hardwareRepo
+    IAgentHardwareRepository hardwareRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentListeningPortsPageQuery, Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>>
 {
     public async Task<Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>> Handle(
@@ -449,6 +481,11 @@ public sealed class GetAgentListeningPortsPageQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentNetworkPageDto<AgentHardwareListeningPortDto>>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
 
@@ -501,7 +538,9 @@ public sealed class GetAgentListeningPortsPageQueryHandler(
 /// </summary>
 public sealed class GetAgentOpenSocketsPageQueryHandler(
     IAgentRepository agentRepo,
-    IAgentHardwareRepository hardwareRepo
+    IAgentHardwareRepository hardwareRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentOpenSocketsPageQuery, Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>>
 {
     public async Task<Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>> Handle(
@@ -510,6 +549,11 @@ public sealed class GetAgentOpenSocketsPageQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentNetworkPageDto<AgentHardwareOpenSocketDto>>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var components = await hardwareRepo.GetComponentsAsync(q.AgentId);
 

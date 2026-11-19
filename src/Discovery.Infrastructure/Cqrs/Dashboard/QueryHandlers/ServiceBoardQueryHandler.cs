@@ -2,6 +2,9 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Dashboard.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -18,8 +21,10 @@ namespace Discovery.Infrastructure.Cqrs.Dashboard.QueryHandlers;
 ///   prioridade = severidade real (icon: error/warning/info/success).
 /// Ordenação: prioridade decrescente, depois idade decrescente; truncado em <c>Limit</c>.
 /// </summary>
-public sealed class GetServiceBoardQueryHandler(DiscoveryDbContext db)
-    : IRequestHandler<GetServiceBoardQuery, Result<ServiceBoardDto>>
+public sealed class GetServiceBoardQueryHandler(
+    DiscoveryDbContext db,
+    IScopeContext scopeContext
+) : IRequestHandler<GetServiceBoardQuery, Result<ServiceBoardDto>>
 {
     // Rank da prioridade para ordenação (maior = mais crítico).
     internal static int PriorityRank(string priority) => priority switch
@@ -33,6 +38,7 @@ public sealed class GetServiceBoardQueryHandler(DiscoveryDbContext db)
 
     public async Task<Result<ServiceBoardDto>> Handle(GetServiceBoardQuery query, CancellationToken ct)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Dashboard, ActionType.View);
         var now = DateTime.UtcNow;
         var limit = Math.Clamp(query.Limit, 1, 200);
 
@@ -40,6 +46,44 @@ public sealed class GetServiceBoardQueryHandler(DiscoveryDbContext db)
         var clientNames = clients.ToDictionary(c => c.Id, c => c.Name);
         var sites = await db.Sites.AsNoTracking().ToListAsync(ct);
         var siteById = sites.ToDictionary(s => s.Id);
+
+        if (!access.HasGlobalAccess)
+        {
+            if (query.SiteId.HasValue)
+            {
+                var requestedSite = siteById.GetValueOrDefault(query.SiteId.Value);
+                if (requestedSite is null
+                    ? !access.AllowedSiteIds.Contains(query.SiteId.Value)
+                    : !TenantScopePolicy.Allows(access, requestedSite.ClientId, query.SiteId.Value))
+                {
+                    return Result<ServiceBoardDto>.Failure(Error.Forbidden("Você não tem acesso a este site."));
+                }
+            }
+            else if (query.ClientId.HasValue)
+            {
+                var hasAllowedClient = access.AllowedClientIds.Contains(query.ClientId.Value);
+                var hasAllowedSite = sites.Any(s => s.ClientId == query.ClientId.Value && access.AllowedSiteIds.Contains(s.Id));
+                if (!hasAllowedClient && !hasAllowedSite)
+                    return Result<ServiceBoardDto>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+            }
+        }
+
+        bool ScopeAllowed(Guid? itemClientId, Guid? itemSiteId)
+        {
+            if (access.HasGlobalAccess)
+                return true;
+
+            if (itemSiteId.HasValue)
+            {
+                var resolvedClientId = itemClientId ?? siteById.GetValueOrDefault(itemSiteId.Value)?.ClientId ?? Guid.Empty;
+                return TenantScopePolicy.Allows(access, resolvedClientId, itemSiteId.Value);
+            }
+
+            if (itemClientId.HasValue)
+                return access.AllowedClientIds.Contains(itemClientId.Value);
+
+            return false;
+        }
 
         var agents = await db.Agents.AsNoTracking()
             .Where(a => a.DeletedAt == null)
@@ -56,9 +100,15 @@ public sealed class GetServiceBoardQueryHandler(DiscoveryDbContext db)
                 : siteOfScope.ClientId;
         }
 
-        bool AgentInScope(Guid agentSiteId) => siteId.HasValue
-            ? agentSiteId == siteId.Value
-            : !clientId.HasValue || (siteById.TryGetValue(agentSiteId, out var s) && s.ClientId == clientId.Value);
+        bool AgentInScope(Guid agentSiteId)
+        {
+            if (!ScopeAllowed(siteById.GetValueOrDefault(agentSiteId)?.ClientId, agentSiteId))
+                return false;
+
+            return siteId.HasValue
+                ? agentSiteId == siteId.Value
+                : !clientId.HasValue || (siteById.TryGetValue(agentSiteId, out var s) && s.ClientId == clientId.Value);
+        }
 
         var items = new List<ServiceBoardItemDto>();
         int ticketCount = 0, automationCount = 0, patchCount = 0, alertCount = 0;
@@ -71,6 +121,7 @@ public sealed class GetServiceBoardQueryHandler(DiscoveryDbContext db)
 
         foreach (var t in tickets)
         {
+            if (!ScopeAllowed(t.ClientId, t.SiteId)) continue;
             if (siteId.HasValue && t.SiteId != siteId.Value) continue;
             if (!siteId.HasValue && clientId.HasValue && t.ClientId != clientId.Value) continue;
 
@@ -150,6 +201,8 @@ public sealed class GetServiceBoardQueryHandler(DiscoveryDbContext db)
                 alertSiteId = scopedAgent.SiteId;
                 alertClientId = siteById.GetValueOrDefault(scopedAgent.SiteId)?.ClientId;
             }
+
+            if (!ScopeAllowed(alertClientId, alertSiteId)) continue;
 
             // Escopo Label não tem client/site resolúveis: só entra na fila global.
             if (a.ScopeType == AlertScopeType.Label && (siteId.HasValue || clientId.HasValue)) continue;

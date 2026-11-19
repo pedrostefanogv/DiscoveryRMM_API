@@ -24,9 +24,9 @@ public sealed class RemoteConsentPolicy
     public Dictionary<string, RemoteConsentSource> Sources { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Somente sessões de desktop usam consentimento.</summary>
+    /// <summary>Sessões que exibem/acessam recursos interativos do endpoint usam consentimento.</summary>
     public static bool AppliesTo(RemoteSessionKind kind) =>
-        kind is RemoteSessionKind.Screen or RemoteSessionKind.All;
+        kind is RemoteSessionKind.Screen or RemoteSessionKind.Rdp or RemoteSessionKind.Proxy or RemoteSessionKind.All;
 
     public bool RequiresPrompt => Mode == RemoteConsentMode.Prompt;
 

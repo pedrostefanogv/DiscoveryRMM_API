@@ -4,10 +4,13 @@ using Discovery.Core.Cqrs.Alerts.Commands;
 using Discovery.Core.Cqrs.Alerts.Queries;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Api.Controllers;
 
@@ -19,54 +22,162 @@ public class AgentAlertsController(
     ISiteRepository siteRepository) : ControllerBase
 {
     [HttpGet]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAll(
+        [FromServices] IAgentRepository agentRepository,
+        [FromServices] DiscoveryDbContext db,
         [FromQuery] string? status, [FromQuery] string? scopeType,
         [FromQuery] Guid? scopeClientId, [FromQuery] Guid? scopeSiteId,
         [FromQuery] Guid? scopeAgentId, [FromQuery] Guid? ticketId,
         [FromQuery] string? cursor, [FromQuery] int limit = 100)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!access.HasGlobalAccess)
+        {
+            if (scopeAgentId.HasValue)
+            {
+                if (await EnsureAgentScopeAsync(scopeAgentId.Value, access, agentRepository) is { } denied)
+                    return denied;
+            }
+            else if (scopeSiteId.HasValue)
+            {
+                if (await EnsureSiteScopeAsync(scopeSiteId.Value, access) is { } denied)
+                    return denied;
+            }
+            else if (scopeClientId.HasValue)
+            {
+                if (!access.AllowedClientIds.Contains(scopeClientId.Value))
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este cliente." });
+            }
+            else
+            {
+                var clampedLimit = Math.Clamp(limit, 1, 200);
+                var allowedClients = access.AllowedClientIds;
+                var allowedSites = access.AllowedSiteIds;
+                var query = db.AgentAlertDefinitions.AsNoTracking()
+                    .Where(a =>
+                        (a.ScopeClientId != null && allowedClients.Contains(a.ScopeClientId.Value)) ||
+                        (a.ScopeSiteId != null && (allowedSites.Contains(a.ScopeSiteId.Value) ||
+                            db.Sites.Any(s => s.Id == a.ScopeSiteId.Value && allowedClients.Contains(s.ClientId)))) ||
+                        (a.ScopeAgentId != null && db.Agents.Any(ag => ag.Id == a.ScopeAgentId.Value &&
+                            (allowedSites.Contains(ag.SiteId) ||
+                             db.Sites.Any(s => s.Id == ag.SiteId && allowedClients.Contains(s.ClientId))))));
+
+                if (status is not null && Enum.TryParse<AlertDefinitionStatus>(status, true, out var parsedStatus))
+                    query = query.Where(a => a.Status == parsedStatus);
+                if (scopeType is not null && Enum.TryParse<AlertScopeType>(scopeType, true, out var parsedScopeType))
+                    query = query.Where(a => a.ScopeType == parsedScopeType);
+                if (ticketId.HasValue)
+                    query = query.Where(a => a.TicketId == ticketId.Value);
+
+                var rows = await query
+                    .OrderByDescending(a => a.CreatedAt)
+                    .ThenByDescending(a => a.Id)
+                    .Take(clampedLimit + 1)
+                    .ToListAsync();
+
+                var hasMore = rows.Count > clampedLimit;
+                var page = hasMore ? rows.Take(clampedLimit).ToList() : rows;
+                var nextCursor = hasMore && page.Count > 0
+                    ? CursorPaginationHelper.EncodeCreatedAtCursor(page[^1].CreatedAt, page[^1].Id)
+                    : null;
+                var dtos = page.Select(a => new AlertDto(a.Id, a.ScopeAgentId, a.Title, a.AlertType.ToString(), a.Status.ToString(), a.CreatedAt, a.TicketId)).ToList();
+                return Ok(new ListAlertsResult(dtos, nextCursor, hasMore, dtos.Count));
+            }
+        }
+
         var q = new ListAgentAlertsQuery(status, scopeType, scopeClientId, scopeSiteId, scopeAgentId, ticketId, cursor, limit);
         var r = await mediator.Send(q);
         return r.Match<IActionResult>(Ok, e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetById(Guid id)
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetById(
+        Guid id,
+        [FromServices] IAgentAlertRepository alertRepo,
+        [FromServices] IAgentRepository agentRepo)
     {
+        if (await EnsureAlertAccessAsync(id, ResourceType.Agents, ActionType.View, alertRepo, agentRepo) is { } denied)
+            return denied;
+
         var r = await mediator.Send(new GetAlertByIdQuery(id));
         return r.Match<IActionResult>(Ok, e => e[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Agents, ActionType.Create)]
-    public async Task<IActionResult> Create([FromBody] CreateAlertCommand cmd)
+    [RequirePermission(ResourceType.Agents, ActionType.Create, ScopeSource.AccessList)]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateAlertCommand cmd,
+        [FromServices] IAgentRepository agentRepo)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Create);
+        if (!access.HasGlobalAccess)
+        {
+            if (cmd.AgentId.HasValue)
+            {
+                if (await EnsureAgentScopeAsync(cmd.AgentId.Value, access, agentRepo) is { } denied)
+                    return denied;
+            }
+            else if (cmd.SiteId.HasValue)
+            {
+                if (await EnsureSiteScopeAsync(cmd.SiteId.Value, access) is { } denied)
+                    return denied;
+            }
+            else if (cmd.ClientId.HasValue)
+            {
+                if (!access.AllowedClientIds.Contains(cmd.ClientId.Value))
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este cliente." });
+            }
+            else
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Escopo insuficiente para criar alerta sem destino." });
+            }
+        }
+
         var r = await mediator.Send(cmd);
         return r.Match<IActionResult>(dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto), e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 
     [HttpPost("{id:guid}/dispatch")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
-    public async Task<IActionResult> Dispatch(Guid id)
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> Dispatch(
+        Guid id,
+        [FromServices] IAgentAlertRepository alertRepo,
+        [FromServices] IAgentRepository agentRepo)
     {
+        if (await EnsureAlertAccessAsync(id, ResourceType.Agents, ActionType.Execute, alertRepo, agentRepo) is { } denied)
+            return denied;
+
         var r = await mediator.Send(new DispatchAlertCommand(id));
         return r.Match<IActionResult>(_ => Ok(new { dispatched = true }), e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 
     [HttpPost("{id:guid}/create-ticket")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Create)]
-    public async Task<IActionResult> CreateTicket(Guid id, [FromBody] CreateTicketFromAlertCommand cmd)
+    [RequirePermission(ResourceType.Tickets, ActionType.Create, ScopeSource.AccessList)]
+    public async Task<IActionResult> CreateTicket(
+        Guid id,
+        [FromBody] CreateTicketFromAlertCommand cmd,
+        [FromServices] IAgentAlertRepository alertRepo,
+        [FromServices] IAgentRepository agentRepo)
     {
+        if (await EnsureAlertAccessAsync(id, ResourceType.Tickets, ActionType.Create, alertRepo, agentRepo) is { } denied)
+            return denied;
+
         var r = await mediator.Send(cmd with { AlertId = id });
         return r.Match<IActionResult>(Ok, e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
-    public async Task<IActionResult> Cancel(Guid id)
+    [RequirePermission(ResourceType.Agents, ActionType.Delete, ScopeSource.AccessList)]
+    public async Task<IActionResult> Cancel(
+        Guid id,
+        [FromServices] IAgentAlertRepository alertRepo,
+        [FromServices] IAgentRepository agentRepo)
     {
+        if (await EnsureAlertAccessAsync(id, ResourceType.Agents, ActionType.Delete, alertRepo, agentRepo) is { } denied)
+            return denied;
+
         var r = await mediator.Send(new CancelAlertCommand(id));
         return r.Match<IActionResult>(_ => NoContent(), e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
@@ -77,11 +188,21 @@ public class AgentAlertsController(
     /// e pela página de detalhes ("Enviar notificação").
     /// </summary>
     [HttpPost("notify")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
-    public async Task<IActionResult> Notify([FromBody] SendAgentNotificationRequest request, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> Notify(
+        [FromBody] SendAgentNotificationRequest request,
+        [FromServices] IAgentRepository agentRepo,
+        CancellationToken ct = default)
     {
         if (request is null)
             return BadRequest(new { error = "corpo da requisição é obrigatório." });
+
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!access.HasGlobalAccess)
+        {
+            if (await EnsureAgentScopeAsync(request.AgentId, access, agentRepo) is { } denied)
+                return denied;
+        }
 
         var cmd = new SendAgentNotificationCommand(
             request.AgentId,
@@ -190,6 +311,70 @@ public class AgentAlertsController(
                 // Agent/Label dependem de checagem por agente; não expostos aqui.
                 return false;
         }
+    }
+
+    private async Task<IActionResult?> EnsureAlertAccessAsync(
+        Guid alertId,
+        ResourceType resource,
+        ActionType action,
+        IAgentAlertRepository alertRepo,
+        IAgentRepository agentRepo)
+    {
+        var alert = await alertRepo.GetByIdAsync(alertId);
+        if (alert is null)
+            return NotFound(new { error = $"Alert {alertId} not found" });
+
+        var access = await scopeContext.GetAccessAsync(resource, action);
+        if (access.HasGlobalAccess)
+            return null;
+
+        if (alert.ScopeAgentId.HasValue)
+            return await EnsureAgentScopeAsync(alert.ScopeAgentId.Value, access, agentRepo);
+
+        if (alert.ScopeSiteId.HasValue)
+            return await EnsureSiteScopeAsync(alert.ScopeSiteId.Value, access);
+
+        if (alert.ScopeClientId.HasValue)
+        {
+            return access.AllowedClientIds.Contains(alert.ScopeClientId.Value)
+                ? null
+                : StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este alerta." });
+        }
+
+        return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este alerta." });
+    }
+
+    private async Task<IActionResult?> EnsureAgentScopeAsync(
+        Guid agentId,
+        UserScopeAccess access,
+        IAgentRepository agentRepo)
+    {
+        var agent = await agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        var site = await siteRepository.GetByIdAsync(agent.SiteId);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este agente." });
+
+        return null;
+    }
+
+    private async Task<IActionResult?> EnsureSiteScopeAsync(
+        Guid siteId,
+        UserScopeAccess access)
+    {
+        if (access.AllowedSiteIds.Contains(siteId))
+            return null;
+
+        var site = await siteRepository.GetByIdAsync(siteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found." });
+
+        if (!TenantScopePolicy.Allows(access, site.ClientId, siteId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este site." });
+
+        return null;
     }
 }
 

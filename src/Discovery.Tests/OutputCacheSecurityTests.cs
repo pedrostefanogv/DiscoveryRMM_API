@@ -15,9 +15,12 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.OutputCaching;
+using Microsoft.AspNetCore.OutputCaching.StackExchangeRedis;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NUnit.Framework;
+using StackExchange.Redis;
 
 namespace Discovery.Tests;
 
@@ -195,6 +198,104 @@ public class OutputCacheSecurityTests
         Assert.That(idxOutputCache, Is.GreaterThan(idxUserAuth),
             "UseOutputCache() MUST run after CORS, SecurityHeaders, and all Auth middlewares.");
         Assert.That(idxMapControllers, Is.GreaterThan(idxOutputCache));
+    }
+
+    [Test]
+    public async Task AddDiscoveryOutputCache_UsesInMemoryStore_WhenRedisIsUnconfigured()
+    {
+        var config = new ConfigurationBuilder().Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDiscoveryOutputCache(config);
+
+        await using var sp = services.BuildServiceProvider();
+        var store = sp.GetRequiredService<IOutputCacheStore>();
+
+        Assert.That(store.GetType().FullName,
+            Does.Not.Contain("RedisOutputCacheStore"));
+        Assert.That(store.GetType().Name, Does.Contain("MemoryOutputCacheStore"));
+    }
+
+    [TestCase("Redis:Connection", "127.0.0.1:6379")]
+    [TestCase("Redis:ConnectionString", "localhost:6379")]
+    [TestCase("ConnectionStrings:Redis", "redis.internal:6379")]
+    public async Task AddDiscoveryOutputCache_WiresRedisOutputCacheStore_WhenRedisConfigPresent(string configKey, string connValue)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [configKey] = connValue,
+                ["Redis:Password"] = "secret-pass"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDiscoveryOutputCache(config);
+
+        await using var sp = services.BuildServiceProvider();
+        var store = sp.GetRequiredService<IOutputCacheStore>();
+        var redisOptions = sp.GetRequiredService<IOptions<RedisOutputCacheOptions>>().Value;
+
+        Assert.That(store.GetType().FullName,
+            Does.StartWith("Microsoft.AspNetCore.OutputCaching.StackExchangeRedis.RedisOutputCacheStore"));
+        Assert.That(redisOptions.InstanceName,
+            Is.EqualTo(Discovery.Api.DependencyInjection.OutputCacheServiceCollectionExtensions.OutputCacheInstanceName));
+        Assert.That(redisOptions.ConfigurationOptions, Is.Not.Null);
+        Assert.That(redisOptions.ConfigurationOptions!.AbortOnConnectFail, Is.False);
+        Assert.That(redisOptions.ConfigurationOptions!.Password, Is.EqualTo("secret-pass"));
+    }
+
+    [Test]
+    public async Task AddDiscoveryOutputCache_UsesInMemoryFallback_WhenUseRedisIsExplicitlyDisabled()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Redis:Connection"] = "127.0.0.1:6379",
+                ["OutputCache:UseRedis"] = "false"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDiscoveryOutputCache(config);
+
+        await using var sp = services.BuildServiceProvider();
+        var store = sp.GetRequiredService<IOutputCacheStore>();
+
+        Assert.That(store.GetType().FullName,
+            Does.Not.Contain("RedisOutputCacheStore"));
+        Assert.That(store.GetType().Name, Does.Contain("MemoryOutputCacheStore"));
+    }
+
+    [Test]
+    public async Task AddDiscoveryOutputCache_ReusesExistingConnectionMultiplexer_WhenRegistered()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Redis:Connection"] = "127.0.0.1:6379"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var dummyMultiplexer = System.Reflection.DispatchProxy.Create<IConnectionMultiplexer, DummyMultiplexerProxy>();
+        services.AddSingleton(dummyMultiplexer);
+        services.AddDiscoveryOutputCache(config);
+
+        await using var sp = services.BuildServiceProvider();
+        var redisOptions = sp.GetRequiredService<IOptions<RedisOutputCacheOptions>>().Value;
+
+        Assert.That(redisOptions.ConnectionMultiplexerFactory is not null, Is.True);
+        var resolved = await redisOptions.ConnectionMultiplexerFactory!();
+        Assert.That(resolved, Is.SameAs(dummyMultiplexer));
+    }
+
+    public class DummyMultiplexerProxy : System.Reflection.DispatchProxy
+    {
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args) => null;
     }
 
     private static string RepoRoot([CallerFilePath] string path = "")

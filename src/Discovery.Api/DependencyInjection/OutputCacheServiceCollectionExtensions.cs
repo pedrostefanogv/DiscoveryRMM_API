@@ -1,23 +1,28 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.OutputCaching;
+using Microsoft.AspNetCore.OutputCaching.StackExchangeRedis;
 using Microsoft.Extensions.Primitives;
+using StackExchange.Redis;
 
 namespace Discovery.Api.DependencyInjection;
 
 /// <summary>
-/// Registers ASP.NET Core in-memory output caching for high-frequency read endpoints
+/// Registers ASP.NET Core output caching for high-frequency read endpoints
 /// with strict per-credential, per-host, and per-identity cache isolation.
-/// (Microsoft.AspNetCore.OutputCaching.StackExchangeRedis is not referenced;
-/// caching uses the default in-memory IOutputCacheStore.)
+/// Uses StackExchange.Redis (<c>RedisOutputCacheStore</c>) when a Redis
+/// connection string is configured (<c>Redis:Connection</c>,
+/// <c>Redis:ConnectionString</c>, or <c>ConnectionStrings:Redis</c>), and falls
+/// back cleanly to the default in-memory <see cref="IOutputCacheStore"/> when
+/// Redis is unconfigured (e.g. local dev or test environments).
 /// </summary>
 public static class OutputCacheServiceCollectionExtensions
 {
+    internal const string OutputCacheInstanceName = "discovery:outputcache:";
+
     public static IServiceCollection AddDiscoveryOutputCache(
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        _ = configuration;
-
         services.AddOutputCache(options =>
         {
             options.DefaultExpirationTimeSpan = TimeSpan.FromSeconds(30);
@@ -38,7 +43,55 @@ public static class OutputCacheServiceCollectionExtensions
             options.AddPolicy("Long", builder => ConfigureNamedPolicy(builder, TimeSpan.FromMinutes(5)));
         });
 
+        var useRedis = configuration.GetValue<bool?>("OutputCache:UseRedis") ?? true;
+        var redisConnString = ResolveRedisConnectionString(configuration);
+        if (useRedis && !string.IsNullOrWhiteSpace(redisConnString))
+        {
+            var redisPassword = configuration.GetValue<string>("Redis:Password");
+
+            services.AddStackExchangeRedisOutputCache(options =>
+            {
+                options.InstanceName = OutputCacheInstanceName;
+
+                var configOptions = ConfigurationOptions.Parse(redisConnString);
+                if (!string.IsNullOrWhiteSpace(redisPassword) && string.IsNullOrWhiteSpace(configOptions.Password))
+                {
+                    configOptions.Password = redisPassword;
+                }
+
+                configOptions.AbortOnConnectFail = false;
+                configOptions.ConnectTimeout = 5000;
+                configOptions.AsyncTimeout = 5000;
+                configOptions.SyncTimeout = 5000;
+                options.ConfigurationOptions = configOptions;
+            });
+
+            // Reuse the application's resilient singleton IConnectionMultiplexer when already registered
+            // (e.g. via AddDiscoveryRedis) instead of opening a second Redis connection pool.
+            services.AddOptions<RedisOutputCacheOptions>()
+                .Configure<IServiceProvider>((options, sp) =>
+                {
+                    var existing = sp.GetService<IConnectionMultiplexer>();
+                    if (existing is not null)
+                    {
+                        options.ConnectionMultiplexerFactory = () => Task.FromResult(existing);
+                    }
+                });
+        }
+
         return services;
+    }
+
+    internal static string? ResolveRedisConnectionString(IConfiguration configuration)
+    {
+        var candidates = new[]
+        {
+            configuration.GetValue<string>("Redis:Connection"),
+            configuration.GetValue<string>("Redis:ConnectionString"),
+            configuration.GetConnectionString("Redis")
+        };
+
+        return candidates.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim();
     }
 
     private static void ConfigureNamedPolicy(OutputCachePolicyBuilder builder, TimeSpan expiration)

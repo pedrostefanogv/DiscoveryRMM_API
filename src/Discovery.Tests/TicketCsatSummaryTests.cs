@@ -62,7 +62,7 @@ public class TicketCsatSummaryTests
             NewRatedTicket(clientId, department.Id, null, 2));
         await db.SaveChangesAsync();
 
-        var handler = new GetTicketCsatSummaryQueryHandler(db);
+        var handler = new GetTicketCsatSummaryQueryHandler(db, F02ScopeContextStub.Global());
         var result = await handler.Handle(new GetTicketCsatSummaryQuery(), default);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -99,7 +99,7 @@ public class TicketCsatSummaryTests
         db.Add(ticket);
         await db.SaveChangesAsync();
 
-        var handler = new GetTicketCsatSummaryQueryHandler(db);
+        var handler = new GetTicketCsatSummaryQueryHandler(db, F02ScopeContextStub.Global());
         var result = await handler.Handle(new GetTicketCsatSummaryQuery(), default);
 
         Assert.That(result.IsSuccess, Is.True);
@@ -127,7 +127,7 @@ public class TicketCsatSummaryTests
         db.Add(ticket);
         await db.SaveChangesAsync();
 
-        var handler = new GetTicketCsatSummaryQueryHandler(db);
+        var handler = new GetTicketCsatSummaryQueryHandler(db, F02ScopeContextStub.Global());
         var result = await handler.Handle(new GetTicketCsatSummaryQuery(), default);
 
         Assert.That(result.IsSuccess, Is.True);

@@ -5,5 +5,6 @@
     <Project Path="src/Discovery.Infrastructure/Discovery.Infrastructure.csproj" />
     <Project Path="src/Discovery.Migrations/Discovery.Migrations.csproj" />
     <Project Path="src/Discovery.Tests/Discovery.Tests.csproj" />
+    <Project Path="src/Discovery.IntegrationTests/Discovery.IntegrationTests.csproj" />
   </Folder>
 </Solution>

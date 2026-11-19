@@ -31,7 +31,7 @@ public class OpsObjectStorageController(
     IConfiguration configuration) : ControllerBase
 {
     [HttpGet("telemetry")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetTelemetry(CancellationToken ct)
     {
         var server = await configurationResolver.GetServerAsync();

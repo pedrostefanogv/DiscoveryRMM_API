@@ -45,7 +45,7 @@ public class TicketChatController(
 
     /// <summary>Sessão pendente/ativa do chamado (HasSession=false quando não há).</summary>
     [HttpGet("sessions/current")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCurrentSession(Guid ticketId, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
@@ -57,7 +57,7 @@ public class TicketChatController(
 
     /// <summary>Conversas anteriores do chamado (somente leitura).</summary>
     [HttpGet("sessions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetHistory(Guid ticketId, [FromQuery] int skip = 0, [FromQuery] int take = 20, CancellationToken ct = default)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
@@ -69,7 +69,7 @@ public class TicketChatController(
 
     /// <summary>Snapshot incremental das mensagens de uma sessão do chamado.</summary>
     [HttpGet("sessions/{sessionId:guid}/messages")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetMessages(Guid ticketId, Guid sessionId, [FromQuery] long afterSequence = 0, [FromQuery] int limit = 200, CancellationToken ct = default)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
@@ -92,7 +92,7 @@ public class TicketChatController(
     /// atendente já está lendo a conversa na frente dele.
     /// </summary>
     [HttpPost("presence")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> TouchPresence(Guid ticketId, [FromQuery] string? clientId, CancellationToken ct)
     {
         if (CurrentUserId is not { } userId)
@@ -107,7 +107,7 @@ public class TicketChatController(
 
     /// <summary>Limpa a presença (janela fechada, aba oculta ou ao desmontar a tela).</summary>
     [HttpDelete("presence")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> ClearPresence(Guid ticketId, [FromQuery] string? clientId, CancellationToken ct)
     {
         if (CurrentUserId is { } userId)
@@ -120,7 +120,7 @@ public class TicketChatController(
 
     /// <summary>Inicia a sessão de chat e envia o convite à máquina do chamado.</summary>
     [HttpPost("sessions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> StartSession(Guid ticketId, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
@@ -141,7 +141,7 @@ public class TicketChatController(
 
     /// <summary>Reenvia o convite de uma sessão pendente.</summary>
     [HttpPost("sessions/{sessionId:guid}/invite/retry")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> RetryInvite(Guid ticketId, Guid sessionId, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
@@ -166,7 +166,7 @@ public class TicketChatController(
 
     /// <summary>Envia uma mensagem do atendente.</summary>
     [HttpPost("sessions/{sessionId:guid}/messages")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> SendMessage(Guid ticketId, Guid sessionId, [FromBody] SendTicketChatMessageRequest request, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
@@ -193,7 +193,7 @@ public class TicketChatController(
 
     /// <summary>Encerra a sessão pelo suporte.</summary>
     [HttpPost("sessions/{sessionId:guid}/end")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> EndSession(Guid ticketId, Guid sessionId, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
@@ -211,7 +211,7 @@ public class TicketChatController(
 
     /// <summary>Prepara o upload direto no object storage para um anexo do chat.</summary>
     [HttpPost("sessions/{sessionId:guid}/attachments/presigned-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> PrepareAttachmentUpload(Guid ticketId, Guid sessionId, [FromBody] PresignedUploadRequestDto req, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
@@ -254,7 +254,7 @@ public class TicketChatController(
 
     /// <summary>Finaliza o upload pré-assinado e persiste o anexo do chat.</summary>
     [HttpPost("sessions/{sessionId:guid}/attachments/complete-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CompleteAttachmentUpload(Guid ticketId, Guid sessionId, [FromBody] CompleteUploadRequestDto req, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
@@ -312,7 +312,7 @@ public class TicketChatController(
 
     /// <summary>Baixa um anexo do chat do chamado (streaming same-origin).</summary>
     [HttpGet("attachments/{attachmentId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> DownloadAttachment(Guid ticketId, Guid attachmentId, CancellationToken ct)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))

@@ -1,3 +1,4 @@
+using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Security;
 using System.Security.Claims;
@@ -29,7 +30,10 @@ public class UserAuthMiddleware
         _logger = logger;
     }
 
-    public async Task InvokeAsync(HttpContext context, IJwtService jwtService, IUserSessionRepository sessionRepo)
+    public async Task InvokeAsync(
+        HttpContext context,
+        IJwtService jwtService,
+        IUserSessionRepository sessionRepo)
     {
         // Caminhos públicos não precisam de validação
         if (_publicPaths.Contains(context.Request.Path.Value ?? string.Empty))
@@ -39,10 +43,16 @@ public class UserAuthMiddleware
         }
 
         var isNatsWebSocketPath = context.Request.Path.Value?.StartsWith("/nats", StringComparison.OrdinalIgnoreCase) == true;
+        var isTunnelWebSocketPath = TryParseTunnelWebSocketRoute(
+            context.Request.Path,
+            out var tunnelAgentId,
+            out var tunnelSessionId);
 
         var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
 
         // Para NATS WS, o cliente pode enviar JWT em access_token na query string.
+        // Para /tunnel/ws, NUNCA aceitamos JWT longo em query string (?access_token=);
+        // apenas Authorization header ou ticket opaco de uso único (?ticket=).
         if (string.IsNullOrEmpty(authHeader) && isNatsWebSocketPath)
         {
             var queryToken = context.Request.Query["access_token"].FirstOrDefault();
@@ -59,6 +69,43 @@ public class UserAuthMiddleware
                 {
                     authHeader = $"Bearer {queryToken}";
                 }
+            }
+        }
+        else if (string.IsNullOrEmpty(authHeader) && isTunnelWebSocketPath)
+        {
+            var ticket = context.Request.Query["ticket"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(ticket))
+            {
+                var tunnelTicketService = context.RequestServices?.GetService<ITunnelTicketService>();
+                var principal = tunnelTicketService is not null
+                    ? await tunnelTicketService.ConsumeAsync(
+                        ticket,
+                        tunnelAgentId,
+                        tunnelSessionId,
+                        context.RequestAborted)
+                    : null;
+
+                if (principal is null)
+                {
+                    _logger.LogWarning(
+                        "UserAuthMiddleware: ticket de túnel inválido/expirado/reutilizado. AgentId={AgentId}, SessionId={SessionId}, Path={Path}",
+                        tunnelAgentId, tunnelSessionId, context.Request.Path.Value);
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsJsonAsync(new
+                    {
+                        message = "Ticket de túnel inválido, expirado ou já utilizado.",
+                        code = "invalid_tunnel_ticket"
+                    });
+                    return;
+                }
+
+                var claims = new[] { new Claim(ClaimTypes.NameIdentifier, principal.UserId.ToString()) };
+                context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "TunnelTicket"));
+                context.Items["UserId"] = principal.UserId;
+                context.Items["TunnelTicketAuth"] = true;
+
+                await _next(context);
+                return;
             }
         }
 
@@ -169,6 +216,38 @@ public class UserAuthMiddleware
         }
 
         await _next(context);
+    }
+
+    internal static bool TryParseTunnelWebSocketRoute(
+        PathString path,
+        out Guid agentId,
+        out Guid sessionId)
+    {
+        agentId = Guid.Empty;
+        sessionId = Guid.Empty;
+
+        var value = path.Value;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var segments = value.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // Padrão: api / v{version} / remote-sessions / {agentId} / {sessionId} / tunnel / ws
+        if (segments.Length != 7)
+            return false;
+
+        if (!string.Equals(segments[0], "api", StringComparison.OrdinalIgnoreCase)
+            || !segments[1].StartsWith('v')
+            || !string.Equals(segments[2], "remote-sessions", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(segments[5], "tunnel", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(segments[6], "ws", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return Guid.TryParse(segments[3], out agentId)
+            && Guid.TryParse(segments[4], out sessionId)
+            && agentId != Guid.Empty
+            && sessionId != Guid.Empty;
     }
 }
 

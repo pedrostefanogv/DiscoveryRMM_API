@@ -50,8 +50,8 @@ public class AgentAuthMiddleware
         }
         var rawToken = authHeader["Bearer ".Length..].Trim();
 
-        var token = await authService.ValidateTokenAsync(rawToken);
-        if (token is null)
+        var validation = await authService.ValidateTokenWithStatusAsync(rawToken);
+        if (validation is null)
         {
             _logger.LogWarning("[AgentAuth] 401: Invalid/expired token for {Path} (token prefix: {Prefix})",
                 path, rawToken.Length > 12 ? rawToken[..12] + "..." : "too short");
@@ -59,6 +59,7 @@ public class AgentAuthMiddleware
             await context.Response.WriteAsJsonAsync(new { error = "Invalid or expired token." });
             return;
         }
+        var token = validation.Token;
 
         if (isAgentApi)
         {
@@ -110,7 +111,8 @@ public class AgentAuthMiddleware
         // pode concluir o próprio descomissionamento, que usa exatamente um
         // endpoint (DELETE /agent-auth/me). Todo o resto (inventário, chamados,
         // sensores, automação...) é negado.
-        if (await IsTrashedAgentAsync(token.AgentId, agentLookup))
+        var isTrashed = validation.IsAgentTrashed ?? await IsTrashedAgentAsync(token.AgentId, agentLookup);
+        if (isTrashed)
         {
             if (!IsDecommissionEndpoint(path))
             {

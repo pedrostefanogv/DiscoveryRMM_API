@@ -6,13 +6,14 @@ namespace Discovery.Tests;
 public class RemoteConsentPolicyTests
 {
     [Test]
-    public void AppliesTo_only_desktop_kinds()
+    public void AppliesTo_desktop_rdp_and_proxy_kinds()
     {
         Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Screen), Is.True);
+        Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Rdp), Is.True);
+        Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Proxy), Is.True);
         Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.All), Is.True);
         Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Terminal), Is.False);
         Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Files), Is.False);
-        Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Proxy), Is.False);
         Assert.That(RemoteConsentPolicy.AppliesTo(RemoteSessionKind.Processes), Is.False);
     }
 

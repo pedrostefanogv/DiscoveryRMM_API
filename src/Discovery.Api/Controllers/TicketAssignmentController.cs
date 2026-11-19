@@ -56,7 +56,7 @@ public class TicketAssignmentController(
 
     /// <summary>Última decisão da triagem por IA para o chamado (com os candidatos).</summary>
     [HttpGet("{ticketId:guid}/decision")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetDecision(Guid ticketId)
     {
         // A decisão expõe os CANDIDATOS (nomes e competências do time) — é dado
@@ -70,7 +70,7 @@ public class TicketAssignmentController(
 
     /// <summary>Executa a triagem por IA e devolve a sugestão, sem alterar o chamado.</summary>
     [HttpPost("{ticketId:guid}/preview")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Preview(Guid ticketId)
     {
         if (await EnsureCanTreatAsync(ticketId, HttpContext.RequestAborted) is { } denied)
@@ -83,7 +83,7 @@ public class TicketAssignmentController(
 
     /// <summary>Executa a triagem por IA e aplica o responsável escolhido.</summary>
     [HttpPost("{ticketId:guid}/apply")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Apply(Guid ticketId)
     {
         // ATRIBUI o chamado: sem esta guarda um usuário de fora assumia o chamado.
@@ -101,7 +101,7 @@ public class TicketAssignmentController(
     /// não há um chamado único para aplicar a regra por registro.
     /// </summary>
     [HttpGet("decisions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> ListDecisions(
         [FromQuery] Guid? departmentId = null,
         [FromQuery] Guid? ticketId = null,

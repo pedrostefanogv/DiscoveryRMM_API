@@ -1,14 +1,14 @@
 # ADR: Background Jobs — Quartz.NET
 
 > **Status:** Implementado ✅  
-> **Data:** 2026-04-29  
+> **Data:** 2026-11-19 (atualizado para Quartz.NET 4.7.3)  
 > **Decisores:** Time DiscoveryRMM  
 
 ---
 
 ## Decisão
 
-Migrar todos os jobs agendados e recorrentes de `IHostedService` / `BackgroundService` para **Quartz.NET 3.14.0** com store in-memory, `[DisallowConcurrentExecution]` em todos os jobs, e dashboard administrativo via `JobsController`.
+Migrar todos os jobs agendados e recorrentes de `IHostedService` / `BackgroundService` para **Quartz.NET 4.7.3** com store in-memory, `[DisallowConcurrentExecution]` em todos os jobs, e dashboard administrativo via `JobsController`.
 
 Três serviços foram mantidos como `IHostedService` por design: `AgentPackagePrebuildHostedService` (one-time startup), `SyncPingDispatchBackgroundService` (padrão singleton com estado interno) e `AlertDispatchService` (scoped, não é background).
 
@@ -21,15 +21,27 @@ Três serviços foram mantidos como `IHostedService` por design: `AgentPackagePr
 | `LogPurgeJob` | `maintenance` | `0 0 3 * * ?` (3AM) | Purge de logs antigos |
 | `ReportRetentionJob` | `maintenance` | `0 0 4 * * ?` (4AM) | Purge de relatórios expirados |
 | `AiChatRetentionJob` | `maintenance` | `0 0 2 * * ?` (2AM) | Soft/hard delete de chat sessions |
+| `TicketChatMaintenanceJob` | `support-chat` | a cada 1 min | Expira convites e encerra sessões inativas/fechadas |
 | `P2pMaintenanceJob` | `maintenance` | a cada 15 min | Limpeza de P2P presence + seed plans |
-| `KnowledgeEmbeddingJob` | `kb` | a cada 30s | Re-chunking + embeddings em batch |
+| `DataRetentionJob` | `maintenance` | `0 30 3 * * ?` (3:30AM) | Purge de sessões, tokens, notificações, comandos e telemetria |
+| `DatabaseMaintenanceJob` | `maintenance` | `0 0 3 ? * SUN` (config) | VACUUM, REINDEX, ANALYZE, FREEZE conforme `DatabaseMaintenanceSettings` |
+| `KnowledgeEmbeddingJob` | `kb` | a cada 30s (config) | Re-chunking + embeddings em batch |
+| `TicketAnswerEmbeddingJob` | `kb` | a cada 60s (config) | Embeddings de respostas de questionários de tickets |
+| `WingetManifestsSyncJob` | `catalog` | a cada 360 min (config) | Sincronização do catálogo Winget via clone de manifestos |
 | `AlertSchedulerJob` | `alerts` | a cada 30s | Despacho de alertas agendados |
 | `SlaMonitoringJob` | `alerts` | a cada 5 min | Verificação de SLA + escalações |
 | `ReportGenerationJob` | `reports` | a cada 15s | Processamento de execuções de relatório |
+| `ReportScheduleDispatchJob` | `reports` | a cada 60s | Despacho de execuções agendadas de relatórios |
+| `SensorRollupJob` | `monitoring` | a cada 5 min | Agregação de amostras de sensores em rollups horários |
 | `AgentLabelingReconciliationJob` | `reconciliation` | a cada 10 min | Reconciliação de labels de agentes |
-| `MeshCentralIdentityReconciliationJob` | `reconciliation` | `0 0 * * * ?` (horário) | Backfill de identidade MeshCentral |
-| `MeshCentralGroupPolicyReconciliationJob` | `reconciliation` | `0 30 * * * ?` (hora:30) | Backfill de group policy MeshCentral |
-| `WingetCatalogSyncJob` | `catalog` | a cada N dias (config) | Sincronização do catálogo Winget |
+| `AiTicketAssignmentJob` | `ai-assignment` | a cada 20s (config) | Fila de triagem por IA e fallback de chamados sem responsável |
+| `TechnicianMetricsRefreshJob` | `ai-assignment` | tick 300s (config) | Snapshots de métricas por atendente para triagem por IA |
+| `AiAssignmentLearningJob` | `ai-assignment` | `0 30 4 * * ?` (config) | Ciclo diário de aprendizado da triagem por IA |
+| `TechnicianMetricsBackfillJob` | `ai-assignment` | a cada 30s (config) | Backfill em lotes dos snapshots de métricas |
+| `PatchAutoInstallJob` | `patches` | a cada 15 min (config) | Instala patches aprovados dentro da janela de manutenção |
+| `PatchRebootNoticeJob` | `patches` | a cada 15 min (config) | Política de aviso de reboot pendente (nunca reinicia) |
+| `PatchMaintenanceJob` | `patches` | `0 15 4 * * ?` (config) | Expira instalações de patch sem resultado e reconcilia aprovações |
+| `BackgroundProcessingScheduleSyncJob` | `maintenance` | a cada 120s (config) | Sincroniza o tick dos processamentos com a configuração global |
 
 ---
 
@@ -112,8 +124,8 @@ public sealed class SeuJob : IJob
 
 ## Referências
 
-- [Quartz.NET Documentation](https://www.quartz-scheduler.net/)
-- [Quartz.NET ASP.NET Core Integration](https://www.quartz-scheduler.net/documentation/quartz-3.x/packages/hosted-services-integration.html)
+- [Quartz.NET Documentation](https://www.quartz-scheduler.net/documentation/)
+- [Quartz.NET ASP.NET Core Integration](https://www.quartz-scheduler.net/documentation/)
 - Código: `src/Discovery.Api/DependencyInjection/QuartzServiceCollectionExtensions.cs`
 - Código: `src/Discovery.Api/Services/Quartz/*.cs`
 - API: `src/Discovery.Api/Controllers/JobsController.cs`

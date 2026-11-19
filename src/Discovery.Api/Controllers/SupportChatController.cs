@@ -73,7 +73,7 @@ public class SupportChatController(
     /// para o mesmo atendente o desfecho continua sendo devolvido.
     /// </summary>
     [HttpGet("agents/{agentId:guid}/sessions/current")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCurrentForAgent(Guid agentId, CancellationToken ct)
     {
         var session = await chatRepository.GetLatestForAgentAsync(agentId, ct);
@@ -90,7 +90,7 @@ public class SupportChatController(
 
     /// <summary>Abre a conversa com a máquina (ou devolve a sessão atual da máquina).</summary>
     [HttpPost("agents/{agentId:guid}/sessions")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> StartForAgent(Guid agentId, CancellationToken ct)
     {
         // Escopo: o atendente só abre conversa com máquina permitida no ACL.
@@ -115,7 +115,7 @@ public class SupportChatController(
 
     /// <summary>Snapshot incremental das mensagens da sessão.</summary>
     [HttpGet("sessions/{sessionId:guid}/messages")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetMessages(
         Guid sessionId,
         [FromQuery] long afterSequence = 0,
@@ -131,7 +131,7 @@ public class SupportChatController(
 
     /// <summary>Envia uma mensagem do atendente.</summary>
     [HttpPost("sessions/{sessionId:guid}/messages")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> SendMessage(
         Guid sessionId,
         [FromBody] SendTicketChatMessageRequest request,
@@ -157,7 +157,7 @@ public class SupportChatController(
 
     /// <summary>Encerra a sessão pelo suporte.</summary>
     [HttpPost("sessions/{sessionId:guid}/end")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> EndSession(Guid sessionId, CancellationToken ct)
     {
         if (await ResolveSessionAsync(sessionId, ActionType.Edit, ct) is null)
@@ -169,7 +169,7 @@ public class SupportChatController(
 
     /// <summary>Reenvia o convite de uma sessão pendente.</summary>
     [HttpPost("sessions/{sessionId:guid}/invite/retry")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> RetryInvite(Guid sessionId, CancellationToken ct)
     {
         if (await ResolveSessionAsync(sessionId, ActionType.Edit, ct) is null)
@@ -192,7 +192,7 @@ public class SupportChatController(
 
     /// <summary>Heartbeat: o atendente está com a janela desta conversa aberta e em foco.</summary>
     [HttpPost("sessions/{sessionId:guid}/presence")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> TouchPresence(Guid sessionId, [FromQuery] string? clientId, CancellationToken ct)
     {
         if (CurrentUserId is not { } userId)
@@ -207,7 +207,7 @@ public class SupportChatController(
 
     /// <summary>Limpa a presença (janela fechada, aba oculta ou ao desmontar a tela).</summary>
     [HttpDelete("sessions/{sessionId:guid}/presence")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> ClearPresence(Guid sessionId, [FromQuery] string? clientId, CancellationToken ct)
     {
         if (CurrentUserId is { } userId)
@@ -220,7 +220,7 @@ public class SupportChatController(
 
     /// <summary>Prepara o upload direto no object storage para um anexo do chat.</summary>
     [HttpPost("sessions/{sessionId:guid}/attachments/presigned-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> PrepareAttachmentUpload(
         Guid sessionId,
         [FromBody] PresignedUploadRequestDto req,
@@ -260,7 +260,7 @@ public class SupportChatController(
 
     /// <summary>Finaliza o upload pré-assinado e persiste o anexo do chat.</summary>
     [HttpPost("sessions/{sessionId:guid}/attachments/complete-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CompleteAttachmentUpload(
         Guid sessionId,
         [FromBody] CompleteUploadRequestDto req,
@@ -315,7 +315,7 @@ public class SupportChatController(
 
     /// <summary>Baixa um anexo do chat (streaming same-origin).</summary>
     [HttpGet("sessions/{sessionId:guid}/attachments/{attachmentId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> DownloadAttachment(Guid sessionId, Guid attachmentId, CancellationToken ct)
     {
         var session = await ResolveSessionAsync(sessionId, ActionType.View, ct);

@@ -89,26 +89,15 @@ public class AgentCustomFileDownloadTests
         return httpContext.Response.StatusCode;
     }
 
-    private static AgentAuthController NewController()
+    private static AgentAuthKnowledgeAndStoreController NewController()
     {
-        var controller = new AgentAuthController(
+        var controller = new AgentAuthKnowledgeAndStoreController(
             mediator: null!,
             agentRepo: new FakeAgentRepository(new Agent { Id = AgentId, SiteId = SiteId, Hostname = "host" }),
             siteRepo: new FakeSiteRepository(new Site { Id = SiteId, ClientId = Guid.NewGuid(), Name = "site" }),
-            workflowRepo: null!,
-            aiChat: null!,
-            departmentRepo: null!,
-            workflowProfileRepo: null!,
-            departmentCustomFieldService: null!,
-            ticketFormSchemaService: null!,
-            p2pService: null!,
             attachmentService: null!,
             attachmentRepository: null!,
-            knowledgeArticleRepository: null!,
-            notificationService: null!,
-            sensorSync: null!,
-            sensorIngestion: null!,
-            logger: NullLogger<AgentAuthController>.Instance);
+            knowledgeArticleRepository: null!);
 
         var httpContext = new DefaultHttpContext();
         httpContext.Items["AgentId"] = AgentId;

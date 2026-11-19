@@ -4,6 +4,7 @@ using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using MediatR;
@@ -18,7 +19,7 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v{version:apiVersion}/agents/{agentId:guid}/windows-updates")]
-[RequirePermission(ResourceType.Patches, ActionType.View)]
+[RequirePermission(ResourceType.Patches, ActionType.View, ScopeSource.AccessList)]
 public sealed class AgentPatchesController(
     IMediator mediator,
     IAgentRepository agentRepo,
@@ -75,7 +76,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("scan")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> Scan(Guid agentId, [FromBody] ScanRequest? request = null, CancellationToken ct = default)
     {
         var forbidden = await EnsureAgentAccessAsync(agentId, ActionType.Execute);
@@ -93,7 +94,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("{updateKey}/install")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> Install(
         Guid agentId,
         string updateKey,
@@ -125,7 +126,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("install-approved")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> InstallApproved(
         Guid agentId,
         [FromBody] InstallApprovedRequest? request = null,
@@ -143,7 +144,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("{updateKey}/approve")]
-    [RequirePermission(ResourceType.Patches, ActionType.Edit)]
+    [RequirePermission(ResourceType.Patches, ActionType.Edit, ScopeSource.AccessList)]
     public Task<IActionResult> Approve(
         Guid agentId,
         string updateKey,
@@ -152,7 +153,7 @@ public sealed class AgentPatchesController(
         => SetApproval(agentId, updateKey, request, PatchApprovalActionType.Approve, ct);
 
     [HttpPost("{updateKey}/deny")]
-    [RequirePermission(ResourceType.Patches, ActionType.Edit)]
+    [RequirePermission(ResourceType.Patches, ActionType.Edit, ScopeSource.AccessList)]
     public Task<IActionResult> Deny(
         Guid agentId,
         string updateKey,
@@ -196,7 +197,7 @@ public sealed class AgentPatchesController(
         string? Reason = null);
 
     [HttpPost("approve-pending")]
-    [RequirePermission(ResourceType.Patches, ActionType.Edit)]
+    [RequirePermission(ResourceType.Patches, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> ApprovePending(
         Guid agentId,
         [FromBody] ApprovePendingRequest? request = null,
@@ -216,7 +217,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("os-policy/apply")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ApplyOsPolicy(
         Guid agentId,
         [FromBody] OsPolicyRequest? request = null,
@@ -234,7 +235,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("os-policy/rollback")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> RollbackOsPolicy(Guid agentId, CancellationToken ct = default)
     {
         var forbidden = await EnsureAgentAccessAsync(agentId, ActionType.Execute);
@@ -246,7 +247,7 @@ public sealed class AgentPatchesController(
     }
 
     [HttpPost("bulk")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> Bulk(
         Guid agentId,
         [FromBody] BulkRequest request,
@@ -279,8 +280,8 @@ public sealed class AgentPatchesController(
         if (site is null)
             return NotFound(new { error = "Site not found." });
 
-        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, action);
-        if (access.HasGlobalAccess || access.AllowedClientIds.Contains(site.ClientId))
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, action);
+        if (TenantScopePolicy.Allows(access, site.ClientId, agent.SiteId))
             return null;
 
         return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este agente." });

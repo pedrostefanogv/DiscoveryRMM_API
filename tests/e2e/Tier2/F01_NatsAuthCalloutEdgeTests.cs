@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Discovery.Api.Services;
 using Discovery.E2E.Tests.Harness;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -198,27 +199,51 @@ public class F01_NatsAuthCalloutEdgeTests
     }
 
     [Test]
-    public async Task T2_F01_05_Duplicate_MdzToken_Connection_Is_Rejected_When_Redis_Session_Active()
+    public async Task T2_F01_05_Same_Agent_Reconnect_Succeeds_And_Cross_Agent_Reuse_Is_Rejected()
     {
         using var svc = CreateCalloutService();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await svc.StartAsync(cts.Token);
         await _natsServer.WaitForSubscriptionAsync("$SYS.REQ.USER.AUTH");
 
+        // (a) First connection by Agent A1 acquires the Redis session lock.
         using var eph1 = KeyPair.CreatePair(PrefixByte.User);
         var req1 = NatsAuthCalloutTestHelper.BuildSignedAuthRequestJwt(_serverKeyPair, eph1.GetPublicKey(), authToken: _world.AgentTokenA1);
         var reply1 = await _natsServer.RequestAsync("$SYS.REQ.USER.AUTH", Encoding.UTF8.GetBytes(req1));
         var decoded1 = NatsAuthCalloutTestHelper.DecodeAuthResponse(reply1.PayloadText, _accountKeyPair);
         Assert.That(decoded1.Jwt, Is.Not.Null);
 
-        // Second distinct connection with DIFFERENT ephemeral user_nkey reusing same mdz_ token
+        // Same agent A1 reconnects with a DIFFERENT ephemeral user_nkey (NATS issues a new ephemeral key per connection).
         using var eph2 = KeyPair.CreatePair(PrefixByte.User);
         var req2 = NatsAuthCalloutTestHelper.BuildSignedAuthRequestJwt(_serverKeyPair, eph2.GetPublicKey(), authToken: _world.AgentTokenA1);
         var reply2 = await _natsServer.RequestAsync("$SYS.REQ.USER.AUTH", Encoding.UTF8.GetBytes(req2));
         var decoded2 = NatsAuthCalloutTestHelper.DecodeAuthResponse(reply2.PayloadText, _accountKeyPair);
+        Assert.That(decoded2.Jwt, Is.Not.Null, "Legitimate reconnect by same agent with a new ephemeral user_nkey must succeed.");
+        Assert.That(decoded2.Error, Is.Null);
 
-        Assert.That(decoded2.Jwt, Is.Null);
-        Assert.That(decoded2.Error, Does.Contain("already in use"));
+        // (b) Cross-agent token reuse rejection:
+        // Simulate Agent A1 holding an active Redis session for Agent B1's tokenId;
+        // Agent B1 attempting to authenticate against that active session must be rejected.
+        var tokenB1 = await _host.WithDbAsync(db =>
+            db.AgentTokens.SingleAsync(t => t.AgentId == _world.AgentB1.Id));
+
+        await _host.FakeRedis.SetAsync(
+            $"nats:session:token:{tokenB1.Id}",
+            JsonSerializer.Serialize(new
+            {
+                agentId = _world.AgentA1.Id.ToString(),
+                userNkey = eph1.GetPublicKey(),
+                acquiredAt = DateTime.UtcNow.ToString("O")
+            }),
+            expirySeconds: 300);
+
+        using var eph3 = KeyPair.CreatePair(PrefixByte.User);
+        var req3 = NatsAuthCalloutTestHelper.BuildSignedAuthRequestJwt(_serverKeyPair, eph3.GetPublicKey(), authToken: _world.AgentTokenB1);
+        var reply3 = await _natsServer.RequestAsync("$SYS.REQ.USER.AUTH", Encoding.UTF8.GetBytes(req3));
+        var decoded3 = NatsAuthCalloutTestHelper.DecodeAuthResponse(reply3.PayloadText, _accountKeyPair);
+
+        Assert.That(decoded3.Jwt, Is.Null);
+        Assert.That(decoded3.Error, Does.Contain("already in use"));
 
         await svc.StopAsync(CancellationToken.None);
     }

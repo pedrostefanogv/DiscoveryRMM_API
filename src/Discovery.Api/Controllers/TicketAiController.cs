@@ -57,7 +57,7 @@ public class TicketAiController(
 
     /// <summary>Sugestão de triagem: categoria, prioridade e departamento.</summary>
     [HttpPost("triage")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> Triage(Guid id, CancellationToken ct)
     {
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;
@@ -68,7 +68,7 @@ public class TicketAiController(
 
     /// <summary>Resumo executivo do ticket.</summary>
     [HttpPost("summarize")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> Summarize(Guid id, CancellationToken ct)
     {
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;
@@ -79,7 +79,7 @@ public class TicketAiController(
 
     /// <summary>Sugestão de resposta ao cliente.</summary>
     [HttpPost("suggest-reply")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> SuggestReply(Guid id, CancellationToken ct)
     {
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;
@@ -93,7 +93,7 @@ public class TicketAiController(
     /// artigo é GRAVADO: além de tratar o chamado, exige escrita na KB.
     /// </summary>
     [HttpPost("draft-kb-article")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> DraftKbArticle(Guid id, [FromQuery] bool persist = false, CancellationToken ct = default)
     {
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;

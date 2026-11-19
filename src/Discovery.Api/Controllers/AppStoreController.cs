@@ -40,7 +40,7 @@ public class AppStoreController(
 
     /// <summary>Search/browse catalog by installation type (0=Winget, 1=Chocolatey, 2=Custom).</summary>
     [HttpGet]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> Search(
         [FromQuery] int installationType = 0,
         [FromQuery] string? search = null,
@@ -55,7 +55,7 @@ public class AppStoreController(
 
     /// <summary>List catalog with pagination by cursor.</summary>
     [HttpGet("catalog")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetCatalog(
         [FromQuery] int installationType = 0,
         [FromQuery] string? search = null,
@@ -69,7 +69,7 @@ public class AppStoreController(
 
     /// <summary>Get a single package by ID and installation type.</summary>
     [HttpGet("catalog/{packageId}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetPackageById(
         string packageId,
         [FromQuery] int installationType = 0)
@@ -86,7 +86,7 @@ public class AppStoreController(
 
     /// <summary>Create or update a custom package (InstallationType=Custom).</summary>
     [HttpPost("custom")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> UpsertCustomPackage([FromBody] UpsertCustomAppPackageCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -100,7 +100,7 @@ public class AppStoreController(
     /// Multipart/form-data com o arquivo no campo "file" e ?kind=installer|icon.
     /// </summary>
     [HttpPost("custom/assets")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     [RequestSizeLimit(5_368_709_120)]
     [RequestFormLimits(MultipartBodyLengthLimit = 5_368_709_120)]
     public async Task<IActionResult> UploadCustomAsset(
@@ -143,7 +143,7 @@ public class AppStoreController(
     /// remonta o arquivo antes de publicar no object storage.
     /// </summary>
     [HttpPost("custom/assets/session")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public IActionResult CreateCustomAssetUploadSession([FromBody] CustomAssetUploadRequest request)
     {
         var kind = (request?.Kind ?? string.Empty).Trim().ToLowerInvariant();
@@ -185,7 +185,7 @@ public class AppStoreController(
 
     /// <summary>Recebe um bloco do upload em partes (corpo binário cru, até 64 MiB).</summary>
     [HttpPut("custom/assets/session/{uploadId}/part/{index:int}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     [RequestSizeLimit(CustomAssetPartLimitBytes)]
     public async Task<IActionResult> UploadCustomAssetPart(string uploadId, int index, CancellationToken ct)
     {
@@ -210,7 +210,7 @@ public class AppStoreController(
 
     /// <summary>Finaliza o upload em partes e publica o asset no object storage.</summary>
     [HttpPost("custom/assets/session/{uploadId}/complete")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CompleteCustomAssetUpload(
         string uploadId,
         [FromServices] ICustomPackageAssetService assets,
@@ -241,7 +241,7 @@ public class AppStoreController(
 
     /// <summary>Aborta uma sessão de upload em partes e limpa o temporário.</summary>
     [HttpDelete("custom/assets/session/{uploadId}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public IActionResult AbortCustomAssetUpload(string uploadId)
     {
         if (CustomAssetUploads.TryRemove(uploadId, out var session))
@@ -260,7 +260,7 @@ public class AppStoreController(
 
     /// <summary>Cria o multipart upload direto no storage.</summary>
     [HttpPost("custom/assets/multipart")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CreateCustomAssetMultipartUpload(
         [FromBody] CustomAssetMultipartRequest request,
         [FromServices] ICustomPackageAssetService assets,
@@ -316,7 +316,7 @@ public class AppStoreController(
     /// um envio interrompido (o storage é a fonte de verdade das partes).
     /// </summary>
     [HttpGet("custom/assets/multipart/{uploadId}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> GetCustomAssetMultipartStatus(
         string uploadId,
         [FromServices] ICustomPackageAssetService assets,
@@ -346,7 +346,7 @@ public class AppStoreController(
     /// Blocos já recebidos podem ser reconferidos com GET do estado.
     /// </summary>
     [HttpPost("custom/assets/multipart/{uploadId}/parts")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> GetCustomAssetMultipartPartUrls(
         string uploadId,
         [FromBody] CustomAssetPartUrlRequest? request,
@@ -402,7 +402,7 @@ public class AppStoreController(
     /// upload único). Sem ETags no corpo, a API usa as partes que o storage tem.
     /// </summary>
     [HttpPost("custom/assets/multipart/{uploadId}/complete")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CompleteCustomAssetMultipartUpload(
         string uploadId,
         [FromBody] CustomAssetMultipartCompleteRequest? request,
@@ -566,7 +566,7 @@ public class AppStoreController(
 
     /// <summary>Aborta o multipart (o storage descarta as partes enviadas).</summary>
     [HttpDelete("custom/assets/multipart/{uploadId}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> AbortCustomAssetMultipartUpload(
         string uploadId,
         [FromServices] ICustomPackageAssetService assets,
@@ -853,7 +853,7 @@ public class AppStoreController(
     /// permanecem no object storage. Exige confirm = packageId.
     /// </summary>
     [HttpDelete("custom/{packageId}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> DeleteCustomPackage(string packageId, [FromBody] DeleteCustomPackageRequest? request, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteCustomAppPackageCommand(
@@ -870,7 +870,7 @@ public class AppStoreController(
     /// excluídas no soft delete — a resposta avisa que precisam ser recadastradas.
     /// </summary>
     [HttpPost("custom/{packageId}/restore")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> RestoreCustomPackage(string packageId, CancellationToken ct)
     {
         var result = await mediator.Send(new RestoreCustomAppPackageCommand(packageId), ct);
@@ -888,7 +888,7 @@ public class AppStoreController(
     /// sem tocar no storage (o varredor de órfãos remove o arquivo depois).
     /// </summary>
     [HttpDelete("custom/{packageId}/permanent")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> PurgeCustomPackage(
         string packageId,
         [FromQuery] string? confirm = null,
@@ -929,7 +929,7 @@ public class AppStoreController(
 
     /// <summary>Lixeira de pacotes custom (só excluídos), com busca e paginação por cursor.</summary>
     [HttpGet("custom/trash")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetCustomTrash(
         [FromServices] IAppPackageRepository packages,
         [FromQuery] string? search = null,
@@ -973,7 +973,7 @@ public class AppStoreController(
     /// pacote não existe mais no catálogo — as regras "sem nome" na aba Aprovações.
     /// </summary>
     [HttpPost("approvals/orphans/cleanup")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> CleanupOrphanApprovals([FromQuery] bool dryRun = true, CancellationToken ct = default)
     {
         var result = await mediator.Send(new CleanupOrphanApprovalRulesCommand(dryRun, Username), ct);
@@ -988,7 +988,7 @@ public class AppStoreController(
     /// ícone), permitindo enviar outro arquivo em seguida. 204 em caso de sucesso.
     /// </summary>
     [HttpDelete("custom/{packageId}/file")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> DeleteCustomPackageFile(string packageId, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteCustomAppPackageFileCommand(packageId), ct);
@@ -1004,7 +1004,7 @@ public class AppStoreController(
     /// instalador). O objeto também é apagado do object storage. 204 em caso de sucesso.
     /// </summary>
     [HttpDelete("custom/{packageId}/icon")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> DeleteCustomPackageIcon(string packageId, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteCustomAppPackageIconCommand(packageId), ct);
@@ -1024,7 +1024,7 @@ public class AppStoreController(
     /// Consulte o progresso/resultado via GET sync/status. Custom (2) é manual.
     /// </summary>
     [HttpPost("sync")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public IActionResult SyncCatalog(
         [FromServices] AppCatalogBackgroundSyncService backgroundSync,
         [FromQuery] int installationType = 0)
@@ -1046,7 +1046,7 @@ public class AppStoreController(
     /// persistida no ServerConfiguration (manual ou automática via Quartz).
     /// </summary>
     [HttpGet("sync/status")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetSyncStatus(
         [FromServices] AppCatalogBackgroundSyncService backgroundSync,
         [FromServices] IAppCatalogSyncStatusStore statusStore,
@@ -1080,7 +1080,7 @@ public class AppStoreController(
 
     /// <summary>Get approved/effective apps for a scope.</summary>
     [HttpGet("effective")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetEffective(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,
@@ -1098,7 +1098,7 @@ public class AppStoreController(
 
     /// <summary>List approval rules by scope and installation type.</summary>
     [HttpGet("approvals")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetApprovals(
         [FromQuery] int? scopeType = null,
         [FromQuery] Guid? scopeId = null,
@@ -1115,7 +1115,7 @@ public class AppStoreController(
     /// o escopo herda e o que ele sobrescreve.
     /// </summary>
     [HttpGet("approvals/resolved")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetResolvedApprovals(
         [FromQuery] int scopeType = 0,
         [FromQuery] Guid? scopeId = null,
@@ -1136,7 +1136,7 @@ public class AppStoreController(
     /// vigente. Somente leitura — a tela usa para simular e apontar conflitos.
     /// </summary>
     [HttpGet("approvals/update-intent")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetUpdateIntent(
         [FromQuery] int scopeType = 0,
         [FromQuery] Guid? scopeId = null,
@@ -1153,7 +1153,7 @@ public class AppStoreController(
 
     /// <summary>Create/update an approval rule.</summary>
     [HttpPost("approvals")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Edit)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> UpsertApproval([FromBody] UpsertAppApprovalRuleCommand cmd)
     {
         var result = await mediator.Send(cmd with { ChangedBy = Username, IpAddress = ClientIp });
@@ -1164,7 +1164,7 @@ public class AppStoreController(
 
     /// <summary>Delete an approval rule.</summary>
     [HttpDelete("approvals/{ruleId:guid}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.Delete)]
+    [RequirePermission(ResourceType.AppStore, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> DeleteApproval(
         Guid ruleId,
         [FromQuery] string? reason = null)
@@ -1188,7 +1188,7 @@ public class AppStoreController(
 
     /// <summary>Audit history for approval changes.</summary>
     [HttpGet("approvals/audit")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetApprovalAudit(
         [FromQuery] int? installationType = null,
         [FromQuery] string? packageId = null,
@@ -1214,7 +1214,7 @@ public class AppStoreController(
 
     /// <summary>Get diff for a single package across scope hierarchy.</summary>
     [HttpGet("diff/{packageId}")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetPackageDiff(
         string packageId,
         [FromQuery] int installationType = 0,
@@ -1228,7 +1228,7 @@ public class AppStoreController(
 
     /// <summary>Get effective diffs across a scope.</summary>
     [HttpGet("diff/effective")]
-    [RequirePermission(ResourceType.AppStore, ActionType.View)]
+    [RequirePermission(ResourceType.AppStore, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetEffectiveDiffs(
         [FromQuery] int scopeType = 0,
         [FromQuery] Guid? scopeId = null,

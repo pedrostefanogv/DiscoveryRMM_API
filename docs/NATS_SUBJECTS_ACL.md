@@ -1,6 +1,6 @@
 # NATS Subjects + ACL - Padrao Operacional DiscoveryRMM
 
-> Versao: 1.3.1 | Data: 2026-07-28
+> Versao: 1.4.0 | Data: 2026-11-19
 > Escopo: Servidor (C#), Agent (Go), Frontend (JS/TS)
 > Fonte de verdade complementar: CONTRATO_COMUNICACAO_REALTIME.md (v4.2.0)
 
@@ -10,9 +10,10 @@
 
 | Versao | Data       | Mudancas                                                                                                                                                                                                                                                                         |
 | ------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.4.0  | 2026-11-19 | R2 Proxy LAN, WebRDP e transferencia binaria de arquivos: documentados `.files.data`, `.proxy.ready`, `.tunnel.in`, `.tunnel.out`, `RemoteSessionRights` (`NoProxy = 64`, `NoRdp = 128`) e streams JetStream isolados por tenant (`DISCOVERY_FANOUT_COMMANDS_{clientIdN}`, `DISCOVERY_SUPPORT_CHAT_{clientIdN}`). |
 | 1.3.2  | 2026-10-11 | Ingestao da gravacao de terminal (WP3): documentado `remote.session.{sessionId}.recording.term` (Agent -> Servidor), permissao de subscribe do servidor e permissao de publish do AgentIdentity para o NDJSON do terminal. |
-| 1.3.1  | 2026-07-28 | Correcao da ACL do perfil `AgentIdentity`: adicionados subjects `remote.session.{id}.*` de publish (`.frame`, `.event`, `.recording.frame`) e subscribe (`.control`, `.input`, `.term.in`, `.files.req`, `.proxy.req`, `.signal`) para suporte ao acesso remoto nativo via NATS. |
-| 1.3.0  | 2026-07-27 | Inclusao do perfil `RemoteSessionParticipant` com ACL scoped por sessao (`remote.session.{id}.*`). Publisher/Subscriber para acesso remoto nativo (screen, terminal, files, proxy, recording, WebRTC signaling).                                                                 |
+| 1.3.1  | 2026-07-28 | Correcao da ACL do perfil `AgentIdentity`: adicionados subjects `remote.session.{id}.*` de publish (`.frame`, `.event`, `.recording.frame`) e subscribe (`.control`, `.input`, `.term.in`, `.files.req`, `.proxy.req`, `.tunnel.in`) para suporte ao acesso remoto nativo via NATS. |
+| 1.3.0  | 2026-07-27 | Inclusao do perfil `RemoteSessionParticipant` com ACL scoped por sessao (`remote.session.{id}.*`). Publisher/Subscriber para acesso remoto nativo (screen, terminal, files, proxy, recording, sinalizacao de sessao). |
 | 1.2.0  | 2026-05-13 | Priorizacao de `tenant.{c}.p2p.events` para descoberta P2P por cliente; permissao de subscribe para AgentIdentity; `tenant.{c}.site.{s}.p2p.discovery` marcado como descontinuado.                                                                                               |
 | 1.1.0  | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`), envelope de dispatch com idempotencia e ACL dedicada para fan-out sem loop agente-a-agente.                                                                                                                |
 | 1.0.0  | 2026-05-05 | Versao inicial consolidada de subjects e ACL.                                                                                                                                                                                                                                    |
@@ -65,24 +66,26 @@ Este documento consolida:
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.ready`     | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{rootPath, status}` — sinaliza subscribe ativo             |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`       | Viewer -> Agent                | Viewer           | Agent                                 | JSON: `{version, requestId, action, path, chunkIndex?, data?}`    |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`      | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{version, requestId, success, entries?, data?, ...}`       |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.data`      | Agent -> Viewer                | Agent            | Viewer                                | Binario: `'DF'` (`0x44, 0x46`) + `uint32 BE headerLen` + JSON + bytes |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.ready`     | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{status, allowlist, allowedPorts, maxResponseBytes, allowLoopback}` |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`       | Viewer -> Agent                | Viewer           | Agent                                 | JSON: `{method, url, headers, body?}`                             |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`      | Agent -> Viewer                | Agent            | Viewer                                | JSON: `{status, headers, body?, error?}`                          |
-| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`          | Bidirecional                   | Viewer/Agent     | Agent/Viewer                          | JSON: SDP offer/answer + ICE candidates                           |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.tunnel.in`       | Viewer/API WS -> Agent         | Viewer/API WS    | Agent                                 | Multiplexado: JSON controle (`0x7B`) ou binario `[0x01][op][4B streamId BE][payload]` |
+| `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.tunnel.out`      | Agent -> Viewer/API WS         | Agent            | Viewer/API WS                         | Multiplexado: JSON controle (`0x7B`) ou binario `[0x01][op][4B streamId BE][payload]` |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.frame` | Agent -> Servidor              | Agent            | Servidor                              | Binario: header + frame                                           |
 | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.term` | Agent -> Servidor              | Agent            | Servidor                              | JSON `TermRecordingFrame` (NDJSON incremental; `kind` = output/ready/resize/exit/error) |
 | `tenant.{c}.site.{s}.agent.{a}.supportchat.server`                       | Servidor -> Agent              | Servidor         | Agent (durable JetStream)             | `TicketChatEnvelope` (sessao aberta/encerrada + mensagem do atendente) |
 | `tenant.{c}.site.{s}.agent.{a}.supportchat.agent`                        | Agent -> Servidor              | Agent            | Servidor                              | `TicketChatEnvelope` (mensagem do usuario final + resposta ao convite) |
 
-### 2.1 Chat de suporte vinculado ao chamado (JetStream `DISCOVERY_SUPPORT_CHAT`)
+### 2.1 Streams JetStream por tenant (`DISCOVERY_FANOUT_COMMANDS_{clientIdN}` e `DISCOVERY_SUPPORT_CHAT_{clientIdN}`)
 
-O chat de suporte e o unico recurso que exige **durabilidade funcional** no NATS:
-uma mensagem do atendente enviada enquanto o agent esta reconectando NAO pode se
-perder.
+O provisionamento de streams JetStream e isolado por tenant (`clientId` sem hifens em `clientIdN`, via `NatsTenantStreamProvisioner`), garantindo que ACLs de agentes nao consigam ler comandos ou mensagens de outros clientes:
 
-- Stream: `DISCOVERY_SUPPORT_CHAT` (`Nats:SupportChatStream`), sujeito unico
-  `tenant.*.site.*.agent.*.supportchat.*`, `Retention=Limits`, `Storage=File`,
-  `MaxAge=24h`, `DuplicateWindow=2m`. O stream e criado/atualizado no startup da
-  API por `NatsSupportChatStreamBootstrapService` (espelho do fan-out).
+- Fan-out de comandos: `DISCOVERY_FANOUT_COMMANDS_{clientIdN}` (`tenant.{c}.agents.command`, `tenant.{c}.site.*.agents.command`) + stream global dedicado (`DISCOVERY_FANOUT_COMMANDS_GLOBAL` para `tenant.global.agents.command`).
+- Chat de suporte: `DISCOVERY_SUPPORT_CHAT_{clientIdN}` (`Nats:SupportChatStream`), sujeito por tenant
+  `tenant.{c}.site.*.agent.*.supportchat.*`, `Retention=Limits`, `Storage=File`,
+  `MaxAge=24h`, `DuplicateWindow=2m`. O stream global e criado/atualizado no startup da
+  API e os streams por tenant sao provisionados sob demanda por `NatsTenantStreamProvisioner`.
 - Servidor -> agent: consumer **duravel** no agent
   (`agent-{agentId}-supportchat`, `AckExplicit` + `ManualAck` + `DeliverAll`) —
   replay a partir do ultimo Ack apos reconexao/restart.
@@ -326,24 +329,27 @@ Ativacao da logica de sobrecarga (servidor):
 | SiteUser                 | `tenant.{c}.site.{s}.dashboard.events`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | nenhum                                                                                                                                                                                                                                                                                                                                                                                                              | qualquer wildcard fora do site, subjects operacionais          |
 | ClientManager            | `tenant.{c}.site.*.dashboard.events`, `tenant.{c}.dashboard.events`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | nenhum                                                                                                                                                                                                                                                                                                                                                                                                              | outros clientes, subjects operacionais                         |
 | GlobalAdmin              | `tenant.*.site.*.dashboard.events`, `tenant.*.dashboard.events`, `tenant.unscoped.dashboard.events`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | nenhum                                                                                                                                                                                                                                                                                                                                                                                                              | publish pelo browser                                           |
-| AgentIdentity            | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.control`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.input`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.in`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal` | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.frame`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.event`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.frame`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.recording.term` | bloquear subscribe/publish fora do escopo do tenant/site/agent |
+| AgentIdentity            | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`, `tenant.global.pong`, `tenant.{c}.site.{s}.agent.{a}.sync.ping`, `tenant.{c}.p2p.events`, `tenant.{c}.site.{s}.agent.{a}.remote.session.>` (incl. `.control`, `.input`, `.term.in`, `.files.req`, `.proxy.req`, `.tunnel.in`) | `tenant.{c}.site.{s}.agent.{a}.heartbeat`, `tenant.{c}.site.{s}.agent.{a}.result`, `tenant.{c}.site.{s}.agent.{a}.hardware`, `tenant.{c}.site.{s}.agent.{a}.remote-debug.log`, `tenant.{c}.site.{s}.agent.{a}.remote.session.>` (incl. `.frame`, `.event`, `.files.resp`, `.files.data`, `.proxy.ready`, `.proxy.resp`, `.tunnel.out`, `.recording.frame`, `.recording.term`) | bloquear subscribe/publish fora do escopo do tenant/site/agent |
 | ServerCommandPublisher   | `tenant.*.site.*.agent.*.result`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `tenant.{c}.site.{s}.agent.{a}.command`, `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command`, `tenant.global.agents.command`                                                                                                                                                                                                                                                                          | nao expor credencial no browser                                |
 | BackendInternal          | conforme servico                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | opcional e restrito                                                                                                                                                                                                                                                                                                                                                                                                 | nao reutilizar token de backend no browser                     |
-| RemoteSessionParticipant | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.frame`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.event`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.out`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.stats`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.completion.res`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.resp`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`                                                                                                                                                                                                                                      | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.input`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.ack`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.term.in`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.completion.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`, `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal` | apenas subjects da propria sessao; JWT scoped por sessionId    |
+| RemoteSessionParticipant | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.*` conforme `RemoteSessionKind` e `RemoteSessionRights`: `.frame`, `.frame.frag`, `.monitors`, `.stats`, `.control`, `.cursor`, `.cursor.img`, `.event`, `.clipboard`, `.term.out`, `.term.ready`, `.completion.res`, `.files.ready`, `.files.resp`, `.files.data` (`!NoFiles`), `.files.progress`, `.proxy.resp` (`Proxy`/`All` e `!NoProxy`), `.proxy.ready` e `.tunnel.out` (`Proxy`/`Rdp`/`All` e `!NoProxy`/`!NoRdp`), `.proc.resp`, `.proc.ready` | `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.*` conforme `RemoteSessionKind` e `RemoteSessionRights`: `.ack`, `.control`, `.input` (`!ViewOnly && !LimitedInput`), `.term.in` & `.completion.req` (`!NoTerminal`), `.files.req` (`!NoFiles`), `.proxy.req` (`Proxy`/`All` e `!NoProxy`), `.tunnel.in` (`Proxy`/`Rdp`/`All` e `!NoProxy`/`!NoRdp`), `.proc.req`, `.clipboard.req` (`!ViewOnly`) | apenas subjects da propria sessao; JWT scoped por sessionId e `RemoteSessionRights` (`NoProxy = 64`, `NoRdp = 128`) |
 
-### 5.1.1 Complemento do perfil `AgentIdentity` — chat de suporte
+### 5.1.1 Complemento do perfil `AgentIdentity` — JetStream isolado por tenant (fan-out e chat de suporte)
 
-Adicionados ao perfil `AgentIdentity` (mesmo tratamento dado a `remote.session`):
+Adicionados ao perfil `AgentIdentity` com streams isolados por tenant (`{clientIdN}` sem hifens):
 
 - `sub.allow`: `tenant.{c}.site.{s}.agent.{a}.supportchat.server`
 - `pub.allow`: `tenant.{c}.site.{s}.agent.{a}.supportchat.agent`
-- `pub.allow` (JetStream do consumer duravel):
-  `$JS.API.CONSUMER.INFO.DISCOVERY_SUPPORT_CHAT.>`,
-  `$JS.API.CONSUMER.CREATE.DISCOVERY_SUPPORT_CHAT.>`,
-  `$JS.API.CONSUMER.MSG.NEXT.DISCOVERY_SUPPORT_CHAT.>`
+- `pub.allow` (JetStream por tenant para fan-out e chat de suporte, além de `DISCOVERY_FANOUT_COMMANDS_GLOBAL`):
+  `$JS.API.STREAM.INFO.DISCOVERY_FANOUT_COMMANDS_{clientIdN}`,
+  `$JS.API.CONSUMER.{INFO|CREATE|MSG.NEXT}.DISCOVERY_FANOUT_COMMANDS_{clientIdN}.>`,
+  `$JS.ACK.DISCOVERY_FANOUT_COMMANDS_{clientIdN}.>`,
+  `$JS.API.STREAM.INFO.DISCOVERY_SUPPORT_CHAT_{clientIdN}`,
+  `$JS.API.CONSUMER.{INFO|CREATE|MSG.NEXT}.DISCOVERY_SUPPORT_CHAT_{clientIdN}.>`,
+  `$JS.ACK.DISCOVERY_SUPPORT_CHAT_{clientIdN}.>`
 
-Os subjects sao do escopo EXATO do agent (sem wildcard multi-tenant) e ha teste
-de isolamento cobrindo a lista canonica (`NatsIsolationTests`).
+Os subjects sao do escopo EXATO do agent/tenant (sem wildcard multi-tenant entre clientes) e ha testes
+de isolamento cobrindo a lista canonica (`NatsIsolationTests` / `NatsTenantIsolationTests`).
 
 ### 5.1.2 Complemento do perfil `BackendInternal` — gravacao de terminal
 
@@ -426,8 +432,8 @@ da propria sessao; o viewer nao assina nem publica este subject.
 
 ### Agent (Go)
 
-- Publica apenas: `heartbeat`, `result`, `hardware`, `remote-debug.log`, `remote.session.{id}.frame`, `remote.session.{id}.event`, `remote.session.{id}.recording.frame`, `remote.session.{id}.recording.term`.
-- Assina: `command` unicast + `*.agents.command` por escopo + `tenant.global.pong` + `sync.ping` + `tenant.{c}.p2p.events` + `remote.session.{id}.control` + `remote.session.{id}.input` + `remote.session.{id}.term.in` + `remote.session.{id}.files.req` + `remote.session.{id}.proxy.req` + `remote.session.{id}.signal`.
+- Publica apenas: `heartbeat`, `result`, `hardware`, `remote-debug.log`, `remote.session.{id}.frame`, `remote.session.{id}.event`, `remote.session.{id}.files.resp`, `remote.session.{id}.files.data`, `remote.session.{id}.proxy.ready`, `remote.session.{id}.proxy.resp`, `remote.session.{id}.tunnel.out`, `remote.session.{id}.recording.frame`, `remote.session.{id}.recording.term`.
+- Assina: `command` unicast + `*.agents.command` por escopo + `tenant.global.pong` + `sync.ping` + `tenant.{c}.p2p.events` + `remote.session.{id}.control` + `remote.session.{id}.input` + `remote.session.{id}.term.in` + `remote.session.{id}.files.req` + `remote.session.{id}.proxy.req` + `remote.session.{id}.tunnel.in`.
 - Heartbeat com `timestampUtc` e `processCount`.
 - Dedupe local por `dispatchId`/`idempotencyKey` para nao executar campanha duplicada.
 
@@ -435,7 +441,7 @@ da propria sessao; o viewer nao assina nem publica este subject.
 
 - Converte eventos operacionais para `*.dashboard.events`.
 - Valida contrato e registra `[CONTRACT_VIOLATION]`.
-- Emite ACL por escopo correto no JWT.
+- Emite ACL por escopo correto no JWT (`RemoteSessionViewerPermissions` com `RemoteSessionRights`, incl. `NoProxy = 64` e `NoRdp = 128`).
 - Publica comando em massa via `tenant.{c}.site.{s}.agents.command`, `tenant.{c}.agents.command` e `tenant.global.agents.command`.
 - Rastreia campanha por `dispatchId` sem loop unicast para grandes lotes.
 
@@ -454,4 +460,4 @@ da propria sessao; o viewer nao assina nem publica este subject.
 
 ---
 
-Fim do documento. Versao 1.3.2 - 2026-10-11.
+Fim do documento. Versao 1.4.0 - 2026-11-19.

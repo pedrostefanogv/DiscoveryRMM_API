@@ -263,15 +263,17 @@ public sealed class StartRemoteSessionCommandHandler(
             // perfil (unlimited = 75%) e o card nunca saía de 75%.
             auto = true,
             // Política de túnel PROXY (kind proxy/all): o agent abre os listeners
-            // TCP locais e faz a ponte com os subjects .proxy.req/.proxy.resp.
-            // allowedPorts é a allowlist do agent (defesa em profundidade: o
-            // agent revalida). Sem este bloco o agent não sabia que a sessão é
-            // proxy e o túnel nunca subia.
+            // TCP locais e faz a ponte com os subjects .proxy.req/.proxy.resp/.tunnel.*.
+            // A allowlist, portas, teto de resposta e loopback vêm de RemoteAccess:Proxy
+            // (defesa em profundidade: o agent revalida).
             proxy = cmd.Kind is RemoteSessionKind.Proxy or RemoteSessionKind.All
                 ? new
                 {
                     enabled = true,
-                    allowedPorts = new[] { 3389, 5900, 5985, 5986, 445, 139 }
+                    defaultAllowlist = options.Value.Proxy.DefaultAllowlist ?? [],
+                    allowedPorts = options.Value.Proxy.AllowedPorts ?? [],
+                    maxResponseBytes = options.Value.Proxy.MaxResponseBytes,
+                    allowLoopback = options.Value.Proxy.AllowLoopback
                 }
                 : null,
             // Política de túnel RDP (kind rdp/all): o agent ponteia a porta 3389

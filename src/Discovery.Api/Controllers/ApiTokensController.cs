@@ -14,7 +14,7 @@ namespace Discovery.Api.Controllers;
 public class ApiTokensController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll([FromQuery] Guid userId)
     {
         var result = await mediator.Send(new ListApiTokensQuery(userId));
@@ -22,7 +22,7 @@ public class ApiTokensController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Users, ActionType.Create)]
+    [RequirePermission(ResourceType.Users, ActionType.Create, ScopeSource.Global)]
     public async Task<IActionResult> Create([FromBody] CreateApiTokenCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -30,7 +30,7 @@ public class ApiTokensController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Delete)]
+    [RequirePermission(ResourceType.Users, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> Revoke(Guid id, [FromQuery] Guid userId)
     {
         var result = await mediator.Send(new RevokeApiTokenCommand(id, userId));

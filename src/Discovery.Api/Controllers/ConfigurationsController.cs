@@ -6,7 +6,9 @@ using Discovery.Core.Cqrs.Configurations.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using MediatR;
@@ -29,6 +31,26 @@ public class ConfigurationsController(
 
     private string? CurrentUser => HttpContext.Items["Username"] as string;
 
+    private async Task<IActionResult?> EnsureSiteConfigAccessAsync(
+        Guid siteId,
+        ActionType action,
+        IScopeContext scopeContext,
+        ISiteRepository siteRepo)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.SiteConfig, action);
+        if (access.HasGlobalAccess)
+            return null;
+
+        var site = await siteRepo.GetByIdAsync(siteId);
+        if (site is null)
+            return NotFound(new { error = "Site not found." });
+
+        if (!TenantScopePolicy.Allows(access, site.ClientId, siteId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Você não tem acesso a este site." });
+
+        return null;
+    }
+
     /// <summary>
     /// Aplica o tick persistido. Falha aqui NÃO invalida o salvamento da
     /// configuração — apenas fica registrada para a sincronização periódica.
@@ -48,7 +70,7 @@ public class ConfigurationsController(
     // ── Server ──────────────────────────────────────────────────────────
 
     [HttpGet("server")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetServer()
     {
         var result = await mediator.Send(new GetServerConfigQuery());
@@ -58,7 +80,7 @@ public class ConfigurationsController(
     }
 
     [HttpGet("server/metadata")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetServerMetadata()
     {
         var server = (await mediator.Send(new GetServerConfigQuery())).Value;
@@ -117,7 +139,7 @@ public class ConfigurationsController(
     /// entidade inteira e apagava campos ausentes do payload (bug de perda de dados).
     /// </summary>
     [HttpPut("server")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> UpdateServer([FromBody] Dictionary<string, object> updates)
     {
         var result = await mediator.Send(new PatchServerConfigCommand(updates, CurrentUser));
@@ -131,7 +153,7 @@ public class ConfigurationsController(
     }
 
     [HttpPatch("server")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> PatchServer([FromBody] Dictionary<string, object> updates)
     {
         var result = await mediator.Send(new PatchServerConfigCommand(updates, CurrentUser));
@@ -142,7 +164,7 @@ public class ConfigurationsController(
     }
 
     [HttpPost("server/reset")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> ResetServer()
     {
         var result = await mediator.Send(new ResetServerConfigCommand(CurrentUser));
@@ -154,7 +176,7 @@ public class ConfigurationsController(
     /// cascata removeria. Usado para confirmar antes de aplicar locks.
     /// </summary>
     [HttpPost("server/locks/impact")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetLocksImpact([FromBody] LockImpactRequest request)
     {
         var result = await mediator.Send(new GetServerLocksImpactQuery(request.Fields ?? []));
@@ -165,7 +187,7 @@ public class ConfigurationsController(
 
     /// <summary>Exporta a configuração do servidor sem segredos.</summary>
     [HttpGet("server/export")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> ExportServer()
     {
         var result = await mediator.Send(new ExportServerConfigurationQuery());
@@ -176,7 +198,7 @@ public class ConfigurationsController(
 
     /// <summary>Importa configuração exportada (merge validado). DryRun só valida as chaves.</summary>
     [HttpPost("server/import")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> ImportServer([FromBody] ServerImportRequest request)
     {
         var result = await mediator.Send(
@@ -192,7 +214,7 @@ public class ConfigurationsController(
 
     /// <summary>Testa a API key de IA armazenada (write-only) contra o provider.</summary>
     [HttpPost("server/ai/test")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> TestStoredAiKey(CancellationToken ct)
     {
         var result = await mediator.Send(new TestStoredAiKeyCommand(), ct);
@@ -202,7 +224,7 @@ public class ConfigurationsController(
     }
 
     [HttpPost("server/object-storage/test")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> TestObjectStorage(CancellationToken ct)
     {
         var result = await mediator.Send(new TestObjectStorageCommand(), ct);
@@ -210,7 +232,7 @@ public class ConfigurationsController(
     }
 
     [HttpPost("server/nats/test")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> TestNats([FromBody] NatsConnectionTestRequest req, CancellationToken ct)
     {
         var result = await mediator.Send(
@@ -219,7 +241,7 @@ public class ConfigurationsController(
     }
 
     [HttpPatch("server/nats")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> PatchNats([FromBody] Dictionary<string, object> updates)
     {
         var result = await mediator.Send(new PatchNatsConfigCommand(updates, CurrentUser));
@@ -230,7 +252,7 @@ public class ConfigurationsController(
     /// Obtém as configurações globais de anexos de tickets (habilitado, tamanho máximo, tipos permitidos).
     /// </summary>
     [HttpGet("server/ticket-attachments")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetTicketAttachmentSettings()
     {
         var result = await mediator.Send(new GetTicketAttachmentSettingsQuery());
@@ -238,7 +260,7 @@ public class ConfigurationsController(
     }
 
     [HttpPut("server/ticket-attachments")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> UpdateTicketAttachmentSettings([FromBody] TicketAttachmentSettings settings)
     {
         var result = await mediator.Send(new UpdateTicketAttachmentSettingsCommand(settings, CurrentUser));
@@ -250,7 +272,7 @@ public class ConfigurationsController(
     // ── Clients ────────────────────────────────────────────────────────
 
     [HttpGet("clients/{clientId:guid}")]
-    [RequirePermission(ResourceType.ClientConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetClient(Guid clientId)
     {
         var result = await mediator.Send(new GetClientConfigQuery(clientId));
@@ -262,7 +284,7 @@ public class ConfigurationsController(
     }
 
     [HttpPut("clients/{clientId:guid}")]
-    [RequirePermission(ResourceType.ClientConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> UpdateClient(Guid clientId, [FromBody] ClientConfiguration config)
     {
         var result = await mediator.Send(new UpdateClientConfigCommand(clientId, config, CurrentUser));
@@ -270,7 +292,7 @@ public class ConfigurationsController(
     }
 
     [HttpPatch("clients/{clientId:guid}")]
-    [RequirePermission(ResourceType.ClientConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.Edit, ScopeSource.FromRoute)]
     public async Task<IActionResult> PatchClient(Guid clientId, [FromBody] Dictionary<string, object> updates)
     {
         var result = await mediator.Send(new PatchClientConfigCommand(clientId, updates, CurrentUser));
@@ -278,7 +300,7 @@ public class ConfigurationsController(
     }
 
     [HttpDelete("clients/{clientId:guid}")]
-    [RequirePermission(ResourceType.ClientConfig, ActionType.Delete)]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.Delete, ScopeSource.FromRoute)]
     public async Task<IActionResult> DeleteClient(Guid clientId)
     {
         await mediator.Send(new DeleteClientConfigCommand(clientId));
@@ -288,9 +310,15 @@ public class ConfigurationsController(
     // ── Sites ──────────────────────────────────────────────────────────
 
     [HttpGet("sites/{siteId:guid}")]
-    [RequirePermission(ResourceType.SiteConfig, ActionType.View)]
-    public async Task<IActionResult> GetSite(Guid siteId)
+    [RequirePermission(ResourceType.SiteConfig, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetSite(
+        Guid siteId,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo)
     {
+        if (await EnsureSiteConfigAccessAsync(siteId, ActionType.View, scopeContext, siteRepo) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new GetSiteConfigQuery(siteId));
         return result.Match<IActionResult>(
             success: c => Ok(c),
@@ -300,25 +328,45 @@ public class ConfigurationsController(
     }
 
     [HttpPut("sites/{siteId:guid}")]
-    [RequirePermission(ResourceType.SiteConfig, ActionType.Edit)]
-    public async Task<IActionResult> UpdateSite(Guid siteId, [FromBody] SiteConfiguration config)
+    [RequirePermission(ResourceType.SiteConfig, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> UpdateSite(
+        Guid siteId,
+        [FromBody] SiteConfiguration config,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo)
     {
+        if (await EnsureSiteConfigAccessAsync(siteId, ActionType.Edit, scopeContext, siteRepo) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new UpdateSiteConfigCommand(siteId, config, CurrentUser));
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPatch("sites/{siteId:guid}")]
-    [RequirePermission(ResourceType.SiteConfig, ActionType.Edit)]
-    public async Task<IActionResult> PatchSite(Guid siteId, [FromBody] Dictionary<string, object> updates)
+    [RequirePermission(ResourceType.SiteConfig, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> PatchSite(
+        Guid siteId,
+        [FromBody] Dictionary<string, object> updates,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo)
     {
+        if (await EnsureSiteConfigAccessAsync(siteId, ActionType.Edit, scopeContext, siteRepo) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new PatchSiteConfigCommand(siteId, updates, CurrentUser));
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpDelete("sites/{siteId:guid}")]
-    [RequirePermission(ResourceType.SiteConfig, ActionType.Delete)]
-    public async Task<IActionResult> DeleteSite(Guid siteId)
+    [RequirePermission(ResourceType.SiteConfig, ActionType.Delete, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteSite(
+        Guid siteId,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo)
     {
+        if (await EnsureSiteConfigAccessAsync(siteId, ActionType.Delete, scopeContext, siteRepo) is { } denied)
+            return denied;
+
         await mediator.Send(new DeleteSiteConfigCommand(siteId));
         return NoContent();
     }
@@ -327,16 +375,22 @@ public class ConfigurationsController(
     /// Resolve a configuração efetiva (merged: server → client → site) para um site específico.
     /// </summary>
     [HttpGet("sites/{siteId:guid}/effective")]
-    [RequirePermission(ResourceType.SiteConfig, ActionType.View)]
-    public async Task<IActionResult> GetSiteEffective(Guid siteId)
+    [RequirePermission(ResourceType.SiteConfig, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetSiteEffective(
+        Guid siteId,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo)
     {
+        if (await EnsureSiteConfigAccessAsync(siteId, ActionType.View, scopeContext, siteRepo) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new GetSiteEffectiveConfigQuery(siteId));
         return result.Match<IActionResult>(success: Ok, failure: BadRequest);
     }
 
     /// <summary>Configuração efetiva de um cliente (server → client).</summary>
     [HttpGet("clients/{clientId:guid}/effective")]
-    [RequirePermission(ResourceType.ClientConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetClientEffective(Guid clientId)
     {
         var result = await mediator.Send(new GetClientEffectiveConfigQuery(clientId));
@@ -345,15 +399,23 @@ public class ConfigurationsController(
 
     /// <summary>Metadados de edição por campo (origem + locks) no escopo do cliente.</summary>
     [HttpGet("clients/{clientId:guid}/metadata")]
-    [RequirePermission(ResourceType.ClientConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ClientConfig, ActionType.View, ScopeSource.FromRoute)]
     public async Task<IActionResult> GetClientMetadata(Guid clientId)
         => await SendMetadata("Client", clientId);
 
     /// <summary>Metadados de edição por campo (origem + locks) no escopo do site.</summary>
     [HttpGet("sites/{siteId:guid}/metadata")]
-    [RequirePermission(ResourceType.SiteConfig, ActionType.View)]
-    public async Task<IActionResult> GetSiteMetadata(Guid siteId)
-        => await SendMetadata("Site", siteId);
+    [RequirePermission(ResourceType.SiteConfig, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetSiteMetadata(
+        Guid siteId,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo)
+    {
+        if (await EnsureSiteConfigAccessAsync(siteId, ActionType.View, scopeContext, siteRepo) is { } denied)
+            return denied;
+
+        return await SendMetadata("Site", siteId);
+    }
 
     private async Task<IActionResult> SendMetadata(string entityType, Guid entityId)
     {
@@ -370,7 +432,7 @@ public class ConfigurationsController(
     /// para um cliente: global + override do cliente.
     /// </summary>
     [HttpGet("background-processing/effective")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetBackgroundProcessingEffective(
         [FromQuery] Guid? clientId, CancellationToken ct)
     {
@@ -380,7 +442,7 @@ public class ConfigurationsController(
 
     /// <summary>Última execução (e resumo) dos ciclos por escopo de cliente.</summary>
     [HttpGet("background-processing/status")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetBackgroundProcessingStatus(
         [FromQuery] Guid? clientId, CancellationToken ct)
     {
@@ -400,7 +462,7 @@ public class ConfigurationsController(
     /// Tick aplicado vs desejado por processo, kill switch e próximo disparo.
     /// </summary>
     [HttpGet("background-processing/schedule")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetBackgroundProcessingSchedule(CancellationToken ct)
         => Ok(await scheduleService.GetStatusAsync(ct));
 
@@ -409,7 +471,7 @@ public class ConfigurationsController(
     /// informado (null = global). O trabalho roda em lotes no job de backfill.
     /// </summary>
     [HttpPost("background-processing/backfill")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> RequestBackgroundProcessingBackfill(
         [FromQuery] Guid? clientId,
         [FromQuery] bool purgeOrphans,
@@ -422,7 +484,7 @@ public class ConfigurationsController(
 
     /// <summary>Cancela um backfill pendente/em andamento do escopo.</summary>
     [HttpPost("background-processing/backfill/cancel")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CancelBackgroundProcessingBackfill(
         [FromQuery] Guid? clientId,
         [FromServices] IBackgroundProcessingBackfillService backfillService,
@@ -435,7 +497,7 @@ public class ConfigurationsController(
     // ── AI ─────────────────────────────────────────────────────────────
 
     [HttpGet("ai/credentials")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAiCredentials(CancellationToken ct)
     {
         var result = await mediator.Send(new GetAiCredentialsQuery(), ct);
@@ -443,7 +505,7 @@ public class ConfigurationsController(
     }
 
     [HttpPost("ai/credentials")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CreateAiCredential([FromBody] AiProviderCredential credential, CancellationToken ct)
     {
         var result = await mediator.Send(new CreateAiCredentialCommand(credential), ct);
@@ -451,7 +513,7 @@ public class ConfigurationsController(
     }
 
     [HttpDelete("ai/credentials/{credentialId:guid}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Delete)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> DeleteAiCredential(Guid credentialId, CancellationToken ct)
     {
         await mediator.Send(new DeleteAiCredentialCommand(credentialId), ct);
@@ -459,7 +521,7 @@ public class ConfigurationsController(
     }
 
     [HttpGet("ai/models")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAiModels([FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] string? search = null, CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetAiModelsQuery(clientId, siteId, search), ct);
@@ -472,7 +534,7 @@ public class ConfigurationsController(
     /// Valida uma API key contra o provider (faz GET /models com Authorization Bearer).
     /// </summary>
     [HttpPost("ai/validate-key")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> ValidateAiKey([FromBody] AiKeyValidationRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.ApiKey))
@@ -517,7 +579,7 @@ public class ConfigurationsController(
     /// Cache de 60 minutos, use ?refresh=true para forçar atualização.
     /// </summary>
     [HttpGet("ai/openrouter/models")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetOpenRouterModels(
         [FromQuery] string? modality = null,
         [FromQuery] bool refresh = false,

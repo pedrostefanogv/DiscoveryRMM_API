@@ -624,7 +624,6 @@ $RECYCLE.BIN/
 .claude/
 .codebase/
 .vscode/
-.github/
 appsettings.Development.json
 *.lscache
 *.csproj.lscache

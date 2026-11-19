@@ -19,6 +19,7 @@ using Discovery.Core.Cqrs.Notes.Queries;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using MediatR;
@@ -60,16 +61,39 @@ public class AgentsController : ControllerBase
         return note is not null && note.AgentId == agentId;
     }
 
+    private async Task<IActionResult?> EnsureAgentAccessAsync(
+        Guid agentId,
+        ActionType action,
+        IAgentRepository agentRepo,
+        ISiteRepository siteRepo)
+    {
+        var agent = await agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return NotFound(new { error = "Agent not found." });
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await _scopeContext.GetAccessAsync(ResourceType.Agents, action);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Você não tem acesso a este agente." });
+
+        return null;
+    }
+
     // ── CRUD ──────────────────────────────────────────────────────────────
 
     [HttpPost("{agentId:guid}/approve-zero-touch")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> ApproveZeroTouch(Guid agentId, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new ApproveZeroTouchCommand(agentId), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpGet("by-site/{siteId:guid}")]
@@ -118,7 +142,7 @@ public class AgentsController : ControllerBase
     {
         var access = await _scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
         var result = await _mediator.Send(new GetDeletedAgentsQuery(
-            clientId, siteId, page, pageSize, search, access.HasGlobalAccess, access.AllowedClientIds));
+            clientId, siteId, page, pageSize, search, access.HasGlobalAccess, access.AllowedClientIds, access.AllowedSiteIds));
         return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
     }
 
@@ -129,27 +153,39 @@ public class AgentsController : ControllerBase
         var result = await _mediator.Send(new GetAgentByIdQuery(id));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Agents, ActionType.Create)]
+    [RequirePermission(ResourceType.Agents, ActionType.Create, ScopeSource.AccessList)]
     public async Task<IActionResult> Create([FromBody] CreateAgentCommand cmd)
     {
         var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+            failure: errors => errors[0].Code == "Forbidden"
+                ? StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAgentCommand cmd)
     {
         var result = await _mediator.Send(cmd with { Id = id });
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+            });
     }
 
     /// <summary>
@@ -158,7 +194,7 @@ public class AgentsController : ControllerBase
     /// agente tem chamados vinculados (409 com a contagem).
     /// </summary>
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> Delete(Guid id, [FromQuery] bool force = false, [FromQuery] bool permanent = false, CancellationToken ct = default)
     {
         var result = permanent
@@ -192,6 +228,7 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code switch
             {
                 "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
                 "Conflict" => Conflict(new { error = errors[0].Message }),
                 _ => BadRequest(new { error = errors[0].Message })
             });
@@ -204,7 +241,7 @@ public class AgentsController : ControllerBase
     /// Pending e reentregue quando o agente voltar a ser visto online.
     /// </summary>
     [HttpPost("{id:guid}/decommission")]
-    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> RequestDecommission(Guid id, CancellationToken ct)
     {
         var result = await _mediator.Send(new RequestAgentDecommissionCommand(id, "resend"), ct);
@@ -213,20 +250,28 @@ public class AgentsController : ControllerBase
             // "comando enviado" de "comando enfileirado" para não exibir um
             // sucesso que não aconteceu.
             success: dto => Ok(new { sent = dto.Sent, queued = dto.Queued, message = dto.Message }),
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { error = errors[0].Message })
-                : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>Tira o agente da lixeira (volta a aparecer na listagem).</summary>
     [HttpPost("{id:guid}/restore")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Restore(Guid id)
     {
         var result = await _mediator.Send(new RestoreAgentCommand(id));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -234,23 +279,30 @@ public class AgentsController : ControllerBase
     /// para a coluna/filtro da lista de agentes.
     /// </summary>
     [HttpGet("custom-fields/map")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFieldMap([FromQuery] bool includeInactive = false, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new GetAgentCustomFieldMapQuery(includeInactive), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code == "Forbidden"
+                ? StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message })
+                : BadRequest(new { error = errors[0].Message }));
     }
 
     [HttpGet("{id:guid}/custom-fields")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, [FromQuery] bool includeHidden = false, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new GetAgentCustomFieldsQuery(id, includeSecrets, includeHidden), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     /// <summary>
@@ -259,45 +311,65 @@ public class AgentsController : ControllerBase
     /// com visibilidade no portal (webRead).
     /// </summary>
     [HttpGet("{id:guid}/custom-fields/schema")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFieldSchema(Guid id, [FromQuery] bool includeSecrets = false, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new GetAgentCustomFieldSchemaQuery(id, includeSecrets), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpsertCustomFieldValue(Guid id, Guid definitionId, [FromBody] UpsertAgentCustomFieldCommand cmd, CancellationToken ct = default)
     {
         var result = await _mediator.Send(cmd with { AgentId = id, DefinitionId = definitionId }, ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     // ── Inventory ─────────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/hardware")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetHardware(Guid id)
     {
         var result = await _mediator.Send(new GetAgentHardwareReportQuery(id));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     [HttpGet("{id:guid}/hardware/components")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetHardwareComponents(Guid id, [FromQuery] bool includeNetwork = true)
     {
         var result = await _mediator.Send(new GetAgentHardwareComponentsQuery(id, includeNetwork));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     /// <summary>
@@ -306,7 +378,7 @@ public class AgentsController : ControllerBase
     /// lista inteira.
     /// </summary>
     [HttpGet("{id:guid}/hardware/network/ports")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetListeningPortsPage(
         Guid id,
         [FromQuery] string? cursor = null,
@@ -316,9 +388,12 @@ public class AgentsController : ControllerBase
         var result = await _mediator.Send(new GetAgentListeningPortsPageQuery(id, cursor, limit, search));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -326,7 +401,7 @@ public class AgentsController : ControllerBase
     /// componentes do agente, incluindo o estado TCP de cada conexão.
     /// </summary>
     [HttpGet("{id:guid}/hardware/network/sockets")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetOpenSocketsPage(
         Guid id,
         [FromQuery] string? cursor = null,
@@ -337,15 +412,28 @@ public class AgentsController : ControllerBase
         var result = await _mediator.Send(new GetAgentOpenSocketsPageQuery(id, cursor, limit, search, state));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound()
-                : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpGet("{id:guid}/software")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetSoftware(Guid id, [FromQuery] string? cursor = null, [FromQuery] int limit = 100, [FromQuery] string? search = null, [FromQuery] string order = "asc")
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetSoftware(
+        Guid id,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        [FromQuery] string? cursor = null,
+        [FromQuery] int limit = 100,
+        [FromQuery] string? search = null,
+        [FromQuery] string order = "asc")
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.View, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         var normalizedOrder = order.Trim().ToLowerInvariant();
         if (normalizedOrder is not ("asc" or "desc"))
             return BadRequest(new { error = "Invalid order. Use 'asc' or 'desc'." });
@@ -357,13 +445,18 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/software/snapshot")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSoftwareSnapshot(Guid id)
     {
         var result = await _mediator.Send(new GetAgentSoftwareSnapshotQuery(id));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     /// <summary>
@@ -371,7 +464,7 @@ public class AgentsController : ControllerBase
     /// para navegação direta de páginas (sem fetch-all por cursor no cliente).
     /// </summary>
     [HttpGet("{id:guid}/software/page")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSoftwarePage(
         Guid id,
         [FromQuery] int page = 1,
@@ -388,7 +481,12 @@ public class AgentsController : ControllerBase
             id, page, pageSize, search, normalizedOrder == "desc", onlyUpdates));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     // ── Automation ────────────────────────────────────────────────────────
@@ -403,27 +501,37 @@ public class AgentsController : ControllerBase
             : null;
 
     [HttpPost("{id:guid}/automation/tasks/{taskId:guid}/run-now")]
-    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> RunAutomationTaskNow(Guid id, Guid taskId, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new RunAutomationTaskCommand(id, taskId, RequestCorrelationId()), ct);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetCommands), new { id }, dto),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("{id:guid}/automation/scripts/{scriptId:guid}/run-now")]
-    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> RunAutomationScriptNow(Guid id, Guid scriptId, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new RunAutomationScriptCommand(id, scriptId, RequestCorrelationId()), ct);
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetCommands), new { id }, dto),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("{id:guid}/automation/force-sync")]
-    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ForceAutomationSync(Guid id, [FromBody] ForceAutomationSyncCommand cmd)
     {
         var result = await _mediator.Send(cmd with
@@ -434,11 +542,16 @@ public class AgentsController : ControllerBase
         });
         return result.Match<IActionResult>(
             success: _ => CreatedAtAction(nameof(GetCommands), new { id }, new { sync = "dispatched" }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("{id:guid}/refresh-data")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> RefreshAgentData(Guid id, [FromBody] RefreshAgentDataRequest request, CancellationToken ct = default)
     {
         var cmd = new RefreshAgentDataCommand(
@@ -455,7 +568,12 @@ public class AgentsController : ControllerBase
         var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: _ => Ok(new { success = true }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -463,7 +581,7 @@ public class AgentsController : ControllerBase
     /// (registro Run/RunOnce, pasta Startup ou serviço automático).
     /// </summary>
     [HttpPost("{id:guid}/startup-items/action")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> StartupItemAction(Guid id, [FromBody] StartupItemActionRequest request, CancellationToken ct = default)
     {
         var cmd = new StartupItemActionCommand(
@@ -477,7 +595,12 @@ public class AgentsController : ControllerBase
         var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: _ => Accepted(new { success = true, dispatched = true }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -485,7 +608,7 @@ public class AgentsController : ControllerBase
     /// desabilitar, executar agora, excluir ou editar gatilho/ação).
     /// </summary>
     [HttpPost("{id:guid}/scheduled-tasks/action")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ScheduledTaskAction(Guid id, [FromBody] ScheduledTaskActionRequest request, CancellationToken ct = default)
     {
         var cmd = new ScheduledTaskActionCommand(
@@ -505,7 +628,12 @@ public class AgentsController : ControllerBase
         var result = await _mediator.Send(cmd, ct);
         return result.Match<IActionResult>(
             success: _ => Accepted(new { success = true, dispatched = true }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -514,7 +642,7 @@ public class AgentsController : ControllerBase
     /// enviando winget upgrade / choco upgrade via dispatcher.
     /// </summary>
     [HttpPost("{id:guid}/software/{inventoryId:guid}/update")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> UpdateSoftware(
         Guid id,
         Guid inventoryId,
@@ -529,6 +657,7 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code switch
             {
                 "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
                 // Pacote bloqueado pela loja: exige confirmação explícita.
                 "Conflict" => Conflict(new { requiresConfirmation = true, error = errors[0].Message }),
                 _ => BadRequest(new { error = errors[0].Message })
@@ -541,7 +670,7 @@ public class AgentsController : ControllerBase
     /// do catálogo (packageId + tipo de instalação).
     /// </summary>
     [HttpPost("{id:guid}/software/install")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> InstallSoftware(
         Guid id,
         [FromBody] InstallSoftwareRequest? request = null,
@@ -560,6 +689,7 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code switch
             {
                 "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
                 // Pacote bloqueado pela loja: exige confirmação explícita.
                 "Conflict" => Conflict(new { requiresConfirmation = true, error = errors[0].Message }),
                 _ => BadRequest(new { error = errors[0].Message })
@@ -571,15 +701,18 @@ public class AgentsController : ControllerBase
     /// estratégia (gerenciador → MSI ProductCode → UninstallString).
     /// </summary>
     [HttpPost("{id:guid}/software/{inventoryId:guid}/uninstall")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> UninstallSoftware(Guid id, Guid inventoryId, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new UninstallAgentSoftwareCommand(id, inventoryId), ct);
         return result.Match<IActionResult>(
             success: _ => Accepted(new { success = true, dispatched = true }),
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { error = errors[0].Message })
-                : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     /// <summary>
@@ -592,7 +725,7 @@ public class AgentsController : ControllerBase
     /// agentes offline). Não interrompe execução já em andamento no agent.
     /// </summary>
     [HttpPost("{id:guid}/automation/executions/{executionId:guid}/cancel")]
-    [RequirePermission(ResourceType.Automation, ActionType.Execute)]
+    [RequirePermission(ResourceType.Automation, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> CancelAutomationExecution(Guid id, Guid executionId, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new CancelAutomationExecutionCommand(id, executionId, RequestCorrelationId()), ct);
@@ -601,6 +734,7 @@ public class AgentsController : ControllerBase
             failure: errors => errors[0].Code switch
             {
                 "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
                 "Conflict" => Conflict(new { error = errors[0].Message }),
                 _ => BadRequest(new { error = errors[0].Message })
             });
@@ -612,19 +746,22 @@ public class AgentsController : ControllerBase
     /// máquina recebe: escopo, gatilhos, tags, pacote/script e fingerprint.
     /// </summary>
     [HttpGet("{id:guid}/automation/policies")]
-    [RequirePermission(ResourceType.Automation, ActionType.View)]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAutomationPolicies(Guid id, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new GetAgentAutomationPoliciesQuery(id), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { error = errors[0].Message })
-                : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpGet("{id:guid}/automation/executions")]
-    [RequirePermission(ResourceType.Automation, ActionType.View)]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAutomationExecutionHistory(
         Guid id,
         [FromQuery] int limit = 50,
@@ -638,15 +775,27 @@ public class AgentsController : ControllerBase
             id, limit, status, sourceType, taskId, scriptId, correlationId));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest());
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     // ── Commands & Tokens ─────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/commands")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetCommands(Guid id, [FromQuery] int limit = 50)
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetCommands(
+        Guid id,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        [FromQuery] int limit = 50)
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.View, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         var result = await _mediator.Send(new GetAgentCommandsQuery(id, limit));
         return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
     }
@@ -667,64 +816,100 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/tokens")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetTokens(Guid id)
     {
         var result = await _mediator.Send(new GetAgentTokensQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     [HttpPost("{id:guid}/tokens")]
-    [RequirePermission(ResourceType.Agents, ActionType.Create)]
+    [RequirePermission(ResourceType.Agents, ActionType.Create, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateToken(Guid id, [FromBody] CreateAgentTokenCommand cmd)
     {
         var result = await _mediator.Send(cmd with { AgentId = id });
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpDelete("{id:guid}/tokens/{tokenId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> RevokeToken(Guid id, Guid tokenId)
     {
         var result = await _mediator.Send(new RevokeAgentTokenCommand(id, tokenId));
-        return result.Match<IActionResult>(success: _ => NoContent(), failure: _ => BadRequest());
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     [HttpDelete("{id:guid}/tokens")]
-    [RequirePermission(ResourceType.Agents, ActionType.Delete)]
+    [RequirePermission(ResourceType.Agents, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> RevokeAllTokens(Guid id)
     {
         var result = await _mediator.Send(new RevokeAllAgentTokensCommand(id));
-        return result.Match<IActionResult>(success: _ => NoContent(), failure: _ => BadRequest());
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest()
+            });
     }
 
     // ── Fanout ────────────────────────────────────────────────────────────
 
     [HttpPost("commands/fanout/site/{siteId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> SendFanoutCommandToSite(Guid siteId, [FromBody] SendSiteFanoutCommand cmd, CancellationToken ct = default)
     {
         var result = await _mediator.Send(cmd with { SiteId = siteId }, ct);
         return result.Match<IActionResult>(
             success: dto => Accepted(dto),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message })
-                : StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                "Validation" => BadRequest(new { error = errors[0].Message }),
+                _ => StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("commands/fanout/client/{clientId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> SendFanoutCommandToClient(Guid clientId, [FromBody] SendClientFanoutCommand cmd, CancellationToken ct = default)
     {
         var result = await _mediator.Send(cmd with { ClientId = clientId }, ct);
         return result.Match<IActionResult>(
             success: dto => Accepted(dto),
-            failure: errors => StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                "Validation" => BadRequest(new { error = errors[0].Message }),
+                _ => StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("commands/fanout/global")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> SendFanoutCommandGlobal([FromBody] SendGlobalFanoutCommand cmd, CancellationToken ct = default)
     {
         var result = await _mediator.Send(cmd, ct);
@@ -766,25 +951,34 @@ public class AgentsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/shutdown")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ShutdownAgent(Guid id, [FromBody] ShutdownAgentCommand cmd)
     {
         var result = await _mediator.Send(cmd with { AgentId = id });
         return result.Match<IActionResult>(
             success: commandId => Accepted(new { agentId = id, commandType = "shutdown", commandId }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message }) : BadRequest(new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
     }
 
     [HttpPost("{id:guid}/wake-on-lan")]
-    [RequirePermission(ResourceType.Agents, ActionType.Execute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> WakeOnLan(Guid id, CancellationToken ct = default)
     {
         var result = await _mediator.Send(new WakeOnLanCommand(id), ct);
         return result.Match<IActionResult>(
             success: _ => Accepted(new { agentId = id, commandType = "wake-on-lan" }),
-            failure: errors => errors[0].Code == "NotFound" ? NotFound(new { error = errors[0].Message })
-                : errors[0].Code == "Validation" ? StatusCode(StatusCodes.Status412PreconditionFailed, new { error = errors[0].Message })
-                : StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = errors[0].Message }));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                "Validation" => StatusCode(StatusCodes.Status412PreconditionFailed, new { error = errors[0].Message }),
+                _ => StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = errors[0].Message })
+            });
     }
 
     // ── Remote Debug ──────────────────────────────────────────────────────
@@ -860,7 +1054,7 @@ public class AgentsController : ControllerBase
     // ── Transfer ──────────────────────────────────────────────────────────
 
     [HttpPost("{agentId:guid}/transfer")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.FromRoute)]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> TransferAgent(Guid agentId, [FromBody] TransferAgentCommand cmd, CancellationToken ct = default)
     {
         if (HttpContext.Items["UserId"] is Guid userId)
@@ -882,7 +1076,7 @@ public class AgentsController : ControllerBase
     }
 
     [HttpPost("transfer/bulk")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> BulkTransferAgents([FromBody] BulkTransferAgentsCommand cmd, CancellationToken ct = default)
     {
         if (HttpContext.Items["UserId"] is Guid userId)
@@ -901,11 +1095,15 @@ public class AgentsController : ControllerBase
             return BadRequest(new { error = "Maximum of 100 agents per bulk transfer." });
 
         var result = await _mediator.Send(cmd, ct);
-        return result.Match<IActionResult>(success: Ok, failure: _ => BadRequest());
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "Forbidden"
+                ? StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message })
+                : BadRequest());
     }
 
     [HttpGet("{agentId:guid}/validate-transfer")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> ValidateTransfer(Guid agentId, [FromQuery] Guid targetSiteId, CancellationToken ct = default)
     {
         // A validação de permissão depende de QUEM está pedindo; sem o UserId do token o
@@ -918,25 +1116,40 @@ public class AgentsController : ControllerBase
             success: Ok,
             failure: errors => errors[0].Code == "Unauthorized"
                 ? Unauthorized(new { error = errors[0].Message })
-                : BadRequest(new { error = errors[0].Message }));
+                : errors[0].Code == "Forbidden"
+                    ? StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message })
+                    : BadRequest(new { error = errors[0].Message }));
     }
 
     [HttpGet("{id:guid}/notes/page")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetNotesPage(
         Guid id,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
         [FromQuery] string? cursor = null,
         [FromQuery] int limit = 50,
         CancellationToken ct = default)
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.View, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         var result = await _mediator.Send(new ListNotesPageQuery(null, null, id, cursor, limit), ct);
         return result.ToActionResult();
     }
 
     [HttpGet("{id:guid}/notes/{noteId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
-    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetNoteById(
+        Guid id,
+        Guid noteId,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        CancellationToken ct = default)
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.View, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         if (!await NoteBelongsToAsync(noteId, id, ct))
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
 
@@ -949,9 +1162,16 @@ public class AgentsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/notes")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteRequest request)
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> CreateNote(
+        Guid id,
+        [FromBody] CreateNoteRequest request,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo)
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.Edit, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         var cmd = new CreateNoteCommand(null, null, id, request.Content, CurrentUser, request.IsPinned);
         var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
@@ -960,9 +1180,18 @@ public class AgentsController : ControllerBase
     }
 
     [HttpPut("{id:guid}/notes/{noteId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> UpdateNote(
+        Guid id,
+        Guid noteId,
+        [FromBody] UpdateNoteRequest request,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        CancellationToken ct = default)
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.Edit, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         if (!await NoteBelongsToAsync(noteId, id, ct))
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
 
@@ -976,9 +1205,17 @@ public class AgentsController : ControllerBase
     }
 
     [HttpDelete("{id:guid}/notes/{noteId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.Edit)]
-    public async Task<IActionResult> DeleteNote(Guid id, Guid noteId, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Agents, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteNote(
+        Guid id,
+        Guid noteId,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        CancellationToken ct = default)
     {
+        if (await EnsureAgentAccessAsync(id, ActionType.Edit, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         if (!await NoteBelongsToAsync(noteId, id, ct))
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
 

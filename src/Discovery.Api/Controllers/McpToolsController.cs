@@ -23,7 +23,7 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
         new("^[a-zA-Z0-9_-]{1,64}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     [HttpGet]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetCatalog(
         [FromQuery] Guid? clientId, [FromQuery] Guid? siteId, [FromQuery] Guid? agentId,
         CancellationToken ct)
@@ -33,7 +33,7 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
     }
 
     [HttpPut("{toolName}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Save(
         string toolName, [FromBody] SaveMcpToolPolicyRequest request, CancellationToken ct)
     {
@@ -66,7 +66,7 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
     }
 
     [HttpDelete("{toolName}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Reset(
         string toolName, [FromQuery] Guid? clientId, [FromQuery] Guid? siteId, [FromQuery] Guid? agentId,
         CancellationToken ct)
@@ -80,7 +80,7 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
     }
 
     [HttpGet("{toolName}/impact")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> Impact(
         string toolName, [FromQuery] Guid? clientId, [FromQuery] Guid? siteId, [FromQuery] Guid? agentId,
         CancellationToken ct)

@@ -2,25 +2,32 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Fanout.Commands;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 
 public sealed class SendSiteFanoutCommandHandler(
     IAgentMessaging messaging,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<SendSiteFanoutCommand, Result<FanoutResponseDto>>
 {
     public async Task<Result<FanoutResponseDto>> Handle(SendSiteFanoutCommand cmd, CancellationToken ct)
     {
-        if (!messaging.IsConnected)
-            return Result<FanoutResponseDto>.Failure(Error.Validation("NATS", "NATS realtime transport unavailable."));
-
         var site = await siteRepo.GetByIdAsync(cmd.SiteId);
         if (site is null)
             return Result<FanoutResponseDto>.Failure(Error.NotFound("Site not found."));
+
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site.ClientId, cmd.SiteId))
+            return Result<FanoutResponseDto>.Failure(Error.Forbidden("Você não tem acesso a este site."));
+
+        if (!messaging.IsConnected)
+            return Result<FanoutResponseDto>.Failure(Error.Validation("NATS", "NATS realtime transport unavailable."));
 
         var dispatchId = IdGenerator.NewId();
         var issuedAtUtc = DateTime.UtcNow;
@@ -35,11 +42,16 @@ public sealed class SendSiteFanoutCommandHandler(
 }
 
 public sealed class SendClientFanoutCommandHandler(
-    IAgentMessaging messaging
+    IAgentMessaging messaging,
+    IScopeContext scopeContext
 ) : IRequestHandler<SendClientFanoutCommand, Result<FanoutResponseDto>>
 {
     public async Task<Result<FanoutResponseDto>> Handle(SendClientFanoutCommand cmd, CancellationToken ct)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!access.HasGlobalAccess && !access.AllowedClientIds.Contains(cmd.ClientId))
+            return Result<FanoutResponseDto>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+
         if (!messaging.IsConnected)
             return Result<FanoutResponseDto>.Failure(Error.Validation("NATS", "NATS realtime transport unavailable."));
 

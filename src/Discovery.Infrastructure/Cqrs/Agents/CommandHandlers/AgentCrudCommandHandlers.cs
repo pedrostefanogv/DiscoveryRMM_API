@@ -5,7 +5,10 @@ using Discovery.Core.Cqrs.Agents.Crud.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 using Discovery.Infrastructure.Data;
 using MediatR;
@@ -16,6 +19,8 @@ namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 
 public sealed class ApproveZeroTouchCommandHandler(
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     IAgentMessaging messaging
 ) : IRequestHandler<ApproveZeroTouchCommand, Result<AgentDto>>
 {
@@ -24,6 +29,12 @@ public sealed class ApproveZeroTouchCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null)
             return Result<AgentDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Edit);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
         if (!agent.ZeroTouchPending)
             return Result<AgentDto>.Failure(Error.Validation("AgentId", "Agent is not pending zero-touch approval."));
 
@@ -51,11 +62,17 @@ public sealed class ApproveZeroTouchCommandHandler(
 public sealed class CreateAgentCommandHandler(
     IAgentRepository agentRepo,
     IRedisService redis,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<CreateAgentCommand, Result<AgentDto>>
 {
     public async Task<Result<AgentDto>> Handle(CreateAgentCommand cmd, CancellationToken ct)
     {
+        var site = await siteRepo.GetByIdAsync(cmd.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Create);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, cmd.SiteId))
+            return Result<AgentDto>.Failure(Error.Forbidden("Você não tem acesso a este site."));
+
         var agent = new Agent
         {
             SiteId = cmd.SiteId,
@@ -95,7 +112,8 @@ public sealed class CreateAgentCommandHandler(
 public sealed class UpdateAgentCommandHandler(
     IAgentRepository agentRepo,
     IRedisService redis,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<UpdateAgentCommand, Result<AgentDto>>
 {
     public async Task<Result<AgentDto>> Handle(UpdateAgentCommand cmd, CancellationToken ct)
@@ -103,6 +121,18 @@ public sealed class UpdateAgentCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.Id);
         if (agent is null)
             return Result<AgentDto>.Failure(Error.NotFound("Agent not found."));
+
+        var currentSite = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Edit);
+        if (!TenantScopePolicy.Allows(access, currentSite?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
+        if (cmd.SiteId.HasValue && cmd.SiteId.Value != agent.SiteId)
+        {
+            var targetSite = await siteRepo.GetByIdAsync(cmd.SiteId.Value);
+            if (!TenantScopePolicy.Allows(access, targetSite?.ClientId ?? Guid.Empty, cmd.SiteId.Value))
+                return Result<AgentDto>.Failure(Error.Forbidden("Você não tem acesso ao site de destino."));
+        }
 
         var previousSiteId = agent.SiteId;
         if (cmd.SiteId.HasValue) agent.SiteId = cmd.SiteId.Value;
@@ -174,7 +204,8 @@ internal static class AgentDecommissionDispatch
 public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
     IRedisService redis,
-    ISiteRepository siteRepo
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<DeleteAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteAgentCommand cmd, CancellationToken ct)
@@ -182,6 +213,11 @@ public sealed class DeleteAgentCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.Id);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Delete);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         // NÃO revogar o token aqui. A lixeira é o PRIMEIRO passo do
         // descomissionamento: o agente continua INSTALADO e rodando na máquina
@@ -215,6 +251,8 @@ public sealed class DeleteAgentCommandHandler(
 public sealed class RequestAgentDecommissionCommandHandler(
     DiscoveryDbContext db,
     IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     ILogger<RequestAgentDecommissionCommandHandler> logger
 ) : IRequestHandler<RequestAgentDecommissionCommand, Result<AgentDecommissionDispatchDto>>
 {
@@ -229,6 +267,11 @@ public sealed class RequestAgentDecommissionCommandHandler(
 
         if (agent is null)
             return Result<AgentDecommissionDispatchDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Delete);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentDecommissionDispatchDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var outcome = await AgentDecommissionDispatch.TryDispatchAsync(dispatcher, logger, agent, cmd.Reason, ct);
 
@@ -260,6 +303,7 @@ public sealed class PurgeAgentCommandHandler(
     IRedisService redis,
     ISiteRepository siteRepo,
     IAgentAuthService authService,
+    IScopeContext scopeContext,
     ILogger<PurgeAgentCommandHandler> logger
 ) : IRequestHandler<PurgeAgentCommand, Result<VoidResult>>
 {
@@ -271,6 +315,11 @@ public sealed class PurgeAgentCommandHandler(
             .SingleOrDefaultAsync(a => a.Id == cmd.Id, ct);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Delete);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         // Exclusão definitiva é o segundo passo: o agente precisa estar na lixeira.
         if (agent.DeletedAt is null)
@@ -339,6 +388,7 @@ public sealed class RestoreAgentCommandHandler(
     IRedisService redis,
     ISiteRepository siteRepo,
     ICommandRepository commandRepo,
+    IScopeContext scopeContext,
     ILogger<RestoreAgentCommandHandler> logger
 ) : IRequestHandler<RestoreAgentCommand, Result<VoidResult>>
 {
@@ -349,6 +399,11 @@ public sealed class RestoreAgentCommandHandler(
             .SingleOrDefaultAsync(a => a.Id == cmd.Id, ct);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Edit);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         // Idempotente: agente fora da lixeira já está restaurado.
         if (agent.DeletedAt is not null)

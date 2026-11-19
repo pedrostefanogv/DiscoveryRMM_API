@@ -14,7 +14,7 @@ public class SoftwareInventoryController(IMediator mediator) : ControllerBase
 {
     /// <summary>Agent-scoped inventory (for agent detail page).</summary>
     [HttpGet("agent/{agentId:guid}")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetByAgent(Guid agentId)
     {
         var result = await mediator.Send(new ListAgentSoftwareQuery(agentId));
@@ -23,7 +23,7 @@ public class SoftwareInventoryController(IMediator mediator) : ControllerBase
 
     /// <summary>Scope-based inventory list (global, client, site).</summary>
     [HttpGet]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetInventory(
         [FromQuery] SoftwareInventoryScope scope = SoftwareInventoryScope.Global,
         [FromQuery] Guid? scopeId = null,
@@ -39,7 +39,7 @@ public class SoftwareInventoryController(IMediator mediator) : ControllerBase
 
     /// <summary>Scope-based snapshot (cards at top of page).</summary>
     [HttpGet("snapshot")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSnapshot(
         [FromQuery] SoftwareInventoryScope scope = SoftwareInventoryScope.Global,
         [FromQuery] Guid? scopeId = null)
@@ -50,7 +50,7 @@ public class SoftwareInventoryController(IMediator mediator) : ControllerBase
 
     /// <summary>Installations of a specific software, scoped (for details modal).</summary>
     [HttpGet("{softwareId:guid}/installations")]
-    [RequirePermission(ResourceType.Agents, ActionType.View)]
+    [RequirePermission(ResourceType.Agents, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetInstallations(
         Guid softwareId,
         [FromQuery] SoftwareInventoryScope scope = SoftwareInventoryScope.Global,

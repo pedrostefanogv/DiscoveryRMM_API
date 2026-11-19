@@ -3,7 +3,10 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Software.Commands;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
@@ -14,7 +17,8 @@ public sealed class UpdateAgentSoftwareCommandHandler(
     IAgentSoftwareRepository softwareRepo,
     IAppStoreService appStoreService,
     IAgentCommandDispatcher dispatcher,
-    IAutomationExecutionReportRepository reportRepo
+    IAutomationExecutionReportRepository reportRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<UpdateAgentSoftwareCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(UpdateAgentSoftwareCommand cmd, CancellationToken ct)
@@ -22,6 +26,11 @@ public sealed class UpdateAgentSoftwareCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var installed = await softwareRepo.GetByInventoryIdAsync(cmd.InventoryId);
         if (installed is null || installed.AgentId != cmd.AgentId)
@@ -37,7 +46,6 @@ public sealed class UpdateAgentSoftwareCommandHandler(
         var source = NormalizeUpdateSource(installed.UpdateSource, installed.Source);
         var installationType = source == "chocolatey" ? AppInstallationType.Chocolatey : AppInstallationType.Winget;
 
-        var site = await siteRepo.GetByIdAsync(agent.SiteId);
         var approved = await appStoreService.IsPackageApprovedAsync(
             site?.ClientId, agent.SiteId, cmd.AgentId, installationType, packageId, ct);
 
@@ -92,7 +100,8 @@ public sealed class InstallAgentSoftwareCommandHandler(
     ISiteRepository siteRepo,
     IAppStoreService appStoreService,
     IAgentCommandDispatcher dispatcher,
-    IAutomationExecutionReportRepository reportRepo
+    IAutomationExecutionReportRepository reportRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<InstallAgentSoftwareCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(InstallAgentSoftwareCommand cmd, CancellationToken ct)
@@ -101,6 +110,11 @@ public sealed class InstallAgentSoftwareCommandHandler(
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
 
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
         var packageId = (cmd.PackageId ?? string.Empty).Trim();
         if (packageId.Length == 0)
             return Result<VoidResult>.Failure(Error.Validation("packageId",
@@ -108,7 +122,6 @@ public sealed class InstallAgentSoftwareCommandHandler(
 
         var source = SourceFromInstallationType(cmd.InstallationType);
 
-        var site = await siteRepo.GetByIdAsync(agent.SiteId);
         var approved = await appStoreService.IsPackageApprovedAsync(
             site?.ClientId, agent.SiteId, cmd.AgentId, cmd.InstallationType, packageId, ct);
 
@@ -158,6 +171,8 @@ public sealed class InstallAgentSoftwareCommandHandler(
 
 public sealed class UninstallAgentSoftwareCommandHandler(
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     IAgentSoftwareRepository softwareRepo,
     IAgentCommandDispatcher dispatcher,
     IAutomationExecutionReportRepository reportRepo
@@ -168,6 +183,11 @@ public sealed class UninstallAgentSoftwareCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null)
             return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var installed = await softwareRepo.GetByInventoryIdAsync(cmd.InventoryId);
         if (installed is null || installed.AgentId != cmd.AgentId)

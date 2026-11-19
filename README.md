@@ -108,17 +108,20 @@ Os módulos abaixo estão em fase **testável / pré-estável**: disponíveis pa
 ```
 discovery-rmm-server/
 ├── src/
-│   ├── Discovery.Api/          # ASP.NET Core - Controllers, Hubs, Middleware
-│   ├── Discovery.Core/         # Entidades, Interfaces, DTOs, ValueObjects
-│   ├── Discovery.Infrastructure/ # Repositórios, Services, NATS, Storage
-│   └── Discovery.Migrations/   # FluentMigrator - schema do banco
+│   ├── Discovery.Api/              # ASP.NET Core - Controllers, Services, Middleware
+│   ├── Discovery.Core/             # Entidades, Interfaces, DTOs, ValueObjects
+│   ├── Discovery.Infrastructure/   # Repositórios, Services, NATS, Storage
+│   ├── Discovery.Migrations/       # FluentMigrator - schema do banco
+│   ├── Discovery.Tests/            # Testes unitários (NUnit)
+│   └── Discovery.IntegrationTests/ # Testes de integração PostgreSQL (Testcontainers)
+├── tests/
+│   └── e2e/                        # Testes E2E (NUnit + WebApplicationFactory)
 ├── .github/
 │   └── workflows/
-│       ├── security-scan.yml   # Trivy/Dependency Review/Secrets (agendado)
-│       └── security-hotfix.yml # Fast-track para CVEs críticos
-│       # Pendência (auditoria 2026-10-21): ci.yml (build+test) e release.yml
-│       # ainda não existem neste repositório — criar antes de anunciar badges.
-└── docs/                       # Documentação por capacidade
+│       ├── ci.yml                  # Build + Unit + E2E + IntegrationTests (PostgreSQL)
+│       ├── security-scan.yml       # Trivy/Dependency Review/Secrets (agendado)
+│       └── security-hotfix.yml     # Fast-track para CVEs críticos
+└── docs/                           # Documentação por capacidade
 ```
 
 ### Canais de Release
@@ -140,19 +143,19 @@ discovery-rmm-server/
 |--------|-----------|
 | Runtime | .NET 10 (ASP.NET Core) |
 | Banco de dados | PostgreSQL 15+ com pgvector |
-| Mensageria | NATS 2.x com JetStream |
-| Cache | Redis (StackExchange.Redis) |
+| Mensageria | NATS 2.x com JetStream (streams isolados por tenant `DISCOVERY_FANOUT_COMMANDS_{clientIdN}` e `DISCOVERY_SUPPORT_CHAT_{clientIdN}`) |
+| Cache | Redis (StackExchange.Redis + OutputCache) |
 | ORM | Entity Framework Core 10 + Npgsql |
 | Migrations | FluentMigrator |
-| Realtime | NATS 2.x (JetStream) + SSE |
+| Realtime | NATS 2.x (JetStream) + SSE + WebSocket Tunnel |
 | IA | OpenAI / Ollama (pgvector embeddings) |
 | Observabilidade | OpenTelemetry (traces + metrics) |
-| Acesso Remoto | Sessões NATS (desktop/terminal/arquivos), Proxy LAN e túnel RDP |
-| Autenticação | JWT Bearer + API Keys + Argon2 |
+| Acesso Remoto | Sessões NATS (desktop/terminal/arquivos), Proxy LAN e túnel RDP (`POST .../tunnel/ticket`, `GET .../tunnel/ws`, `RemoteSessionRights` incl. `NoProxy`/`NoRdp`) |
+| Autenticação | JWT Bearer + API Keys + Argon2 + FIDO2/TOTP + RBAC com `ScopeSource` explícito (`Global`/`AccessList`/`FromRoute`) |
 | Validação | FluentValidation |
-| API Docs | Scalar (OpenAPI) |
+| API Docs | Scalar (OpenAPI em `/scalar/v1`) |
 | Storage | Local / MinIO / AWS S3 |
-| Testes | NUnit + Mocks |
+| Testes | NUnit + E2E (`WebApplicationFactory`) + Testcontainers PostgreSQL |
 
 </div>
 
@@ -192,8 +195,8 @@ dotnet run --project src/Discovery.Api -- --migrate
 
 ```bash
 dotnet run --project src/Discovery.Api
-# API disponível em: https://localhost:7001
-# Docs Scalar: https://localhost:7001/scalar
+# API disponível em: http://0.0.0.0:5288 (http://localhost:5288)
+# Docs Scalar: http://localhost:5288/scalar/v1
 ```
 
 ### 5. Primeiro Login
@@ -397,11 +400,11 @@ The modules below are **testable / pre-stable**: available for validation, but s
 | 💬 **AI Chat** | OpenAI/Ollama for ticket analysis | 🧪 Pre-stable |
 | 🎫 **Auto-Tickets** | Automatic ticket generation engine | 🧪 Pre-stable |
 | 🔧 **Custom Fields** | Configurable fields per entity | 🧪 Pre-stable |
-| 🖥️ **Remote Access** | Desktop/Terminal/Files over NATS + LAN Proxy + RDP tunnel | 🧪 Pre-stable |
+| 🔐 **Remote Access** | Desktop/Terminal/Files over NATS + LAN Proxy & RDP tunnel (`POST .../tunnel/ticket`, `GET .../tunnel/ws`, `RemoteSessionRights` incl. `NoProxy`/`NoRdp`) | 🧪 Pre-stable |
 | 📊 **Reports** | Customizable templates with export | 🧪 Pre-stable |
 | 🗄️ **Object Storage** | Local, MinIO and S3-compatible | 🧪 Pre-stable |
 | 🚀 **App Store** | App catalog with automated deployment | 🧪 Pre-stable |
-| 📡 **NATS Messaging** | Broker with auth callout and credentials | 🧪 Pre-stable |
+| 📡 **NATS Messaging** | Broker with Ed25519 auth callout & per-tenant JetStream streams (`DISCOVERY_FANOUT_COMMANDS_{clientIdN}`, `DISCOVERY_SUPPORT_CHAT_{clientIdN}`) | 🧪 Pre-stable |
 | 🔭 **OpenTelemetry** | Distributed tracing and metrics | 🧪 Pre-stable |
 
 ## 🚀 Quick Start
@@ -411,8 +414,8 @@ git clone https://github.com/pedrostefanogv/DiscoveryRMM_API.git
 cd DiscoveryRMM_API
 dotnet restore Discovery.slnx
 dotnet run --project src/Discovery.Api
-# API available at: https://localhost:7001
-# Scalar docs: https://localhost:7001/scalar
+# API available at: http://0.0.0.0:5288 (http://localhost:5288)
+# Scalar docs: http://localhost:5288/scalar/v1
 ```
 
 ### First Login

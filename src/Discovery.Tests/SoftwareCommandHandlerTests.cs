@@ -39,7 +39,7 @@ public class SoftwareCommandHandlerTests
         var reports = new FakeReportRepo();
         var handler = new UpdateAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(), new FakeSoftwareRepo(Installed()),
-            new FakeAppStore(approved: true), dispatcher, reports);
+            new FakeAppStore(approved: true), dispatcher, reports, F02ScopeContextStub.Global());
 
         var result = await handler.Handle(new UpdateAgentSoftwareCommand(AgentId, InventoryId), CancellationToken.None);
 
@@ -55,7 +55,7 @@ public class SoftwareCommandHandlerTests
         var dispatcher = new FakeDispatcher();
         var handler = new UpdateAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(), new FakeSoftwareRepo(Installed()),
-            new FakeAppStore(approved: false), dispatcher, new FakeReportRepo());
+            new FakeAppStore(approved: false), dispatcher, new FakeReportRepo(), F02ScopeContextStub.Global());
 
         var result = await handler.Handle(new UpdateAgentSoftwareCommand(AgentId, InventoryId), CancellationToken.None);
 
@@ -70,7 +70,7 @@ public class SoftwareCommandHandlerTests
         var dispatcher = new FakeDispatcher();
         var handler = new UpdateAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(), new FakeSoftwareRepo(Installed()),
-            new FakeAppStore(approved: false), dispatcher, new FakeReportRepo());
+            new FakeAppStore(approved: false), dispatcher, new FakeReportRepo(), F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new UpdateAgentSoftwareCommand(AgentId, InventoryId, ConfirmUnapproved: true), CancellationToken.None);
@@ -84,7 +84,7 @@ public class SoftwareCommandHandlerTests
     {
         var dispatcher = new FakeDispatcher();
         var handler = new UninstallAgentSoftwareCommandHandler(
-            new FakeAgentRepo(), new FakeSoftwareRepo(Installed()), dispatcher, new FakeReportRepo());
+            new FakeAgentRepo(), new FakeSiteRepo(), F02ScopeContextStub.Global(), new FakeSoftwareRepo(Installed()), dispatcher, new FakeReportRepo());
 
         var result = await handler.Handle(new UninstallAgentSoftwareCommand(AgentId, InventoryId), CancellationToken.None);
 
@@ -99,7 +99,7 @@ public class SoftwareCommandHandlerTests
         var reports = new FakeReportRepo();
         var handler = new InstallAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(),
-            new FakeAppStore(approved: true), dispatcher, reports);
+            new FakeAppStore(approved: true), dispatcher, reports, F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget), CancellationToken.None);
@@ -120,7 +120,7 @@ public class SoftwareCommandHandlerTests
         var dispatcher = new FakeDispatcher();
         var handler = new InstallAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(),
-            new FakeAppStore(approved: true), dispatcher, new FakeReportRepo());
+            new FakeAppStore(approved: true), dispatcher, new FakeReportRepo(), F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new InstallAgentSoftwareCommand(AgentId, "meu.pacote.custom", AppInstallationType.Custom), CancellationToken.None);
@@ -138,7 +138,7 @@ public class SoftwareCommandHandlerTests
         var reports = new FakeReportRepo();
         var handler = new InstallAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(),
-            new FakeAppStore(approved: false), dispatcher, reports);
+            new FakeAppStore(approved: false), dispatcher, reports, F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget), CancellationToken.None);
@@ -156,7 +156,7 @@ public class SoftwareCommandHandlerTests
         var reports = new FakeReportRepo();
         var handler = new InstallAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(),
-            new FakeAppStore(approved: false), dispatcher, reports);
+            new FakeAppStore(approved: false), dispatcher, reports, F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget, ConfirmUnapproved: true), CancellationToken.None);
@@ -171,7 +171,7 @@ public class SoftwareCommandHandlerTests
     {
         var handler = new InstallAgentSoftwareCommandHandler(
             new FakeAgentRepo(agent: null), new FakeSiteRepo(),
-            new FakeAppStore(approved: true), new FakeDispatcher(), new FakeReportRepo());
+            new FakeAppStore(approved: true), new FakeDispatcher(), new FakeReportRepo(), F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new InstallAgentSoftwareCommand(AgentId, "Google.Chrome", AppInstallationType.Winget), CancellationToken.None);
@@ -185,7 +185,7 @@ public class SoftwareCommandHandlerTests
     {
         var handler = new InstallAgentSoftwareCommandHandler(
             new FakeAgentRepo(), new FakeSiteRepo(),
-            new FakeAppStore(approved: true), new FakeDispatcher(), new FakeReportRepo());
+            new FakeAppStore(approved: true), new FakeDispatcher(), new FakeReportRepo(), F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new InstallAgentSoftwareCommand(AgentId, "   ", AppInstallationType.Winget), CancellationToken.None);

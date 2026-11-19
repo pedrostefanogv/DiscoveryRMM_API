@@ -123,7 +123,9 @@ public class ReportDatasetQueryServiceNullLoggerProbeTests
         Assert.That(erro.Message, Does.Contain("sns"));
         Assert.That(erro.Message, Does.Contain("nao casou nenhuma linha"),
             "o log do join sem correspondencia nao pode substituir o erro de negocio");
-        Assert.That(erro.StackTrace, Does.Contain("ReportDatasetQueryService.cs:line 309"),
+        Assert.That(erro.StackTrace, Does.Contain("ReportDatasetQueryService"),
+            "a origem precisa ser o throw de InvalidOperationException");
+        Assert.That(erro.StackTrace, Does.Contain("QueryMultiSourceAsync"),
             "a origem precisa ser o throw de InvalidOperationException");
     }
 

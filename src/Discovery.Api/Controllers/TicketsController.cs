@@ -144,7 +144,7 @@ public class TicketsController(
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTicketCommand command)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -155,7 +155,7 @@ public class TicketsController(
     }
 
     [HttpPatch("{id:guid}/workflow-state")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpdateWorkflowState(Guid id, [FromBody] TransitionTicketStateRequest request)
     {
         // Aceita "targetStateId" (canônico) e "workflowStateId" (legado). Sem a
@@ -207,7 +207,7 @@ public class TicketsController(
     /// para engano/spam — e é reversível via <c>POST {id}/restore</c>.
     /// </summary>
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> Delete(Guid id)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Delete, HttpContext.RequestAborted))
@@ -241,7 +241,7 @@ public class TicketsController(
     /// mesmo escopo do chamado.
     /// </summary>
     [HttpPost("{id:guid}/restore")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Delete)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> Restore(Guid id)
     {
         // O chamado está na lixeira, então CanAccessTicketAsync (que usa
@@ -260,7 +260,7 @@ public class TicketsController(
     }
 
     [HttpGet("{id:guid}/comments")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetComments(Guid id, [FromQuery] string? cursor = null, [FromQuery] int limit = 50)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -277,7 +277,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/comments")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> AddComment(Guid id, [FromBody] AddTicketCommentCommand command)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -294,7 +294,7 @@ public class TicketsController(
     /// e anexa a evidência como comentário. Falha de um passo não aborta os demais.
     /// </summary>
     [HttpPost("{id:guid}/runbook/execute")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Execute)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> ExecuteRunbook(Guid id, [FromBody] ExecuteTicketRunbookCommand command)
     {
         // Execução em MÁQUINA exige três coisas: permissão Tickets:Execute, ser do
@@ -328,7 +328,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/merge")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> MergeTickets(Guid id, [FromBody] MergeTicketsCommand command)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -350,7 +350,7 @@ public class TicketsController(
 
     [HttpGet("{id:guid}/sla")]
     [HttpGet("{id:guid}/sla/status")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSlaStatus(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -362,7 +362,7 @@ public class TicketsController(
     // ── By Client ───────────────────────────────────────────────────────
 
     [HttpGet("by-client/{clientId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetByClient(Guid clientId, [FromQuery] int limit = 100)
     {
         var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
@@ -382,7 +382,7 @@ public class TicketsController(
     // ── Watchers ─────────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/watchers")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetWatchers(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -392,7 +392,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/watchers")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> AddWatcher(Guid id, [FromBody] AddWatcherRequest request)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -402,7 +402,7 @@ public class TicketsController(
     }
 
     [HttpDelete("{id:guid}/watchers/{userId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> RemoveWatcher(Guid id, Guid userId)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -414,7 +414,7 @@ public class TicketsController(
     // ── Automation Links ─────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/automation-links")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAutomationLinks(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -424,7 +424,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/automation-links")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateAutomationLink(Guid id, [FromBody] TicketAutomationLink body)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -436,7 +436,7 @@ public class TicketsController(
     // ── Knowledge Links ──────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/knowledge-links")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetKnowledgeLinks(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -446,7 +446,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/knowledge-links")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateKnowledgeLink(Guid id, [FromBody] TicketKnowledgeLink body)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -456,7 +456,7 @@ public class TicketsController(
     }
 
     [HttpDelete("{id:guid}/knowledge-links/{linkId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> DeleteKnowledgeLink(Guid id, Guid linkId)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -470,7 +470,7 @@ public class TicketsController(
     /// Endpoint consumido pelo console web — antes não existia (404).
     /// </summary>
     [HttpGet("{id:guid}/knowledge/suggest")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> SuggestKnowledge(Guid id, [FromQuery] string? q = null, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] Guid? departmentId = null, [FromQuery] int maxResults = 5, CancellationToken ct = default)
     {
         if (!await CanAccessTicketAsync(id, ct))
@@ -484,7 +484,7 @@ public class TicketsController(
     /// M103 — o front chamava este endpoint sem ele existir (404).
     /// </summary>
     [HttpPost("{id:guid}/knowledge/{articleId:guid}/feedback")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> SetKnowledgeLinkFeedback(Guid id, Guid articleId, [FromBody] KbLinkFeedbackRequest body, CancellationToken ct)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, ct))
@@ -498,7 +498,7 @@ public class TicketsController(
     // ── Relations ────────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/relations")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetRelations(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -508,7 +508,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/relations")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateRelation(Guid id, [FromBody] CreateRelationRequest request)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -523,7 +523,7 @@ public class TicketsController(
     }
 
     [HttpDelete("{id:guid}/relations/{relationId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> DeleteRelation(Guid id, Guid relationId)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -536,7 +536,7 @@ public class TicketsController(
     // ── Lifecycle: reopen / rating (CSAT) ───────────────────────────────
 
     [HttpPost("{id:guid}/reopen")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Reopen(Guid id, [FromBody] ReopenTicketRequest request)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -547,7 +547,7 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/rating")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Rate(Guid id, [FromBody] RateTicketRequest request)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -564,7 +564,7 @@ public class TicketsController(
     /// Lista anexos de um ticket com paginação por cursor.
     /// </summary>
     [HttpGet("{id:guid}/attachments")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAttachments(
         Guid id,
         [FromQuery] string? cursor = null,
@@ -583,7 +583,7 @@ public class TicketsController(
     /// página de comentários omitia anexos de conversas antigas).
     /// </summary>
     [HttpGet("{id:guid}/attachments/all")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAllAttachments(
         Guid id,
         [FromQuery] string? cursor = null,
@@ -601,7 +601,7 @@ public class TicketsController(
     /// redireciona para a URL pré-assinada do object storage.
     /// </summary>
     [HttpGet("{id:guid}/attachments/{attachmentId:guid}/download")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> DownloadAttachment(Guid id, Guid attachmentId, CancellationToken ct)
     {
         if (!await CanAccessTicketAsync(id, ct))
@@ -645,7 +645,7 @@ public class TicketsController(
     /// configuração global de anexos de tickets (habilitação, tipos e tamanho).
     /// </summary>
     [HttpPost("{id:guid}/attachments/presigned-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> PrepareAttachmentUpload(Guid id, [FromBody] PresignedUploadRequestDto req)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -684,7 +684,7 @@ public class TicketsController(
     /// Finaliza o upload pré-assinado e persiste o anexo do ticket.
     /// </summary>
     [HttpPost("{id:guid}/attachments/complete-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CompleteAttachmentUpload(Guid id, [FromBody] CompleteUploadRequestDto req)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -765,7 +765,7 @@ public class TicketsController(
 
     /// <summary>Prepara upload direto no storage para um anexo de comentário.</summary>
     [HttpPost("{id:guid}/comments/{commentId:guid}/attachments/presigned-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> PrepareCommentAttachmentUpload(
         Guid id, Guid commentId, [FromBody] PresignedUploadRequestDto req)
     {
@@ -802,7 +802,7 @@ public class TicketsController(
 
     /// <summary>Finaliza o upload pré-assinado e persiste o anexo do comentário.</summary>
     [HttpPost("{id:guid}/comments/{commentId:guid}/attachments/complete-upload")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CompleteCommentAttachmentUpload(
         Guid id, Guid commentId, [FromBody] CompleteUploadRequestDto req)
     {
@@ -856,7 +856,7 @@ public class TicketsController(
 
     /// <summary>Baixa um anexo de comentário (stream same-origin autenticado).</summary>
     [HttpGet("{id:guid}/comments/{commentId:guid}/attachments/{attachmentId:guid}/download")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> DownloadCommentAttachment(
         Guid id, Guid commentId, Guid attachmentId, CancellationToken ct)
     {
@@ -896,7 +896,7 @@ public class TicketsController(
     /// marcado como excluído; os anexos da conversa saem da listagem junto.
     /// </summary>
     [HttpDelete("{id:guid}/comments/{commentId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> DeleteComment(Guid id, Guid commentId)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -952,7 +952,7 @@ public class TicketsController(
     // ── Audit Timeline ───────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/audit/timeline")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAuditTimeline(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -964,7 +964,7 @@ public class TicketsController(
     // ── SLA Details ──────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/sla/details")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSlaDetails(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -1017,7 +1017,7 @@ public class TicketsController(
     // ── Custom Fields ────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/custom-fields")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFields(Guid id, [FromQuery] bool includeSecrets = false)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
@@ -1026,7 +1026,7 @@ public class TicketsController(
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit)]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpsertCustomField(Guid id, Guid definitionId, [FromBody] JsonElement body)
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
@@ -1078,7 +1078,7 @@ public class TicketsController(
     /// não deveria).
     /// </summary>
     [HttpGet("{id:guid}/capabilities")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCapabilities(Guid id, CancellationToken ct)
     {
         var ticket = await ticketRepository.GetByIdAsync(id);
@@ -1169,7 +1169,7 @@ public class TicketsController(
     // ── Respostas do questionário do template ────────────────────────────
 
     [HttpGet("{id:guid}/answers")]
-    [RequirePermission(ResourceType.Tickets, ActionType.View)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAnswers(Guid id)
     {
         if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))

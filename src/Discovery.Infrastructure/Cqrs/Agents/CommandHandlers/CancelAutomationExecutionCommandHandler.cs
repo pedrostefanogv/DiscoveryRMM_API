@@ -1,7 +1,10 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Automation.Commands;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
@@ -19,13 +22,25 @@ namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
 /// </summary>
 public sealed class CancelAutomationExecutionCommandHandler(
     IAutomationExecutionReportRepository reportRepo,
-    ICommandRepository commandRepo
+    ICommandRepository commandRepo,
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<CancelAutomationExecutionCommand, Result<AutomationExecutionDto>>
 {
     private const string CancelReason = "Cancelada pelo operador.";
 
     public async Task<Result<AutomationExecutionDto>> Handle(CancelAutomationExecutionCommand cmd, CancellationToken ct)
     {
+        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
+        if (agent is null)
+            return Result<AutomationExecutionDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AutomationExecutionDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
         var report = await reportRepo.GetByIdAsync(cmd.ExecutionId);
 
         // Anti-IDOR: a execução precisa pertencer ao agent informado na rota.

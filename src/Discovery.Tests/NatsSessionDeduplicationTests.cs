@@ -12,6 +12,9 @@ public class NatsSessionDeduplicationTests
 {
     private sealed class FakeTokenRepository(List<AgentToken> tokens) : IAgentTokenRepository
     {
+        public int UpdateLastUsedCalls { get; private set; }
+        public List<Guid> UpdatedLastUsedTokenIds { get; } = [];
+
         public Task<AgentToken?> GetByIdAsync(Guid id)
             => Task.FromResult(tokens.FirstOrDefault(t => t.Id == id));
 
@@ -27,7 +30,12 @@ public class NatsSessionDeduplicationTests
             return Task.FromResult(token);
         }
 
-        public Task UpdateLastUsedAsync(Guid id) => Task.CompletedTask;
+        public Task UpdateLastUsedAsync(Guid id)
+        {
+            UpdateLastUsedCalls++;
+            UpdatedLastUsedTokenIds.Add(id);
+            return Task.CompletedTask;
+        }
 
         public Task UpdateLastNatsConnectedAsync(Guid id) => Task.CompletedTask;
 
@@ -49,9 +57,17 @@ public class NatsSessionDeduplicationTests
     private sealed class FakeAgentRepository(Agent? agent = null) : IAgentRepository
     {
         private readonly Agent _agent = agent ?? new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid() };
+        public int DecommissionLookupCalls { get; private set; }
+
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(id == _agent.Id ? _agent : null)!;
         public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<Agent>>(ids.Contains(_agent.Id) ? [_agent] : []);
+
+        public Task<Agent?> GetByIdForDecommissionAsync(Guid id)
+        {
+            DecommissionLookupCalls++;
+            return Task.FromResult(id == _agent.Id ? _agent : null);
+        }
 
         // Stubs for unused members
         public Task<IEnumerable<Agent>> GetAllAsync() => throw new NotImplementedException();
@@ -62,7 +78,6 @@ public class NatsSessionDeduplicationTests
         public Task UpdateStatusAsync(Guid id, AgentStatus status, string? ipAddress) => throw new NotImplementedException();
         public Task<IReadOnlyList<Agent>> GetOnlineAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<Agent>> GetOnlineIncludingTrashedAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<Agent?> GetByIdForDecommissionAsync(Guid id) => throw new NotSupportedException();
         public Task ApproveZeroTouchAsync(Guid agentId) => throw new NotImplementedException();
         public Task SetPolicySyncAsync(Guid id, string fingerprint, DateTime syncedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task SetMaintenanceAsync(Guid id, bool enabled, string? reason, Guid changedByUserId) => throw new NotImplementedException();
@@ -310,5 +325,99 @@ public class NatsSessionDeduplicationTests
         var reacquired = await service.TryAcquireNatsSessionAsync(
             tokenId, agentId, "nkey2", TimeSpan.FromMinutes(5));
         Assert.That(reacquired, Is.True, "Após expiração da sessão, deve ser possível readquiri-la.");
+    }
+
+    // ── Testes de debounce de UpdateLastUsedAsync & validação com status ─────
+
+    [Test]
+    public async Task ValidateToken_DebouncesUpdateLastUsed_WithinFiveMinuteWindow()
+    {
+        var agent = new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid() };
+        var rawToken = "mdz_debounce_test_token_abcdef";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agent.Id,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddHours(-1),
+            LastUsedAt = null
+        };
+
+        var tokenRepo = new FakeTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository(agent);
+        var redis = new FakeRedisService();
+        var service = new AgentTokenAuthService(tokenRepo, agentRepo, redis);
+
+        // 1ª chamada (LastUsedAt == null): deve gravar no banco e atualizar cache
+        var first = await service.ValidateTokenWithStatusAsync(rawToken);
+        Assert.That(first, Is.Not.Null);
+        Assert.That(first!.IsAgentTrashed, Is.False);
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(1));
+        Assert.That(first.Token.LastUsedAt, Is.Not.Null);
+
+        // Chamadas subsequentes dentro de 5 minutos (via cache Redis): NÃO devem escrever no banco
+        var second = await service.ValidateTokenWithStatusAsync(rawToken);
+        var third = await service.ValidateTokenWithStatusAsync(rawToken);
+        Assert.That(second, Is.Not.Null);
+        Assert.That(third, Is.Not.Null);
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task ValidateToken_SkipsUpdateLastUsed_WhenLoadedFromDbWithRecentTimestamp()
+    {
+        var agent = new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid() };
+        var rawToken = "mdz_debounce_db_recent_token_abcdef";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agent.Id,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddHours(-1),
+            LastUsedAt = DateTime.UtcNow.AddMinutes(-4)
+        };
+
+        var tokenRepo = new FakeTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository(agent);
+        var redis = new FakeRedisService();
+        var service = new AgentTokenAuthService(tokenRepo, agentRepo, redis);
+
+        var result = await service.ValidateTokenWithStatusAsync(rawToken);
+        Assert.That(result, Is.Not.Null);
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(0),
+            "Token carregado do banco com LastUsedAt < 5 min não deve gerar UPDATE.");
+    }
+
+    [Test]
+    public async Task ValidateToken_UpdatesLastUsed_WhenFiveMinutesOrMoreElapsed()
+    {
+        var agent = new Agent { Id = Guid.NewGuid(), SiteId = Guid.NewGuid(), DeletedAt = DateTime.UtcNow };
+        var rawToken = "mdz_debounce_expired_token_abcdef";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agent.Id,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddHours(-1),
+            LastUsedAt = DateTime.UtcNow.AddMinutes(-5).AddSeconds(-2)
+        };
+
+        var tokenRepo = new FakeTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository(agent);
+        var redis = new FakeRedisService();
+        var service = new AgentTokenAuthService(tokenRepo, agentRepo, redis);
+
+        var result = await service.ValidateTokenWithStatusAsync(rawToken);
+        Assert.That(result, Is.Not.Null);
+        Assert.That(result!.IsAgentTrashed, Is.True);
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(1));
+
+        // Imediatamente depois (com cache atualizado para agora): debounced novamente
+        var followUp = await service.ValidateTokenWithStatusAsync(rawToken);
+        Assert.That(followUp, Is.Not.Null);
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(1));
     }
 }

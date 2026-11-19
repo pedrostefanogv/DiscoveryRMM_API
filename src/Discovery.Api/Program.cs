@@ -158,6 +158,7 @@ builder.Services.AddScoped<IRemoteSessionAuditRepository, RemoteSessionAuditRepo
 builder.Services.AddScoped<IRemoteRecordingService, RemoteRecordingService>();
 builder.Services.AddScoped<RemoteSessionAuditService>();
 builder.Services.AddScoped<RemoteSessionDispatcher>();
+builder.Services.AddSingleton<ITunnelTicketService, TunnelTicketService>();
 builder.Services.AddHostedService<RemoteSessionLivenessBackgroundService>();
 builder.Services.AddHostedService<RecordingAssemblerService>();
 // WP3: ingestão NATS + persistência incremental do terminal em NDJSON.
@@ -232,6 +233,10 @@ builder.Services.AddScoped<AiChatSettingsResolver>();
 builder.Services.AddScoped<AiChatSystemPromptBuilder>();
 builder.Services.AddScoped<AiChatToolOrchestrator>();
 builder.Services.AddScoped<AiChatQuickReply>();
+builder.Services.AddScoped<AiChatCapabilityResolver>();
+builder.Services.AddScoped<AiChatToolRateLimiter>();
+builder.Services.AddScoped<AiChatSingleRoundStreamer>();
+builder.Services.AddScoped<AiChatMultiRoundStreamer>();
 builder.Services.AddScoped<AiChatStreamingOrchestrator>();
 
 // Register built-in MCP tool handlers after DI is built (handled at first use via McpToolExecutor constructor)
@@ -602,3 +607,5 @@ app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks
     }
 }).AllowAnonymous();
 app.Run();
+
+public partial class Program;

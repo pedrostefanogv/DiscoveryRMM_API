@@ -41,9 +41,10 @@ public static class RemoteSessionViewerPermissions
     /// só do sub faria o viewer tentar operar e falhar com -ERR.
     ///
     /// PROXY/RDP: os subjects de túnel são concedidos conforme o KIND da sessão —
-    /// .proxy.req/.proxy.resp só para Proxy/All; .tunnel.in/.tunnel.out só para
-    /// Rdp/All — e são REMOVIDOS pelos bits NoProxy (64) / NoRdp (128). Chamar sem
-    /// kind (legado) preserva o comportamento anterior (proxy concedido).
+    /// .proxy.req/.proxy.resp só para Proxy/All; .proxy.ready, .tunnel.in e
+    /// .tunnel.out para Proxy/Rdp/All — e são REMOVIDOS pelos bits NoProxy (64) /
+    /// NoRdp (128). Chamar sem kind (legado) preserva o comportamento anterior
+    /// (proxy concedido).
     /// </summary>
     public static (string[] Publish, string[] Subscribe) Build(string natsSubject, RemoteSessionRights rights, RemoteSessionKind? kind = null)
     {
@@ -59,6 +60,7 @@ public static class RemoteSessionViewerPermissions
         // kind null = chamador legado (comportamento anterior: proxy concedido).
         var proxyAllowed = !noProxy && (kind is null || kind is RemoteSessionKind.Proxy or RemoteSessionKind.All);
         var rdpAllowed = !noRdp && kind is RemoteSessionKind.Rdp or RemoteSessionKind.All;
+        var tunnelAllowed = proxyAllowed || rdpAllowed;
 
         var pub = new List<string>
         {
@@ -86,7 +88,7 @@ public static class RemoteSessionViewerPermissions
 
         if (proxyAllowed)
             pub.Add($"{natsSubject}.proxy.req");
-        if (rdpAllowed)
+        if (tunnelAllowed)
             pub.Add($"{natsSubject}.tunnel.in");
         pub.Add($"{natsSubject}.proc.req");
 
@@ -126,13 +128,17 @@ public static class RemoteSessionViewerPermissions
         {
             sub.Add($"{natsSubject}.files.ready");
             sub.Add($"{natsSubject}.files.resp");
+            sub.Add($"{natsSubject}.files.data");
             sub.Add($"{natsSubject}.files.progress");
         }
 
         if (proxyAllowed)
             sub.Add($"{natsSubject}.proxy.resp");
-        if (rdpAllowed)
+        if (tunnelAllowed)
+        {
+            sub.Add($"{natsSubject}.proxy.ready");
             sub.Add($"{natsSubject}.tunnel.out");
+        }
         sub.Add($"{natsSubject}.proc.resp");
         sub.Add($"{natsSubject}.proc.ready");
 

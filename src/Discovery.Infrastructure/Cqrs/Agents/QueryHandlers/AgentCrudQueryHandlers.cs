@@ -159,14 +159,16 @@ public sealed class GetDeletedAgentsQueryHandler(
             query = query.Where(agent => db.Sites.Any(site => site.Id == agent.SiteId && site.ClientId == targetClientId));
         }
 
-        // Row-level security: usuário sem acesso global só enxerga clientes permitidos.
+        // Row-level security: usuário sem acesso global só enxerga clientes/sites permitidos.
         if (!q.HasGlobalAccess)
         {
             var allowedClientIds = q.AllowedClientIds?.Distinct().ToArray() ?? [];
-            if (allowedClientIds.Length == 0)
+            var allowedSiteIds = q.AllowedSiteIds?.Distinct().ToArray() ?? [];
+            if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
                 return Result<DeletedAgentsPageDto>.Success(new DeletedAgentsPageDto([], 0, safePage, safePageSize));
 
             query = query.Where(agent =>
+                allowedSiteIds.Contains(agent.SiteId) ||
                 db.Sites.Any(site => site.Id == agent.SiteId && allowedClientIds.Contains(site.ClientId)));
         }
 
@@ -220,6 +222,8 @@ public sealed class GetDeletedAgentsQueryHandler(
 
 public sealed class GetAgentCustomFieldsQueryHandler(
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     ICustomFieldService customFieldService
 ) : IRequestHandler<GetAgentCustomFieldsQuery, Result<IReadOnlyList<CustomFieldValueDto>>>
 {
@@ -227,6 +231,11 @@ public sealed class GetAgentCustomFieldsQueryHandler(
     {
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
+            return Result<IReadOnlyList<CustomFieldValueDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
             return Result<IReadOnlyList<CustomFieldValueDto>>.Failure(Error.NotFound("Agent not found."));
 
         var values = await customFieldService.GetValuesAsync(CustomFieldScopeType.Agent, q.AgentId, q.IncludeSecrets, ct, q.IncludeHidden);
@@ -237,6 +246,8 @@ public sealed class GetAgentCustomFieldsQueryHandler(
 
 public sealed class GetAgentCustomFieldSchemaQueryHandler(
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     ICustomFieldService customFieldService
 ) : IRequestHandler<GetAgentCustomFieldSchemaQuery, Result<IReadOnlyList<CustomFieldSchemaItemDto>>>
 {
@@ -244,6 +255,11 @@ public sealed class GetAgentCustomFieldSchemaQueryHandler(
     {
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
+            return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
             return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Agent not found."));
 
         var schema = await customFieldService.GetSchemaAsync(
@@ -259,7 +275,8 @@ public sealed class GetAgentCustomFieldSchemaQueryHandler(
 }
 
 public sealed class GetAgentCustomFieldMapQueryHandler(
-    DiscoveryDbContext db
+    DiscoveryDbContext db,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentCustomFieldMapQuery, Result<AgentCustomFieldMapDto>>
 {
     public async Task<Result<AgentCustomFieldMapDto>> Handle(GetAgentCustomFieldMapQuery q, CancellationToken ct)
@@ -286,9 +303,14 @@ public sealed class GetAgentCustomFieldMapQueryHandler(
             .ToListAsync(ct);
 
         var definitionIds = definitions.Select(definition => definition.DefinitionId).ToList();
-        var values = definitionIds.Count == 0
-            ? []
-            : await db.CustomFieldValues
+        if (definitionIds.Count == 0)
+            return Result<AgentCustomFieldMapDto>.Success(new AgentCustomFieldMapDto(definitions, []));
+
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.View);
+        List<AgentCustomFieldMapValueDto> values;
+        if (access.HasGlobalAccess)
+        {
+            values = await db.CustomFieldValues
                 .AsNoTracking()
                 .Where(value =>
                     definitionIds.Contains(value.DefinitionId)
@@ -299,6 +321,40 @@ public sealed class GetAgentCustomFieldMapQueryHandler(
                     value.EntityId!.Value,
                     value.ValueJson))
                 .ToListAsync(ct);
+        }
+        else
+        {
+            var allowedClientIds = access.AllowedClientIds.Distinct().ToArray();
+            var allowedSiteIds = access.AllowedSiteIds.Distinct().ToArray();
+            if (allowedClientIds.Length == 0 && allowedSiteIds.Length == 0)
+            {
+                values = [];
+            }
+            else
+            {
+                var allowedAgentIds = await db.Agents
+                    .AsNoTracking()
+                    .Where(a => allowedSiteIds.Contains(a.SiteId)
+                                || db.Sites.Any(s => s.Id == a.SiteId && allowedClientIds.Contains(s.ClientId)))
+                    .Select(a => a.Id)
+                    .ToListAsync(ct);
+
+                values = allowedAgentIds.Count == 0
+                    ? []
+                    : await db.CustomFieldValues
+                        .AsNoTracking()
+                        .Where(value =>
+                            definitionIds.Contains(value.DefinitionId)
+                            && value.ScopeType == CustomFieldScopeType.Agent
+                            && value.EntityId != null
+                            && allowedAgentIds.Contains(value.EntityId.Value))
+                        .Select(value => new AgentCustomFieldMapValueDto(
+                            value.DefinitionId,
+                            value.EntityId!.Value,
+                            value.ValueJson))
+                        .ToListAsync(ct);
+            }
+        }
 
         return Result<AgentCustomFieldMapDto>.Success(new AgentCustomFieldMapDto(definitions, values));
     }
@@ -306,6 +362,8 @@ public sealed class GetAgentCustomFieldMapQueryHandler(
 
 public sealed class UpsertAgentCustomFieldCommandHandler(
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     ICustomFieldService customFieldService
 ) : IRequestHandler<UpsertAgentCustomFieldCommand, Result<CustomFieldValueDto>>
 {
@@ -314,6 +372,11 @@ public sealed class UpsertAgentCustomFieldCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null)
             return Result<CustomFieldValueDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Edit);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<CustomFieldValueDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         try
         {

@@ -39,6 +39,8 @@ public sealed class SendAgentCommandCommandHandler(
 
 public sealed class CreateAgentTokenCommandHandler(
     IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     IAgentAuthService authService
 ) : IRequestHandler<CreateAgentTokenCommand, Result<AgentTokenDto>>
 {
@@ -47,28 +49,59 @@ public sealed class CreateAgentTokenCommandHandler(
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<AgentTokenDto>.Failure(Error.NotFound("Agent not found."));
 
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Create);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentTokenDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
         var (token, _) = await authService.CreateTokenAsync(cmd.AgentId, cmd.Name);
         return Result<AgentTokenDto>.Success(new AgentTokenDto(token.Id, token.Description ?? cmd.Name, token.TokenPrefix ?? string.Empty, token.CreatedAt, token.ExpiresAt));
     }
 }
 
 public sealed class RevokeAgentTokenCommandHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     IAgentAuthService authService
 ) : IRequestHandler<RevokeAgentTokenCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RevokeAgentTokenCommand cmd, CancellationToken ct)
     {
+        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
+        if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Delete);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
+        var tokens = await authService.GetTokensByAgentIdAsync(cmd.AgentId);
+        if (!tokens.Any(t => t.Id == cmd.TokenId))
+            return Result<VoidResult>.Failure(Error.NotFound("Token not found for this agent."));
+
         await authService.RevokeTokenAsync(cmd.TokenId);
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
 
 public sealed class RevokeAllAgentTokensCommandHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext,
     IAgentAuthService authService
 ) : IRequestHandler<RevokeAllAgentTokensCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RevokeAllAgentTokensCommand cmd, CancellationToken ct)
     {
+        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
+        if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Delete);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
         await authService.RevokeAllTokensAsync(cmd.AgentId);
         return Result<VoidResult>.Success(VoidResult.Value);
     }

@@ -21,7 +21,7 @@ public class DashboardController : ControllerBase
     }
 
     [HttpGet("dashboard/global/summary")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetGlobalSummary([FromQuery] string? window = null, CancellationToken cancellationToken = default)
     {
         if (!TryParseWindow(window, out var parsedWindow, out var error))
@@ -61,7 +61,7 @@ public class DashboardController : ControllerBase
     }
 
     [HttpGet("dashboard/service-board")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetServiceBoard(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,

@@ -15,7 +15,7 @@ namespace Discovery.Api.Controllers;
 public class RolesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListRolesQuery());
@@ -27,7 +27,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     /// com /roles/permissions; a ordem é apenas legibilidade.
     /// </summary>
     [HttpGet("permissions")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetPermissionsCatalog()
     {
         var result = await mediator.Send(new ListPermissionsCatalogQuery());
@@ -35,7 +35,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetRoleByIdQuery(id));
@@ -47,7 +47,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Users, ActionType.Create)]
+    [RequirePermission(ResourceType.Users, ActionType.Create, ScopeSource.Global)]
     public async Task<IActionResult> Create([FromBody] CreateRoleCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -57,7 +57,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateRoleCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -65,7 +65,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Delete)]
+    [RequirePermission(ResourceType.Users, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> Delete(Guid id)
     {
         var result = await mediator.Send(new DeleteRoleCommand(id));
@@ -79,7 +79,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     // ── Permissões da role ───────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/permissions")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetRolePermissions(Guid id)
     {
         var result = await mediator.Send(new ListRolePermissionsQuery(id));
@@ -87,7 +87,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost("{id:guid}/permissions")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> AddRolePermission(Guid id, [FromBody] AssignPermissionToRoleDto dto)
     {
         var result = await mediator.Send(new AddRolePermissionCommand(id, dto.PermissionId));
@@ -95,7 +95,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}/permissions/{permissionId:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> RemoveRolePermission(Guid id, Guid permissionId)
     {
         var result = await mediator.Send(new RemoveRolePermissionCommand(id, permissionId));
@@ -117,7 +117,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     /// no catálogo.
     /// </remarks>
     [HttpPost("{id:guid}/permissions/batch")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> AddRolePermissionsBatch(Guid id, [FromBody] BulkRolePermissionsDto dto)
     {
         var result = await mediator.Send(new AddRolePermissionsCommand(id, dto.PermissionIds));
@@ -137,7 +137,7 @@ public class RolesController(IMediator mediator) : ControllerBase
     /// no catálogo.
     /// </remarks>
     [HttpDelete("{id:guid}/permissions/batch")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> RemoveRolePermissionsBatch(Guid id, [FromBody] BulkRolePermissionsDto dto)
     {
         var result = await mediator.Send(new RemoveRolePermissionsCommand(id, dto.PermissionIds));

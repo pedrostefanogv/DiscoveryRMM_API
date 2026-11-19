@@ -5,6 +5,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
 using MediatR;
@@ -71,11 +72,16 @@ public sealed class CreateClientCommandHandler(
 }
 
 public sealed class UpdateClientCommandHandler(
-    IClientRepository repo
+    IClientRepository repo,
+    IScopeContext scopeContext
 ) : IRequestHandler<UpdateClientCommand, Result<Client>>
 {
     public async Task<Result<Client>> Handle(UpdateClientCommand cmd, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.Edit);
+        if (!TenantScopePolicy.Allows(scope, cmd.Id, Guid.Empty))
+            return Result<Client>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+
         var client = await repo.GetByIdAsync(cmd.Id);
         if (client is null)
             return Result<Client>.Failure(Error.NotFound("Client not found."));
@@ -89,11 +95,16 @@ public sealed class UpdateClientCommandHandler(
 }
 
 public sealed class DeleteClientCommandHandler(
-    IClientRepository repo
+    IClientRepository repo,
+    IScopeContext scopeContext
 ) : IRequestHandler<DeleteClientCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteClientCommand cmd, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.Delete);
+        if (!TenantScopePolicy.Allows(scope, cmd.Id, Guid.Empty))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+
         await repo.DeleteAsync(cmd.Id);
         return Result<VoidResult>.Success(VoidResult.Value);
     }
@@ -101,11 +112,16 @@ public sealed class DeleteClientCommandHandler(
 
 public sealed class GetClientCustomFieldsQueryHandler(
     IClientRepository repo,
+    IScopeContext scopeContext,
     ICustomFieldService customFieldService
 ) : IRequestHandler<GetClientCustomFieldsQuery, Result<IReadOnlyList<object>>>
 {
     public async Task<Result<IReadOnlyList<object>>> Handle(GetClientCustomFieldsQuery q, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
+        if (!TenantScopePolicy.Allows(scope, q.ClientId, Guid.Empty))
+            return Result<IReadOnlyList<object>>.Failure(Error.NotFound("Client not found."));
+
         var client = await repo.GetByIdAsync(q.ClientId);
         if (client is null)
             return Result<IReadOnlyList<object>>.Failure(Error.NotFound("Client not found."));
@@ -117,11 +133,16 @@ public sealed class GetClientCustomFieldsQueryHandler(
 
 public sealed class GetClientCustomFieldSchemaQueryHandler(
     IClientRepository repo,
+    IScopeContext scopeContext,
     ICustomFieldService customFieldService
 ) : IRequestHandler<GetClientCustomFieldSchemaQuery, Result<IReadOnlyList<CustomFieldSchemaItemDto>>>
 {
     public async Task<Result<IReadOnlyList<CustomFieldSchemaItemDto>>> Handle(GetClientCustomFieldSchemaQuery q, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.View);
+        if (!TenantScopePolicy.Allows(scope, q.ClientId, Guid.Empty))
+            return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Client not found."));
+
         var client = await repo.GetByIdAsync(q.ClientId);
         if (client is null)
             return Result<IReadOnlyList<CustomFieldSchemaItemDto>>.Failure(Error.NotFound("Client not found."));
@@ -140,11 +161,16 @@ public sealed class GetClientCustomFieldSchemaQueryHandler(
 
 public sealed class UpsertClientCustomFieldCommandHandler(
     IClientRepository repo,
+    IScopeContext scopeContext,
     ICustomFieldService customFieldService
 ) : IRequestHandler<UpsertClientCustomFieldCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(UpsertClientCustomFieldCommand cmd, CancellationToken ct)
     {
+        var scope = await scopeContext.GetAccessAsync(ResourceType.Clients, ActionType.Edit);
+        if (!TenantScopePolicy.Allows(scope, cmd.ClientId, Guid.Empty))
+            return Result<object>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+
         var client = await repo.GetByIdAsync(cmd.ClientId);
         if (client is null)
             return Result<object>.Failure(Error.NotFound("Client not found."));

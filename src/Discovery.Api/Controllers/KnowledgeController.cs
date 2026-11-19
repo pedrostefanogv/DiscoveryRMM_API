@@ -27,7 +27,7 @@ public class KnowledgeController(
     private string Username => HttpContext.Items["Username"] as string ?? "api";
 
     [HttpGet]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
         [FromQuery] Guid? siteId = null,
@@ -50,7 +50,7 @@ public class KnowledgeController(
     }
 
     [HttpGet("search")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> Search([FromQuery] string q, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] int maxResults = 10, [FromQuery] Guid? departmentId = null, [FromQuery] string mode = "hybrid")
     {
         // mode: semantic | keyword | hybrid (híbrido = semântico com fallback keyword).
@@ -64,7 +64,7 @@ public class KnowledgeController(
     /// Endpoint consumido pelo console web — antes não existia (404).
     /// </summary>
     [HttpPost("chat-search")]
-    [RequirePermission(ResourceType.AiChat, ActionType.View)]
+    [RequirePermission(ResourceType.AiChat, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> ChatSearch([FromBody] KbSearchRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new SearchKbSuggestionsQuery(request), ct);
@@ -74,7 +74,7 @@ public class KnowledgeController(
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetKnowledgeArticleByIdQuery(id));
@@ -82,7 +82,7 @@ public class KnowledgeController(
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Create)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Create, ScopeSource.Global)]
     public async Task<IActionResult> Create([FromBody] CreateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new CreateKnowledgeArticleCommand(
@@ -94,7 +94,7 @@ public class KnowledgeController(
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateKnowledgeArticleCommand(
@@ -103,7 +103,7 @@ public class KnowledgeController(
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteKnowledgeArticleCommand(id), ct);
@@ -111,7 +111,7 @@ public class KnowledgeController(
     }
 
     [HttpPost("{id:guid}/publish")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Publish(Guid id, [FromBody] PublishArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new PublishKnowledgeArticleCommand(id, request.Status, request.LastEditedBy, request.ChangeSummary), ct);
@@ -119,7 +119,7 @@ public class KnowledgeController(
     }
 
     [HttpPost("{id:guid}/unpublish")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Unpublish(Guid id, [FromQuery] string? lastEditedBy = null, CancellationToken ct = default)
     {
         var result = await mediator.Send(new UnpublishKnowledgeArticleCommand(id, lastEditedBy), ct);
@@ -127,7 +127,7 @@ public class KnowledgeController(
     }
 
     [HttpGet("{id:guid}/versions")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetVersions(Guid id, CancellationToken ct)
     {
         var result = await mediator.Send(new GetKnowledgeArticleVersionsQuery(id), ct);
@@ -137,7 +137,7 @@ public class KnowledgeController(
     // ── Sub-páginas internas do artigo (estilo Notion) ──────────────
 
     [HttpGet("{id:guid}/pages")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetPages(Guid id, CancellationToken ct)
     {
         var result = await mediator.Send(new GetArticlePagesQuery(id), ct);
@@ -145,7 +145,7 @@ public class KnowledgeController(
     }
 
     [HttpGet("{id:guid}/pages/{pageId:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetPage(Guid id, Guid pageId, CancellationToken ct)
     {
         var result = await mediator.Send(new GetArticlePageQuery(id, pageId), ct);
@@ -153,7 +153,7 @@ public class KnowledgeController(
     }
 
     [HttpPost("{id:guid}/pages")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CreatePage(Guid id, [FromBody] CreateArticlePageRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new CreateArticlePageCommand(
@@ -164,7 +164,7 @@ public class KnowledgeController(
     }
 
     [HttpPut("{id:guid}/pages/{pageId:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> UpdatePage(Guid id, Guid pageId, [FromBody] UpdateArticlePageRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateArticlePageCommand(
@@ -173,7 +173,7 @@ public class KnowledgeController(
     }
 
     [HttpDelete("{id:guid}/pages/{pageId:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> DeletePage(Guid id, Guid pageId, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteArticlePageCommand(id, pageId), ct);
@@ -191,7 +191,7 @@ public class KnowledgeController(
 
     /// <summary>Prepara o PUT direto no storage para uma imagem do artigo.</summary>
     [HttpPost("{id:guid}/images/presigned-upload")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> PrepareImageUpload(Guid id, [FromBody] PresignedUploadRequestDto req, CancellationToken ct)
     {
         // Leitura leve: os endpoints de imagem só usam ClientId/Content/Id, nunca
@@ -236,7 +236,7 @@ public class KnowledgeController(
 
     /// <summary>Finaliza o upload e persiste a imagem do artigo.</summary>
     [HttpPost("{id:guid}/images/complete-upload")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CompleteImageUpload(Guid id, [FromBody] KnowledgeCompleteUploadRequestDto req, CancellationToken ct)
     {
         // Leitura leve: os endpoints de imagem só usam ClientId/Content/Id, nunca
@@ -301,7 +301,7 @@ public class KnowledgeController(
     /// uso no conteúdo — é o que a galeria do editor e o viewer consomem.
     /// </summary>
     [HttpGet("{id:guid}/images")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetImages(Guid id, CancellationToken ct)
     {
         // Leitura leve: os endpoints de imagem só usam ClientId/Content/Id, nunca
@@ -338,7 +338,7 @@ public class KnowledgeController(
 
     /// <summary>Renova a URL pré-assinada de uma imagem (expirou na tela).</summary>
     [HttpGet("{id:guid}/images/{attachmentId:guid}/url")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetImageUrl(Guid id, Guid attachmentId, CancellationToken ct)
     {
         var attachment = await FindImageAsync(id, attachmentId, ct);
@@ -367,7 +367,7 @@ public class KnowledgeController(
     /// Sem Authorization não há imagem: é isto que substitui a URL pública.
     /// </summary>
     [HttpGet("{id:guid}/images/{attachmentId:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> DownloadImage(Guid id, Guid attachmentId, CancellationToken ct)
     {
         var attachment = await FindImageAsync(id, attachmentId, ct);
@@ -403,7 +403,7 @@ public class KnowledgeController(
 
     /// <summary>Exclui a imagem e, por padrão, a referência no conteúdo.</summary>
     [HttpDelete("{id:guid}/images/{attachmentId:guid}")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> DeleteImage(Guid id, Guid attachmentId, CancellationToken ct)
     {
         var result = await mediator.Send(new DeleteKnowledgeImageCommand(id, attachmentId), ct);
@@ -436,7 +436,7 @@ public class KnowledgeController(
     /// por isso exige permissão de exclusão (não a de edição).
     /// </summary>
     [HttpDelete("{id:guid}/images/{attachmentId:guid}/permanent")]
-    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete)]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> PermanentlyDeleteImage(Guid id, Guid attachmentId, CancellationToken ct)
     {
         Result<VoidResult> result;

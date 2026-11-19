@@ -16,7 +16,7 @@ namespace Discovery.Api.Controllers;
 public class AiCostController(IMediator mediator) : ControllerBase
 {
     [HttpGet("cockpit")]
-    [RequirePermission(ResourceType.AiChat, ActionType.View)]
+    [RequirePermission(ResourceType.AiChat, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetCockpit(
         [FromQuery] Guid? clientId,
         [FromQuery] DateTime? from,

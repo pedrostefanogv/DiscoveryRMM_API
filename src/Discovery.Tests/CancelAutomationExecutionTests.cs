@@ -104,7 +104,8 @@ public class CancelAutomationExecutionTests
     }
 
     private static CancelAutomationExecutionCommandHandler Handler(
-        FakeReportRepo reports, FakeCommandRepo commands) => new(reports, commands);
+        FakeReportRepo reports, FakeCommandRepo commands)
+        => new(reports, commands, new F02AgentRepositoryStub(new Agent { Id = AgentId, SiteId = Guid.NewGuid() }), new F02SiteRepositoryStub(), F02ScopeContextStub.Global());
 
     private static AutomationExecutionReport NewReport(
         Guid agentId, Guid? commandId, AutomationExecutionStatus status) => new()

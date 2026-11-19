@@ -5,7 +5,10 @@ using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
@@ -182,22 +185,154 @@ public sealed class DeactivateCustomFieldCommandHandler(ICustomFieldService svc)
     }
 }
 
-public sealed class ListCustomFieldValuesQueryHandler(ICustomFieldService svc) : IRequestHandler<ListCustomFieldValuesQuery, Result<CursorPageDto<CustomFieldResolvedValueDto>>>
+public sealed class ListCustomFieldValuesQueryHandler(
+    ICustomFieldService svc,
+    DiscoveryDbContext db,
+    IScopeContext scopeContext
+) : IRequestHandler<ListCustomFieldValuesQuery, Result<CursorPageDto<CustomFieldResolvedValueDto>>>
 {
     public async Task<Result<CursorPageDto<CustomFieldResolvedValueDto>>> Handle(ListCustomFieldValuesQuery q, CancellationToken ct)
     {
+        var denied = await CustomFieldScopeGuard.EnsureScopeAccessAsync(
+            db, scopeContext, q.ScopeType, q.EntityId, ActionType.View, ct);
+        if (denied is not null)
+            return Result<CursorPageDto<CustomFieldResolvedValueDto>>.Failure(denied);
+
         var page = await svc.GetValuesPageAsync(q.ScopeType, q.EntityId, q.Cursor, q.Limit, q.IncludeSecrets, ct);
         return Result<CursorPageDto<CustomFieldResolvedValueDto>>.Success(page);
     }
 }
 
-public sealed class UpsertCustomFieldValueCommandHandler(ICustomFieldService svc) : IRequestHandler<UpsertCustomFieldValueCommand, Result<CustomFieldResolvedValueDto>>
+public sealed class UpsertCustomFieldValueCommandHandler(
+    ICustomFieldService svc,
+    DiscoveryDbContext db,
+    IScopeContext scopeContext
+) : IRequestHandler<UpsertCustomFieldValueCommand, Result<CustomFieldResolvedValueDto>>
 {
     public async Task<Result<CustomFieldResolvedValueDto>> Handle(UpsertCustomFieldValueCommand cmd, CancellationToken ct)
     {
+        var denied = await CustomFieldScopeGuard.EnsureScopeAccessAsync(
+            db, scopeContext, cmd.ScopeType, cmd.EntityId, ActionType.Edit, ct);
+        if (denied is not null)
+            return Result<CustomFieldResolvedValueDto>.Failure(denied);
+
         var input = new UpsertCustomFieldValueInput(cmd.DefinitionId, cmd.ScopeType, cmd.EntityId, cmd.ValueJson, cmd.UpdatedBy);
         var result = await svc.UpsertValueAsync(input, ct);
         return Result<CustomFieldResolvedValueDto>.Success(result);
+    }
+}
+
+internal static class CustomFieldScopeGuard
+{
+    public static async Task<Error?> EnsureScopeAccessAsync(
+        DiscoveryDbContext db,
+        IScopeContext scopeContext,
+        CustomFieldScopeType scopeType,
+        Guid? entityId,
+        ActionType action,
+        CancellationToken ct)
+    {
+        var serverAccess = await scopeContext.GetAccessAsync(ResourceType.ServerConfig, action);
+        if (serverAccess.HasGlobalAccess)
+            return null;
+
+        if (!entityId.HasValue || entityId.Value == Guid.Empty)
+            return Error.Forbidden("Permissão insuficiente para este escopo.");
+
+        var targetId = entityId.Value;
+
+        switch (scopeType)
+        {
+            case CustomFieldScopeType.Client:
+            {
+                var clientAccess = await scopeContext.GetAccessAsync(ResourceType.Clients, action);
+                if (TenantScopePolicy.Allows(serverAccess, targetId, Guid.Empty)
+                    || TenantScopePolicy.Allows(clientAccess, targetId, Guid.Empty))
+                {
+                    return null;
+                }
+                return Error.Forbidden("Você não tem acesso a este cliente.");
+            }
+            case CustomFieldScopeType.Site:
+            {
+                var site = await db.Sites.AsNoTracking()
+                    .Where(s => s.Id == targetId)
+                    .Select(s => new { s.Id, s.ClientId })
+                    .FirstOrDefaultAsync(ct);
+                if (site is null)
+                    return Error.NotFound("Site not found.");
+
+                var siteAccess = await scopeContext.GetAccessAsync(ResourceType.Sites, action);
+                if (TenantScopePolicy.Allows(serverAccess, site.ClientId, site.Id)
+                    || TenantScopePolicy.Allows(siteAccess, site.ClientId, site.Id))
+                {
+                    return null;
+                }
+                return Error.Forbidden("Você não tem acesso a este site.");
+            }
+            case CustomFieldScopeType.Agent:
+            {
+                var agent = await db.Agents.AsNoTracking()
+                    .Where(a => a.Id == targetId)
+                    .Select(a => new { a.Id, a.SiteId })
+                    .FirstOrDefaultAsync(ct);
+                if (agent is null)
+                    return Error.NotFound("Agent not found.");
+
+                var siteClientId = await db.Sites.AsNoTracking()
+                    .Where(s => s.Id == agent.SiteId)
+                    .Select(s => s.ClientId)
+                    .FirstOrDefaultAsync(ct);
+
+                var agentAccess = await scopeContext.GetAccessAsync(ResourceType.Agents, action);
+                if (TenantScopePolicy.Allows(serverAccess, siteClientId, agent.SiteId)
+                    || TenantScopePolicy.Allows(agentAccess, siteClientId, agent.SiteId))
+                {
+                    return null;
+                }
+                return Error.Forbidden("Você não tem acesso a este agente.");
+            }
+            case CustomFieldScopeType.Ticket:
+            {
+                var ticket = await db.Tickets.AsNoTracking()
+                    .Where(t => t.Id == targetId)
+                    .Select(t => new { t.ClientId, t.SiteId })
+                    .FirstOrDefaultAsync(ct);
+                if (ticket is null)
+                    return Error.NotFound("Ticket not found.");
+
+                var ticketAccess = await scopeContext.GetAccessAsync(ResourceType.Tickets, action);
+                var siteId = ticket.SiteId ?? Guid.Empty;
+                if (TenantScopePolicy.Allows(serverAccess, ticket.ClientId, siteId)
+                    || TenantScopePolicy.Allows(ticketAccess, ticket.ClientId, siteId))
+                {
+                    return null;
+                }
+                return Error.Forbidden("Você não tem acesso a este chamado.");
+            }
+            case CustomFieldScopeType.Department:
+            {
+                var dept = await db.Departments.AsNoTracking()
+                    .Where(d => d.Id == targetId)
+                    .Select(d => new { d.ClientId })
+                    .FirstOrDefaultAsync(ct);
+                if (dept is null)
+                    return Error.NotFound("Department not found.");
+
+                if (dept.ClientId is null)
+                    return action == ActionType.View ? null : Error.Forbidden("Permissão global necessária.");
+
+                var deptAccess = await scopeContext.GetAccessAsync(ResourceType.Departments, action);
+                if (TenantScopePolicy.Allows(serverAccess, dept.ClientId.Value, Guid.Empty)
+                    || TenantScopePolicy.Allows(deptAccess, dept.ClientId.Value, Guid.Empty))
+                {
+                    return null;
+                }
+                return Error.Forbidden("Você não tem acesso a este departamento.");
+            }
+            default:
+                return Error.Forbidden("Permissão global necessária.");
+        }
     }
 }
 

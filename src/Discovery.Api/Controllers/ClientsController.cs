@@ -6,6 +6,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Api.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -27,6 +28,15 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
         var note = await noteService.GetByIdAsync(noteId, ct);
         return note is not null && note.ClientId == clientId;
     }
+
+    private async Task<IActionResult?> EnsureClientAccessAsync(Guid clientId, ActionType action, IScopeContext scopeContext)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Clients, action);
+        if (!access.HasGlobalAccess && !access.AllowedClientIds.Contains(clientId))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Você não tem acesso a este cliente." });
+        return null;
+    }
+
     [HttpGet]
     [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
     [Microsoft.AspNetCore.OutputCaching.OutputCache(PolicyName = "Medium")]
@@ -43,11 +53,16 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
         var result = await mediator.Send(new GetClientByIdQuery(id));
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => Problem(errors)
+            });
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Clients, ActionType.Create)]
+    [RequirePermission(ResourceType.Clients, ActionType.Create, ScopeSource.Global)]
     public async Task<IActionResult> Create([FromBody] CreateClientRequest request)
     {
         var cmd = new CreateClientCommand(request.Name, request.Notes);
@@ -64,40 +79,63 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateClientRequest request)
     {
         var cmd = new UpdateClientCommand(id, request.Name, request.Notes, request.IsActive);
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => Problem(errors)
+            });
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.Delete)]
+    [RequirePermission(ResourceType.Clients, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> Delete(Guid id)
     {
-        await mediator.Send(new DeleteClientCommand(id));
-        return NoContent();
+        var result = await mediator.Send(new DeleteClientCommand(id));
+        return result.Match<IActionResult>(
+            success: _ => NoContent(),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => Problem(errors)
+            });
     }
 
     [HttpGet("{id:guid}/notes/page")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetNotesPage(
         Guid id,
+        [FromServices] IScopeContext scopeContext,
         [FromQuery] string? cursor = null,
         [FromQuery] int limit = 50,
         CancellationToken ct = default)
     {
+        if (await EnsureClientAccessAsync(id, ActionType.View, scopeContext) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new ListNotesPageQuery(id, null, null, cursor, limit), ct);
         return result.ToActionResult();
     }
 
     [HttpPost("{id:guid}/notes")]
-    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
-    public async Task<IActionResult> CreateNote(Guid id, [FromBody] CreateNoteRequest request, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Clients, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> CreateNote(
+        Guid id,
+        [FromBody] CreateNoteRequest request,
+        [FromServices] IScopeContext scopeContext,
+        CancellationToken ct = default)
     {
+        if (await EnsureClientAccessAsync(id, ActionType.Edit, scopeContext) is { } denied)
+            return denied;
+
         var source = CurrentUser;
         var cmd = new CreateNoteCommand(id, null, null, request.Content, source, request.IsPinned);
         var result = await mediator.Send(cmd, ct);
@@ -107,9 +145,16 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     }
 
     [HttpGet("{id:guid}/notes/{noteId:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
-    public async Task<IActionResult> GetNoteById(Guid id, Guid noteId, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetNoteById(
+        Guid id,
+        Guid noteId,
+        [FromServices] IScopeContext scopeContext,
+        CancellationToken ct = default)
     {
+        if (await EnsureClientAccessAsync(id, ActionType.View, scopeContext) is { } denied)
+            return denied;
+
         if (!await NoteBelongsToAsync(noteId, id, ct))
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
 
@@ -120,9 +165,17 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     }
 
     [HttpPut("{id:guid}/notes/{noteId:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
-    public async Task<IActionResult> UpdateNote(Guid id, Guid noteId, [FromBody] UpdateNoteRequest request, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Clients, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> UpdateNote(
+        Guid id,
+        Guid noteId,
+        [FromBody] UpdateNoteRequest request,
+        [FromServices] IScopeContext scopeContext,
+        CancellationToken ct = default)
     {
+        if (await EnsureClientAccessAsync(id, ActionType.Edit, scopeContext) is { } denied)
+            return denied;
+
         if (!await NoteBelongsToAsync(noteId, id, ct))
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
 
@@ -134,9 +187,16 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     }
 
     [HttpDelete("{id:guid}/notes/{noteId:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
-    public async Task<IActionResult> DeleteNote(Guid id, Guid noteId, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Clients, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteNote(
+        Guid id,
+        Guid noteId,
+        [FromServices] IScopeContext scopeContext,
+        CancellationToken ct = default)
     {
+        if (await EnsureClientAccessAsync(id, ActionType.Edit, scopeContext) is { } denied)
+            return denied;
+
         if (!await NoteBelongsToAsync(noteId, id, ct))
             return NotFound(new { errors = new[] { new { code = "NotFound", message = $"Note {noteId} not found" } } });
 
@@ -147,28 +207,38 @@ public class ClientsController(IMediator mediator, INoteService noteService) : C
     }
 
     [HttpGet("{id:guid}/custom-fields")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = true, [FromQuery] bool includeHidden = false, CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetClientCustomFieldsQuery(id, includeSecrets, includeHidden), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => Problem(errors)
+            });
     }
 
     /// <summary>Schema dos campos do cliente para o card do detalhe (só webRead; segredos mascarados).</summary>
     [HttpGet("{id:guid}/custom-fields/schema")]
-    [RequirePermission(ResourceType.Clients, ActionType.View)]
+    [RequirePermission(ResourceType.Clients, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFieldSchema(Guid id, [FromQuery] bool includeSecrets = false, CancellationToken ct = default)
     {
         var result = await mediator.Send(new GetClientCustomFieldSchemaQuery(id, includeSecrets), ct);
         return result.Match<IActionResult>(
             success: Ok,
-            failure: errors => errors[0].Code == "NotFound" ? NotFound() : Problem(errors));
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => Problem(errors)
+            });
     }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
-    [RequirePermission(ResourceType.Clients, ActionType.Edit)]
+    [RequirePermission(ResourceType.Clients, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpsertCustomFieldValue(
         Guid id, Guid definitionId,
         [FromBody] UpsertClientCustomFieldValueRequest request,

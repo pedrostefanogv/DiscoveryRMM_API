@@ -87,6 +87,7 @@ public class RemoteSessionRightsTests
 
         Assert.That(pub, Does.Not.Contain($"{Subject}.files.req"));
         Assert.That(sub, Does.Not.Contain($"{Subject}.files.resp"));
+        Assert.That(sub, Does.Not.Contain($"{Subject}.files.data"));
         Assert.That(sub, Does.Not.Contain($"{Subject}.files.progress"));
         Assert.That(sub, Does.Not.Contain($"{Subject}.files.ready"));
     }

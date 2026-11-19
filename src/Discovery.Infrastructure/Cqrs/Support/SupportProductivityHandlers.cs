@@ -613,11 +613,25 @@ public sealed class ListDepartmentMembersQueryHandler(DiscoveryDbContext db)
 
 // ── CSAT ─────────────────────────────────────────────────────────────────
 
-public sealed class GetTicketCsatSummaryQueryHandler(DiscoveryDbContext db)
-    : IRequestHandler<GetTicketCsatSummaryQuery, Result<TicketCsatSummaryDto>>
+public sealed class GetTicketCsatSummaryQueryHandler(
+    DiscoveryDbContext db,
+    IScopeContext scopeContext
+) : IRequestHandler<GetTicketCsatSummaryQuery, Result<TicketCsatSummaryDto>>
 {
     public async Task<Result<TicketCsatSummaryDto>> Handle(GetTicketCsatSummaryQuery q, CancellationToken ct)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        if (!access.HasGlobalAccess)
+        {
+            if (q.ClientId.HasValue && !access.AllowedClientIds.Contains(q.ClientId.Value))
+            {
+                var hasAllowedSiteInClient = access.AllowedSiteIds.Count > 0 && await db.Sites.AsNoTracking()
+                    .AnyAsync(s => s.ClientId == q.ClientId.Value && access.AllowedSiteIds.Contains(s.Id), ct);
+                if (!hasAllowedSiteInClient)
+                    return Result<TicketCsatSummaryDto>.Failure(Error.Forbidden("Você não tem acesso a este cliente."));
+            }
+        }
+
         var to = q.To ?? DateTime.UtcNow;
         var from = q.From ?? to.AddDays(-30);
 
@@ -633,6 +647,14 @@ public sealed class GetTicketCsatSummaryQueryHandler(DiscoveryDbContext db)
                 (t.ClosedAt == null && t.RatedAt == null
                     && db.WorkflowStates.Any(s => s.Id == t.WorkflowStateId && s.IsFinal)
                     && t.UpdatedAt >= from && t.UpdatedAt <= to)));
+        if (!access.HasGlobalAccess)
+        {
+            var allowedClients = access.AllowedClientIds;
+            var allowedSites = access.AllowedSiteIds;
+            closedQuery = closedQuery.Where(t =>
+                allowedClients.Contains(t.ClientId)
+                || (t.SiteId != null && allowedSites.Contains(t.SiteId.Value)));
+        }
         if (q.ClientId.HasValue) closedQuery = closedQuery.Where(t => t.ClientId == q.ClientId.Value);
         if (q.DepartmentId.HasValue) closedQuery = closedQuery.Where(t => t.DepartmentId == q.DepartmentId.Value);
 

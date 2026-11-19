@@ -70,7 +70,7 @@ public class ServiceBoardHandlerTests
         });
         await db.SaveChangesAsync();
 
-        var handler = new GetServiceBoardQueryHandler(db);
+        var handler = new GetServiceBoardQueryHandler(db, F02ScopeContextStub.Global());
 
         // Sem truncamento: ordem esperada por rank desc e idade desc.
         var full = await handler.Handle(new GetServiceBoardQuery(clientAId, null, Limit: 10), default);
@@ -128,7 +128,7 @@ public class ServiceBoardHandlerTests
         db.Agents.Add(new Agent { Id = otherAgent, SiteId = Guid.NewGuid(), Hostname = "HOST-B2" });
         await db.SaveChangesAsync();
 
-        var handler = new GetServiceBoardQueryHandler(db);
+        var handler = new GetServiceBoardQueryHandler(db, F02ScopeContextStub.Global());
         var result = await handler.Handle(new GetServiceBoardQuery(clientAId, null, Limit: 50), default);
 
         var board = result.Value!;
@@ -156,7 +156,7 @@ public class ServiceBoardHandlerTests
         });
         await db.SaveChangesAsync();
 
-        var handler = new GetServiceBoardQueryHandler(db);
+        var handler = new GetServiceBoardQueryHandler(db, F02ScopeContextStub.Global());
         var result = await handler.Handle(new GetServiceBoardQuery(null, siteAId, Limit: 50), default);
 
         var item = result.Value!.Items.Single(i => i.Kind == "ticket");
@@ -198,7 +198,7 @@ public class ServiceBoardHandlerTests
         });
         await db.SaveChangesAsync();
 
-        var handler = new GetServiceBoardQueryHandler(db);
+        var handler = new GetServiceBoardQueryHandler(db, F02ScopeContextStub.Global());
         var result = await handler.Handle(new GetServiceBoardQuery(null, null, Limit: 50), default);
 
         Assert.Multiple(() =>

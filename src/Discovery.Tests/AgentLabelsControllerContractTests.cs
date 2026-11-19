@@ -4,9 +4,11 @@ using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using NUnit.Framework;
 
 namespace Discovery.Tests;
@@ -91,7 +93,12 @@ public class AgentLabelsControllerContractTests
         mediator.Responder = _ => Result<IReadOnlyList<string>>.Success(["PROD"]);
         var controller = BuildController(mediator);
 
-        await controller.GetDistinct(limit: 250);
+        var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
+            .UseInMemoryDatabase($"labels-contract-{Guid.NewGuid():N}")
+            .Options;
+        await using var db = new DiscoveryDbContext(options);
+
+        await controller.GetDistinct(F02ScopeContextStub.Global(), db, limit: 250);
 
         Assert.That(mediator.LastRequest, Is.InstanceOf<Discovery.Core.Cqrs.AgentLabels.Queries.GetDistinctLabelsQuery>());
         var query = (Discovery.Core.Cqrs.AgentLabels.Queries.GetDistinctLabelsQuery)mediator.LastRequest!;

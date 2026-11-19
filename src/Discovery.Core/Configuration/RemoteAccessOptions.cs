@@ -107,6 +107,7 @@ public class RemoteAccessProxyOptions
     public string[] DefaultAllowlist { get; set; } = [];
     public int[] AllowedPorts { get; set; } = [];
     public int MaxResponseBytes { get; set; } = 10485760;
+    public bool AllowLoopback { get; set; } = false;
 }
 
 public class RemoteAccessQualityOptions

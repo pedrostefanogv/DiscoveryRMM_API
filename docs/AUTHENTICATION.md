@@ -52,7 +52,7 @@ Consolidated from:
 - FIDO2 remains the primary MFA recommendation, and OTP/TOTP is also available for registration and login assertion flows.
 - Some auth failures still bubble up as generic non-2xx responses instead of a clean `401`; consumers should treat any non-success response from login/refresh as an authentication failure.
 - Login/refresh and MFA assertion responses now expose stable auth error codes in the payload (for example `invalid_credentials`, `refresh_invalid`, `mfa_invalid`, `otp_invalid`) so clients can map failures consistently.
-- MeshCentral embed is documented separately in `MESHCENTRAL.md`.
+- Native remote session WebSocket tunnels (`/api/v1/remote-sessions/{agentId}/{sessionId}/tunnel/ws`) authenticate via `Authorization: Bearer` header or single-use opaque ticket issued by `POST .../tunnel/ticket` (60s TTL, bound to `(userId, agentId, sessionId)`).
 
 ## Roadmap
 

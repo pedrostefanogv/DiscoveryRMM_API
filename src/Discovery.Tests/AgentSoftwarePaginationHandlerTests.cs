@@ -128,7 +128,9 @@ public class AgentSoftwarePaginationHandlerTests
         var inventory = BuildInventory(120);
         var handler = new GetAgentSoftwarePageQueryHandler(
             new FakeAgentRepository(agent: new Agent { Id = AgentId }),
-            new FakeAgentSoftwareRepository(inventory));
+            new FakeAgentSoftwareRepository(inventory),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new GetAgentSoftwarePageQuery(AgentId, Page: 2, PageSize: 50), CancellationToken.None);
@@ -149,7 +151,9 @@ public class AgentSoftwarePaginationHandlerTests
         var inventory = BuildInventory(120);
         var handler = new GetAgentSoftwarePageQueryHandler(
             new FakeAgentRepository(agent: new Agent { Id = AgentId }),
-            new FakeAgentSoftwareRepository(inventory));
+            new FakeAgentSoftwareRepository(inventory),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new GetAgentSoftwarePageQuery(AgentId, Page: 3, PageSize: 50), CancellationToken.None);
@@ -164,7 +168,9 @@ public class AgentSoftwarePaginationHandlerTests
         var inventory = BuildInventory(120);
         var handler = new GetAgentSoftwarePageQueryHandler(
             new FakeAgentRepository(agent: new Agent { Id = AgentId }),
-            new FakeAgentSoftwareRepository(inventory));
+            new FakeAgentSoftwareRepository(inventory),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new GetAgentSoftwarePageQuery(AgentId, Page: 99, PageSize: 50), CancellationToken.None);
@@ -184,7 +190,9 @@ public class AgentSoftwarePaginationHandlerTests
 
         var handler = new GetAgentSoftwarePageQueryHandler(
             new FakeAgentRepository(agent: new Agent { Id = AgentId }),
-            new FakeAgentSoftwareRepository(inventory));
+            new FakeAgentSoftwareRepository(inventory),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new GetAgentSoftwarePageQuery(AgentId, Page: 1, PageSize: 50, Search: "chrome"),
@@ -204,7 +212,9 @@ public class AgentSoftwarePaginationHandlerTests
 
         var handler = new GetAgentSoftwarePageQueryHandler(
             new FakeAgentRepository(agent: new Agent { Id = AgentId }),
-            new FakeAgentSoftwareRepository(inventory));
+            new FakeAgentSoftwareRepository(inventory),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new GetAgentSoftwarePageQuery(AgentId, Page: 1, PageSize: 50, OnlyUpdates: true),
@@ -221,7 +231,10 @@ public class AgentSoftwarePaginationHandlerTests
     public async Task GetSoftwarePage_AgentMissing_ReturnsNotFound()
     {
         var handler = new GetAgentSoftwarePageQueryHandler(
-            new FakeAgentRepository(agent: null), new FakeAgentSoftwareRepository([]));
+            new FakeAgentRepository(agent: null),
+            new FakeAgentSoftwareRepository([]),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var result = await handler.Handle(
             new GetAgentSoftwarePageQuery(AgentId, 1, 50), CancellationToken.None);

@@ -18,7 +18,7 @@ public class ObjectStorageSanitizationController(IObjectStorageSanitizationServi
 {
     /// <summary>Lista as verificações disponíveis (chave, título e descrição).</summary>
     [HttpGet("checks")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public IActionResult GetChecks() => Ok(ObjectStorageSanitizationChecks.All);
 
     /// <summary>
@@ -26,7 +26,7 @@ public class ObjectStorageSanitizationController(IObjectStorageSanitizationServi
     /// que seria removido; <c>minAgeHours</c> define a idade mínima do órfão.
     /// </summary>
     [HttpPost("run")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> Run(
         [FromBody] ObjectStorageSanitizationRequest? request,
         CancellationToken ct)

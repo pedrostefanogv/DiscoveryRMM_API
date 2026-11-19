@@ -1,7 +1,7 @@
 # Contrato de Comunicacao em Tempo Real - DiscoveryRMM API
 
-> Versao: 4.6.0 | Data: 2026-11-01
-> Publico: Servidor (C# - C:\Projetos\DiscoveryRMM_API), Agent (Go - C:\Projetos\Discovery), Frontend (JS/TS - C:\Projetos\DiscoveryRMM_Site)
+> Versao: 4.7.0 | Data: 2026-11-19
+> Publico: Servidor (C# - c:\Projetos\RMM_Discovery\DiscoveryRMM_API), Agent (Go - c:\Projetos\RMM_Discovery\Discovery), Frontend (JS/TS - c:\Projetos\RMM_Discovery\DiscoveryRMM_Site)
 > Proposito: Especificacao canonica executavel. Todos os componentes DEVEM validar entrada e saida contra este documento.
 > Status: periodo de transicao ate 2026-06-01. Durante a transicao, formato legado gera warning. Apos essa data, mensagem nao conforme eh rejeitada.
 
@@ -11,8 +11,9 @@
 
 | Versao | Data       | Mudancas                                                                                                                                                                                                                                                        |
 | ------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.7.0  | 2026-11-19 | Streams JetStream isolados por tenant (`DISCOVERY_FANOUT_COMMANDS_{clientIdN}`, `DISCOVERY_SUPPORT_CHAT_{clientIdN}`), R2 Proxy LAN + tunel RDP (`.proxy.ready`, `.tunnel.in`, `.tunnel.out`, `POST .../tunnel/ticket`, `GET .../tunnel/ws`), stream binario de arquivos (`.files.data` magic `'DF'`), `RemoteSessionRights` (`NoProxy=64`, `NoRdp=128`), `RemoteConsentPolicy` para `Rdp`/`Proxy` e remocao definitiva de referencias a sinalizacao legada P2P-SDP. |
 | 4.6.0  | 2026-11-01 | `POST /api/v1/agent-auth/me/p2p/bootstrap` RE-ADICIONADO (modelo PULL, opcao A): lista de peers online do mesmo cliente lida do HeartbeatCache (Redis), gateada por `CloudBootstrapEnabled`, 60min+jitter no agent. `peer.online` permanece como acelerador na transicao Offline->Online. |
-| 4.5.0  | 2026-07-27 | Inclusao dos subjects de acesso remoto nativo (`remote.session.*`) para screen capture, terminal interativo, transferencia de arquivos, proxy de rede, gravacao de sessao e sinalizacao WebRTC. Substitui MeshCentral.                                          |
+| 4.5.0  | 2026-07-27 | Inclusao dos subjects de acesso remoto nativo (`remote.session.*`) para screen capture, terminal interativo, transferencia de arquivos, proxy de rede e gravacao de sessao.                                                                                      |
 | 4.4.0  | 2026-05-13 | Descoberta P2P movida para o heartbeat: `AgentHeartbeat` enriquecido com `peerId`/`addrs`/`port`; `POST /p2p/bootstrap` removido; evento `peer.online` publicado em `tenant.{c}.p2p.events` na transicao Offline->Online detectada pelo `HeartbeatCacheService` |
 | 4.2.0  | 2026-05-05 | Inclusao de comando em massa por escopo (`site`, `client`, `global`) com subjects dedicados (`*.agents.command`), envelope de dispatch, regras de idempotencia e diretrizes de ACL para alto volume.                                                            |
 | 4.1.0  | 2026-05-05 | Padronizacao detalhada de subjects (publish/subscribe), regra explicita de matching NATS, inclusao do subject por cliente (`tenant.{clientId}.dashboard.events`), secao de ACL por perfil e alinhamento com a implementacao de credenciais NATS.                |
@@ -72,21 +73,41 @@ tenant.{clientId}.site.{siteId}.dashboard.events
 tenant.{clientId}.dashboard.events
 tenant.unscoped.dashboard.events
 
-# Acesso Remoto Nativo (substitui MeshCentral)
+# Acesso Remoto Nativo (Desktop, Terminal, Arquivos, Proxy LAN e Tunel RDP)
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.control
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.event
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.frame
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.frame.frag
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.input
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.ack
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.term.out
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.term.in
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.term.ready
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.stats
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.completion.req
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.completion.res
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.files.ready
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.files.req
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.files.resp
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.files.data
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proxy.ready
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proxy.req
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proxy.resp
-tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.signal
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.tunnel.in
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.tunnel.out
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proc.req
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proc.resp
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.proc.ready
 tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.recording.frame
+tenant.{clientId}.site.{siteId}.agent.{agentId}.remote.session.{sessionId}.recording.term
 ```
+
+### 2.0.1 Streams JetStream por Tenant
+
+- Fan-out de comandos por tenant: `DISCOVERY_FANOUT_COMMANDS_{clientIdN}` (subjects `tenant.{clientId}.site.*.agents.command` e `tenant.{clientId}.agents.command`)
+- Fan-out global: `DISCOVERY_FANOUT_COMMANDS_GLOBAL` (subject `tenant.global.agents.command`)
+- Chat de suporte por tenant: `DISCOVERY_SUPPORT_CHAT_{clientIdN}` (subject `tenant.{clientId}.site.*.agent.*.supportchat.*`)
+- Provisionamento automatico no bootstrap/emissao de credenciais (`NatsTenantStreamProvisioner`), com ACLs JetStream do `AgentIdentity` restritas exclusivamente aos streams do proprio `clientId` e ao stream global.
 
 ### 2.0 Regra de matching e roteamento
 
@@ -961,10 +982,10 @@ Regra de ouro: o dashboard recebe eventos exclusivamente por assinatura NATS WS 
 
 ### 12.1 Visao Geral
 
-Os subjects de sessao remota nativa substituem a integracao com MeshCentral.
+Os subjects de sessao remota nativa operam integralmente sobre NATS/NATS-WS e WebSocket Tunnel Relay na API.
 Cada sessao de acesso remoto possui um `sessionId` unico (Guid) e um conjunto
-de subjects dedicados para controle, stream de tela, terminal, arquivos,
-proxy de rede, gravacao e sinalizacao WebRTC.
+de subjects dedicados para controle, stream de tela, terminal, arquivos (JSON + binario `'DF'`),
+proxy LAN, tunel TCP multiplexado (Proxy LAN / RDP / WebRDP), processos e gravacao.
 
 ### 12.2 Controle de Sessao
 
@@ -976,19 +997,30 @@ proxy de rede, gravacao e sinalizacao WebRTC.
 | Publisher   | Servidor (API/Dispatcher)                                             |
 | Subscriber  | Agent (Go)                                                            |
 | Payload     | JSON com `action` (start/stop/quality/recording_start/recording_stop) |
-| Nota        | Comandos de ciclo de vida da sessao                                   |
+| Nota        | Inclui politicas de `proxy`, `rdp`, `consent` (`Screen`/`Rdp`/`Proxy`/`All`) e `liveness` |
 
 ```json
 {
   "action": "start",
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
   "kind": "screen",
-  "transport": "webrtc",
+  "transport": "nats",
   "quality": "high",
   "codec": "webp",
   "durationMinutes": 30,
   "expiresAtUtc": "2026-07-27T12:00:00Z",
-  "natsSubject": "tenant.1.site.2.agent.3.remote.session.550e8400"
+  "natsSubject": "tenant.1.site.2.agent.3.remote.session.550e8400",
+  "proxy": {
+    "enabled": true,
+    "defaultAllowlist": [],
+    "allowedPorts": [22, 80, 443, 3389],
+    "maxResponseBytes": 10485760,
+    "allowLoopback": false
+  },
+  "rdp": {
+    "enabled": true,
+    "targetPort": 3389
+  }
 }
 ```
 
@@ -1095,7 +1127,25 @@ Header binario (big-endian):
 | Payload     | JSON: `{version: 1, requestId, success, entries?: [], drives?: [], data?, size?, chunkIndex?, totalChunks?, error?}`                                                          |
 | Nota        | Transferencia chunked >1MB com suporte a resume. `entries` é sempre serializado (array vazio em diretório vazio). `chunkIndex` usa `*int` — ausência no JSON = arquivo inteiro.<br>`drives` (DriveInfo) só vem na ação `drives`.<br>Cada entrada de `entries` pode ter `isHidden` (atributo HIDDEN do Windows — a UI esmaece a linha).<br>Quando o `rootPath` é a raiz de um volume, caminhos em outras unidades (`D:\...`) são aceitos; em subpasta o sandbox continua restrito. |
 
-### 12.6 Proxy de Rede
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.files.data`
+
+| Propriedade | Valor |
+| ----------- | --- |
+| Direcao     | Agent -> Viewer |
+| Publisher   | Agent (Go) |
+| Subscriber  | Viewer (browser, quando `!RemoteSessionRights.NoFiles`) |
+| Payload     | Frame binario: magic `'DF'` (`0x44, 0x46`) + `uint32 BE headerLen` + JSON header + raw chunk bytes |
+
+### 12.6 Proxy de Rede LAN
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.ready`
+
+| Propriedade | Valor |
+| ----------- | --- |
+| Direcao     | Agent -> Viewer |
+| Publisher   | Agent (Go) |
+| Subscriber  | Viewer (quando `!NoProxy` ou `!NoRdp` em sessoes `Proxy`/`Rdp`/`All`) |
+| Payload     | JSON indicando que o modulo de proxy/tunel no agente esta pronto para conexoes |
 
 #### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.req`
 
@@ -1105,7 +1155,7 @@ Header binario (big-endian):
 | Publisher   | Viewer (browser)                                    |
 | Subscriber  | Agent (Go)                                          |
 | Payload     | JSON: `{method, url, headers, body?}`               |
-| Nota        | Allowlist vazia por padrao (bloqueio total inicial) |
+| Nota        | Politica (`defaultAllowlist`, `allowedPorts`, `maxResponseBytes`, `allowLoopback`) encaminhada via `RemoteAccess:Proxy` e revalidada pelo agent |
 
 #### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.proxy.resp`
 
@@ -1116,17 +1166,31 @@ Header binario (big-endian):
 | Subscriber  | Viewer (browser)                         |
 | Payload     | JSON: `{status, headers, body?, error?}` |
 
-### 12.7 Sinalizacao WebRTC
+### 12.7 Tunel Multiplexado TCP / Proxy LAN e RDP
 
-#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.signal`
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.tunnel.in`
 
-| Propriedade | Valor                                                                 |
-| ----------- | --------------------------------------------------------------------- |
-| Direcao     | Bidirecional                                                          |
-| Publisher   | Viewer ou Agent                                                       |
-| Subscriber  | Agent ou Viewer                                                       |
-| Payload     | JSON: SDP offer/answer + ICE candidates                               |
-| Nota        | WebRTC P2P via Pion (agent) + browser nativo; STUN Google por default |
+| Propriedade | Valor |
+| ----------- | --- |
+| Direcao     | Viewer / API WS Tunnel -> Agent |
+| Publisher   | Viewer (via NATS WS ou `GET /api/v1/remote-sessions/{agentId}/{sessionId}/tunnel/ws`) |
+| Subscriber  | Agent (Go) |
+| Payload     | Controle JSON iniciado por `{` (`0x7B`) ou frame binario `[0x01][opByte][4B streamId BE][rawPayload]` |
+| Nota        | A API remonta frames WebSocket fragmentados (`!EndOfMessage`) ate `RemoteAccess:Nats:MaxPayloadBytes` antes de publicar no NATS |
+
+#### `tenant.{c}.site.{s}.agent.{a}.remote.session.{sessionId}.tunnel.out`
+
+| Propriedade | Valor |
+| ----------- | --- |
+| Direcao     | Agent -> Viewer / API WS Tunnel |
+| Publisher   | Agent (Go) |
+| Subscriber  | Viewer (via NATS WS ou WebSocket relay `/tunnel/ws`) |
+| Payload     | Controle JSON iniciado por `{` (`0x7B`) ou frame binario `[0x01][opByte][4B streamId BE][rawPayload]` |
+
+Endpoints REST/WS auxiliares para tunel:
+- `POST /api/v1/remote-sessions/{agentId}/{sessionId}/tunnel/ticket` — emite ticket opaco de uso unico (TTL 60s) vinculado a `(userId, agentId, sessionId)` para handshake WS sem expor JWT na URL.
+- `GET /api/v1/remote-sessions/{agentId}/{sessionId}/tunnel/ws` — relay bidirecional WebSocket <-> `.tunnel.in`/`.tunnel.out` autenticado por `Authorization: Bearer` ou `?ticket=`.
+- `GET /api/v1/remote-sessions/{agentId}/{sessionId}/rdp-file` — gera arquivo `.rdp` apontando para o encaminhador local (`--rdp-tunnel`).
 
 ### 12.8 Gravacao de Sessao
 
@@ -1142,10 +1206,11 @@ Header binario (big-endian):
 
 ### 12.9 Seguranca
 
-- **JWT NATS scoped por sessao:** cada viewer recebe token com `sub.allow` e `pub.allow` apenas nos subjects da propria sessao
+- **JWT NATS scoped por sessao:** cada viewer recebe token com `sub.allow` e `pub.allow` apenas nos subjects da propria sessao, filtrados por `RemoteSessionRights` (`ViewOnly=1`, `NoTerminal=2`, `NoFiles=4`, `LimitedInput=8`, `NoDesktop=16`, `NoEvents=32`, `NoProxy=64`, `NoRdp=128`) e pelo `kind` da sessao
+- **Ticket efemero de WebSocket:** `/tunnel/ws` utiliza ticket opaco de uso unico (`POST .../tunnel/ticket`) ou header `Authorization` (sem JWT de longa duracao em query string)
+- **Consentimento por tipo de sessao:** `RemoteConsentPolicy.AppliesTo` cobre `Screen`, `Rdp`, `Proxy` e `All`
 - **TTL curto:** token expira junto com a sessao (default 30min, renovavel)
-- **TLS obrigatorio:** todas as conexoes NATS usam TLS
-- **WebRTC DTLS-SRTP:** P2P criptografado fim-a-fim
+- **TLS obrigatorio:** todas as conexoes NATS/WSS usam TLS em producao
 - **Auditoria:** todo inicio/fim/renovacao registrado em `RemoteSessionAudit`
 
 ---

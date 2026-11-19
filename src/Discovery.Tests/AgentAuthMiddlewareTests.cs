@@ -1,6 +1,7 @@
 using Discovery.Api.Middleware;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -171,6 +172,146 @@ public class AgentAuthMiddlewareTests
         Assert.That(nextCalled, Is.True);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // F03 Hot-Path Deduplication: AgentTokenAuthService + AgentAuthMiddleware
+    // devem consultar GetByIdForDecommissionAsync no máximo 1x por request.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task InvokeAsync_WithRealAuthService_ActiveAgent_QueriesDecommissionLookupAtMostOncePerRequest()
+    {
+        var agentId = Guid.NewGuid();
+        var rawToken = "mdz_hotpath_active_token_123456";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agentId,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddDays(-1),
+            LastUsedAt = null
+        };
+
+        var tokenRepo = new CountingTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository { Agent = new Agent { Id = agentId, DeletedAt = null } };
+        var authService = new AgentTokenAuthService(tokenRepo, agentRepo, new InMemoryRedisService());
+
+        var nextCalls = 0;
+        var middleware = CreateMiddleware(_ => { nextCalls++; return Task.CompletedTask; });
+
+        var ctx1 = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", rawToken);
+        ctx1.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await middleware.InvokeAsync(ctx1, authService, agentRepo);
+
+        Assert.That(ctx1.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+        Assert.That(nextCalls, Is.EqualTo(1));
+        Assert.That(agentRepo.DecommissionLookupCalls, Is.EqualTo(1),
+            "Cada request autenticado deve consultar GetByIdForDecommissionAsync apenas 1 vez.");
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(1));
+
+        // Segundo request imediato (dentro da janela de 5 min): ainda 1 lookup por request e 0 UPDATEs extras.
+        var ctx2 = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", rawToken);
+        ctx2.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await middleware.InvokeAsync(ctx2, authService, agentRepo);
+
+        Assert.That(ctx2.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+        Assert.That(nextCalls, Is.EqualTo(2));
+        Assert.That(agentRepo.DecommissionLookupCalls, Is.EqualTo(2));
+        Assert.That(tokenRepo.UpdateLastUsedCalls, Is.EqualTo(1),
+            "UpdateLastUsedAsync deve ser debounced dentro da janela de 5 minutos.");
+    }
+
+    [Test]
+    public async Task InvokeAsync_WithRealAuthService_TrashedAgent_QueriesOnceAndReturns403()
+    {
+        var agentId = Guid.NewGuid();
+        var rawToken = "mdz_hotpath_trashed_token_123456";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agentId,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddDays(-1)
+        };
+
+        var tokenRepo = new CountingTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository { Agent = new Agent { Id = agentId, DeletedAt = DateTime.UtcNow } };
+        var authService = new AgentTokenAuthService(tokenRepo, agentRepo, new InMemoryRedisService());
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", rawToken);
+        context.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await middleware.InvokeAsync(context, authService, agentRepo);
+
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(nextCalled, Is.False);
+        Assert.That(agentRepo.DecommissionLookupCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task InvokeAsync_WithRealAuthService_TrashedAgent_AllowsDecommissionWithSingleLookup()
+    {
+        var agentId = Guid.NewGuid();
+        var rawToken = "mdz_hotpath_decomm_token_123456";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agentId,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddDays(-1)
+        };
+
+        var tokenRepo = new CountingTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository { Agent = new Agent { Id = agentId, DeletedAt = DateTime.UtcNow } };
+        var authService = new AgentTokenAuthService(tokenRepo, agentRepo, new InMemoryRedisService());
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me", rawToken);
+        context.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await middleware.InvokeAsync(context, authService, agentRepo);
+
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+        Assert.That(nextCalled, Is.True);
+        Assert.That(agentRepo.DecommissionLookupCalls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task InvokeAsync_WithRealAuthService_HardDeletedAgent_RevokesTokenAndReturns401()
+    {
+        var agentId = Guid.NewGuid();
+        var rawToken = "mdz_hotpath_missing_agent_123456";
+        var token = new AgentToken
+        {
+            Id = Guid.NewGuid(),
+            AgentId = agentId,
+            TokenHash = AgentTokenAuthService.HashToken(rawToken),
+            TokenPrefix = rawToken[..8],
+            CreatedAt = DateTime.UtcNow.AddDays(-1)
+        };
+
+        var tokenRepo = new CountingTokenRepository([token]);
+        var agentRepo = new FakeAgentRepository { Agent = null };
+        var authService = new AgentTokenAuthService(tokenRepo, agentRepo, new InMemoryRedisService());
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/hardware", rawToken);
+        context.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await middleware.InvokeAsync(context, authService, agentRepo);
+
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+        Assert.That(nextCalled, Is.False);
+        Assert.That(agentRepo.DecommissionLookupCalls, Is.EqualTo(1));
+        Assert.That(tokenRepo.RevokedTokenIds, Does.Contain(token.Id));
+    }
+
     /// <summary>
     /// Stub mínimo: o middleware só usa GetByIdForDecommissionAsync (o lookup que
     /// enxerga a lixeira).
@@ -179,11 +320,15 @@ public class AgentAuthMiddlewareTests
     {
         public Agent? Agent { get; init; }
         public bool ThrowOnLookup { get; init; }
+        public int DecommissionLookupCalls { get; private set; }
 
         public Task<Agent?> GetByIdForDecommissionAsync(Guid id)
-            => ThrowOnLookup
+        {
+            DecommissionLookupCalls++;
+            return ThrowOnLookup
                 ? throw new InvalidOperationException("banco indisponível (teste)")
                 : Task.FromResult(Agent is not null && Agent.Id == id ? Agent : null);
+        }
 
         public Task<Agent?> GetByIdAsync(Guid id) => Task.FromResult(Agent);
         public Task<IReadOnlyList<Agent>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken ct = default) => throw new NotSupportedException();
@@ -240,6 +385,71 @@ public class AgentAuthMiddlewareTests
         public Task ReleaseNatsSessionAsync(Guid tokenId) => Task.CompletedTask;
 
         public Task UpdateLastNatsConnectedAsync(Guid tokenId) => Task.CompletedTask;
+    }
+
+    private sealed class CountingTokenRepository(List<AgentToken> tokens) : IAgentTokenRepository
+    {
+        public int UpdateLastUsedCalls { get; private set; }
+        public List<Guid> RevokedTokenIds { get; } = [];
+
+        public Task<AgentToken?> GetByIdAsync(Guid id)
+            => Task.FromResult(tokens.FirstOrDefault(t => t.Id == id));
+
+        public Task<AgentToken?> GetByTokenHashAsync(string tokenHash)
+            => Task.FromResult(tokens.FirstOrDefault(t => t.TokenHash == tokenHash));
+
+        public Task<IEnumerable<AgentToken>> GetByAgentIdAsync(Guid agentId)
+            => Task.FromResult<IEnumerable<AgentToken>>(tokens.Where(t => t.AgentId == agentId).ToList());
+
+        public Task<AgentToken> CreateAsync(AgentToken token)
+        {
+            tokens.Add(token);
+            return Task.FromResult(token);
+        }
+
+        public Task UpdateLastUsedAsync(Guid id)
+        {
+            UpdateLastUsedCalls++;
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateLastNatsConnectedAsync(Guid id) => Task.CompletedTask;
+
+        public Task RevokeAsync(Guid id)
+        {
+            RevokedTokenIds.Add(id);
+            var t = tokens.FirstOrDefault(x => x.Id == id);
+            if (t is not null) t.RevokedAt = DateTime.UtcNow;
+            return Task.CompletedTask;
+        }
+
+        public Task RevokeAllByAgentIdAsync(Guid agentId) => Task.CompletedTask;
+    }
+
+    private sealed class InMemoryRedisService : IRedisService
+    {
+        private readonly Dictionary<string, string> _store = new(StringComparer.Ordinal);
+        public bool IsConnected => true;
+        public Task<string?> GetAsync(string key) => Task.FromResult(_store.TryGetValue(key, out var val) ? val : null);
+        public Task<long> IncrementAsync(string key) => throw new NotSupportedException();
+        public Task<long> IncrementByAsync(string key, long amount) => throw new NotSupportedException();
+        public Task SetAsync(string key, string value, int expirySeconds = 3600)
+        {
+            _store[key] = value;
+            return Task.CompletedTask;
+        }
+        public Task<bool> SetExpiryAsync(string key, int expirySeconds) => throw new NotSupportedException();
+        public Task<int> GetTtlSecondsAsync(string key) => throw new NotSupportedException();
+        public Task DeleteAsync(string key)
+        {
+            _store.Remove(key);
+            return Task.CompletedTask;
+        }
+        public Task DeleteByPrefixAsync(string prefix) => throw new NotSupportedException();
+        public Task PublishAsync(string channel, string message) => throw new NotSupportedException();
+        public Task SubscribeAsync(string channel, Action<string, string> handler) => throw new NotSupportedException();
+        public Task<IReadOnlyList<string>> GetKeysByPrefixAsync(string prefix, int maxResults = 10000) => throw new NotSupportedException();
+        public Task<bool> SetIfNotExistsAsync(string key, string value, int expirySeconds) => throw new NotSupportedException();
     }
 
 }

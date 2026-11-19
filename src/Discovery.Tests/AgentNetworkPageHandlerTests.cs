@@ -78,10 +78,10 @@ public class AgentNetworkPageHandlerTests
     }
 
     private static GetAgentOpenSocketsPageQueryHandler SocketsHandler(AgentHardwareComponents components)
-        => new(new FakeAgentRepository(new Agent { Id = AgentId }), new FakeHardwareRepository(components));
+        => new(new FakeAgentRepository(new Agent { Id = AgentId }), new FakeHardwareRepository(components), new F02SiteRepositoryStub(), F02ScopeContextStub.Global());
 
     private static GetAgentListeningPortsPageQueryHandler PortsHandler(AgentHardwareComponents components)
-        => new(new FakeAgentRepository(new Agent { Id = AgentId }), new FakeHardwareRepository(components));
+        => new(new FakeAgentRepository(new Agent { Id = AgentId }), new FakeHardwareRepository(components), new F02SiteRepositoryStub(), F02ScopeContextStub.Global());
 
     [Test]
     public async Task OpenSocketsPage_FirstPage_SlicesSortsAndMapsState()
@@ -214,7 +214,9 @@ public class AgentNetworkPageHandlerTests
         ];
         var handler = new GetAgentHardwareComponentsQueryHandler(
             new FakeAgentRepository(new Agent { Id = AgentId }),
-            new FakeHardwareRepository(components));
+            new FakeHardwareRepository(components),
+            new F02SiteRepositoryStub(),
+            F02ScopeContextStub.Global());
 
         var full = await handler.Handle(new GetAgentHardwareComponentsQuery(AgentId), CancellationToken.None);
         var slim = await handler.Handle(new GetAgentHardwareComponentsQuery(AgentId, IncludeNetwork: false), CancellationToken.None);

@@ -11,7 +11,7 @@ namespace Discovery.Api.Controllers;
 public class BackgroundServicesController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll()
     {
         var result = await mediator.Send(new ListBackgroundServicesQuery());
@@ -19,7 +19,7 @@ public class BackgroundServicesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{name}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetByName(string name)
     {
         var result = await mediator.Send(new GetBackgroundServiceByNameQuery(name));

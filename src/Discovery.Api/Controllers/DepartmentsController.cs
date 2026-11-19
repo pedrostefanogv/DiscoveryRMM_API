@@ -137,10 +137,44 @@ public class DepartmentsController(
             .ToList();
     }
 
+    private async Task<IActionResult?> EnsureDepartmentAccessAsync(Guid departmentId, ActionType action, CancellationToken ct)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Departments, action);
+        if (access.HasGlobalAccess)
+            return null;
+
+        var deptResult = await mediator.Send(new GetDepartmentByIdQuery(departmentId), ct);
+        if (deptResult.IsFailure)
+        {
+            return deptResult.Match<IActionResult>(
+                success: Ok,
+                failure: errors => errors[0].Code == "NotFound"
+                    ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                    : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        }
+
+        var dept = deptResult.Value!;
+        if (dept.ClientId is null)
+        {
+            return action == ActionType.View
+                ? null
+                : StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas administradores globais podem modificar departamentos globais." });
+        }
+
+        if (!access.AllowedClientIds.Contains(dept.ClientId.Value))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este departamento." });
+
+        return null;
+    }
+
     [HttpPost]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Create([FromBody] CreateDepartmentCommand cmd)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Departments, ActionType.Edit);
+        if (!access.HasGlobalAccess && (!cmd.ClientId.HasValue || !access.AllowedClientIds.Contains(cmd.ClientId.Value)))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso para criar departamento neste escopo." });
+
         // B1 — o ator da auditoria é SEMPRE o usuário autenticado do request,
         // nunca o valor vindo do corpo.
         var result = await mediator.Send(cmd with { ChangedBy = Username });
@@ -152,9 +186,12 @@ public class DepartmentsController(
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDepartmentCommand cmd)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var result = await mediator.Send(cmd with { Id = id, ChangedBy = Username });
         return result.Match<IActionResult>(
             success: Ok,
@@ -166,9 +203,12 @@ public class DepartmentsController(
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Delete(Guid id)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new DeleteDepartmentCommand(id, Username));
         return result.Match<IActionResult>(
             success: _ => NoContent(),
@@ -184,41 +224,69 @@ public class DepartmentsController(
     /// (own/inherited-global/default), para o console exibir o selo de herdado.
     /// </summary>
     [HttpGet("{id:guid}/effective")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetEffectiveConfig(Guid id)
-        => (await mediator.Send(new GetDepartmentEffectiveConfigQuery(id), HttpContext.RequestAborted)).ToActionResult();
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return (await mediator.Send(new GetDepartmentEffectiveConfigQuery(id), HttpContext.RequestAborted)).ToActionResult();
+    }
 
     // ── Members (round-robin) ────────────────────────────────────────────
 
     [HttpGet("{id:guid}/members")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetMembers(Guid id)
-        => (await mediator.Send(new ListDepartmentMembersQuery(id), HttpContext.RequestAborted)).ToActionResult();
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return (await mediator.Send(new ListDepartmentMembersQuery(id), HttpContext.RequestAborted)).ToActionResult();
+    }
 
     [HttpPost("{id:guid}/members")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> AddMember(Guid id, [FromBody] AddDepartmentMemberRequest request)
-        => (await mediator.Send(new AddDepartmentMemberCommand(id, request.UserId), HttpContext.RequestAborted)).ToActionResult();
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return (await mediator.Send(new AddDepartmentMemberCommand(id, request.UserId), HttpContext.RequestAborted)).ToActionResult();
+    }
 
     [HttpDelete("{id:guid}/members/{userId:guid}")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId)
-        => (await mediator.Send(new RemoveDepartmentMemberCommand(id, userId), HttpContext.RequestAborted)).ToActionResult();
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return (await mediator.Send(new RemoveDepartmentMemberCommand(id, userId), HttpContext.RequestAborted)).ToActionResult();
+    }
 
     // ── Triagem por IA (auto-atribuição) ────────────────────────────────
 
     /// <summary>Perfil (competências/capacidade) + métricas de cada membro da equipe.</summary>
     [HttpGet("{id:guid}/assignment/team-metrics")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAssignmentTeamMetrics(Guid id)
-        => (await mediator.Send(new GetDepartmentAssignmentTeamMetricsQuery(id), HttpContext.RequestAborted)).ToActionResult();
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return (await mediator.Send(new GetDepartmentAssignmentTeamMetricsQuery(id), HttpContext.RequestAborted)).ToActionResult();
+    }
 
     /// <summary>Atualiza competências, teto de chamados, peso e opt-out do membro.</summary>
     [HttpPut("{id:guid}/members/{userId:guid}/profile")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpdateMemberProfile(
         Guid id, Guid userId, [FromBody] UpdateDepartmentMemberProfileRequest request)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new UpdateDepartmentMemberProfileCommand(
                 id, userId, request.SkillTags, request.SkillLevel, request.MaxOpenTickets,
                 request.Weight, request.AcceptsAiAssignment, request.ClearMaxOpenTickets),
@@ -238,31 +306,47 @@ public class DepartmentsController(
 
     /// <summary>Força o recálculo dos snapshots de métricas usados pela triagem.</summary>
     [HttpPost("{id:guid}/assignment/metrics/refresh")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> RefreshAssignmentMetrics(Guid id)
-        => (await mediator.Send(new RefreshTechnicianMetricsCommand(id), HttpContext.RequestAborted)).ToActionResult();
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return (await mediator.Send(new RefreshTechnicianMetricsCommand(id), HttpContext.RequestAborted)).ToActionResult();
+    }
 
     // ── Aprendizado da triagem por IA (competências e pesos) ────────────
 
     /// <summary>Sugestões pendentes de competências e de recalibração de pesos.</summary>
     [HttpGet("{id:guid}/learning/suggestions")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetLearningSuggestions(Guid id)
-        => Ok(await learningService.GetSuggestionsAsync(id, HttpContext.RequestAborted));
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return Ok(await learningService.GetSuggestionsAsync(id, HttpContext.RequestAborted));
+    }
 
     /// <summary>Roda um ciclo de aprendizado sob demanda para o departamento.</summary>
     [HttpPost("{id:guid}/learning/run")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> RunLearningCycle(Guid id)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var created = await learningService.RunCycleAsync(id, CurrentUserId, HttpContext.RequestAborted);
         return Ok(new { created });
     }
 
     [HttpPost("{id:guid}/learning/skills/{suggestionId:guid}/apply")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> ApplySkillSuggestion(Guid id, Guid suggestionId)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var result = await learningService.ApplySkillSuggestionAsync(
             id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
         return result is null
@@ -271,18 +355,24 @@ public class DepartmentsController(
     }
 
     [HttpPost("{id:guid}/learning/skills/{suggestionId:guid}/discard")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> DiscardSkillSuggestion(Guid id, Guid suggestionId)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var discarded = await learningService.DiscardSkillSuggestionAsync(
             id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
         return discarded ? NoContent() : NotFound();
     }
 
     [HttpPost("{id:guid}/learning/weights/{suggestionId:guid}/apply")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> ApplyWeightSuggestion(Guid id, Guid suggestionId)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var result = await learningService.ApplyWeightSuggestionAsync(
             id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
         return result is null
@@ -291,9 +381,12 @@ public class DepartmentsController(
     }
 
     [HttpPost("{id:guid}/learning/weights/{suggestionId:guid}/discard")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> DiscardWeightSuggestion(Guid id, Guid suggestionId)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var discarded = await learningService.DiscardWeightSuggestionAsync(
             id, suggestionId, CurrentUserId, HttpContext.RequestAborted);
         return discarded ? NoContent() : NotFound();
@@ -306,21 +399,34 @@ public class DepartmentsController(
     // editar/excluir; devolver valores deixava o id vazio e o PUT ia para
     // ".../custom-fields//definition" (404).
     [HttpGet("{id:guid}/custom-fields")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFields(Guid id)
-        => Ok(await departmentCustomFieldService.GetDefinitionsByDepartmentAsync(id, HttpContext.RequestAborted));
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return Ok(await departmentCustomFieldService.GetDefinitionsByDepartmentAsync(id, HttpContext.RequestAborted));
+    }
 
     // Compatibilidade: preserva o acesso aos VALORES do departamento (o contrato
     // antigo de GET /custom-fields agora devolve definições).
     [HttpGet("{id:guid}/custom-fields/values")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFieldValues(Guid id, [FromQuery] bool includeSecrets = false)
-        => Ok(await customFieldService.GetValuesAsync(CustomFieldScopeType.Department, id, includeSecrets, HttpContext.RequestAborted));
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return Ok(await customFieldService.GetValuesAsync(CustomFieldScopeType.Department, id, includeSecrets, HttpContext.RequestAborted));
+    }
 
     [HttpPut("{id:guid}/custom-fields/{definitionId:guid}")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpsertCustomField(Guid id, Guid definitionId, [FromBody] JsonElement body)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         var valueJson = body.TryGetProperty("value", out var prop) ? prop.GetRawText() : body.GetRawText();
         var result = await customFieldService.UpsertValueAsync(
             new UpsertCustomFieldValueInput(definitionId, CustomFieldScopeType.Department, id, valueJson, Username),
@@ -331,9 +437,12 @@ public class DepartmentsController(
     // ── Custom Field Definitions (formulário de abertura) ────────────────
 
     [HttpPost("{id:guid}/custom-fields")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateCustomFieldDefinition(Guid id, [FromBody] DepartmentCustomFieldRequest request)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         try
         {
             var created = await departmentCustomFieldService.CreateDepartmentFieldAsync(
@@ -347,9 +456,12 @@ public class DepartmentsController(
     }
 
     [HttpPut("{id:guid}/custom-fields/{fieldId:guid}/definition")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpdateCustomFieldDefinition(Guid id, Guid fieldId, [FromBody] DepartmentCustomFieldRequest request)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         try
         {
             var updated = await departmentCustomFieldService.UpdateDepartmentFieldAsync(
@@ -365,9 +477,12 @@ public class DepartmentsController(
     }
 
     [HttpDelete("{id:guid}/custom-fields/{fieldId:guid}")]
-    [RequirePermission(ResourceType.Departments, ActionType.Edit)]
+    [RequirePermission(ResourceType.Departments, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> DeleteCustomFieldDefinition(Guid id, Guid fieldId)
     {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.Edit, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
         try
         {
             var removed = await departmentCustomFieldService.DeleteDepartmentFieldAsync(
@@ -387,16 +502,21 @@ public class DepartmentsController(
     /// O formulário de abertura continua recebendo apenas os públicos.
     /// </summary>
     [HttpGet("{id:guid}/ticket-schema")]
-    [RequirePermission(ResourceType.Departments, ActionType.View)]
+    [RequirePermission(ResourceType.Departments, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetTicketSchema(
         Guid id,
         [FromQuery] bool includeInternal = false,
         [FromQuery] Guid? ticketId = null)
-        => Ok(includeInternal
+    {
+        if (await EnsureDepartmentAccessAsync(id, ActionType.View, HttpContext.RequestAborted) is { } denied)
+            return denied;
+
+        return Ok(includeInternal
             // Com ticketId o schema já devolve o valor atual de cada campo
             // (CurrentValueJson); sem ele os valores vêm do endpoint do chamado.
             ? await departmentCustomFieldService.GetFullSchemaForDepartmentAsync(id, ticketId, HttpContext.RequestAborted)
             : await departmentCustomFieldService.GetPublicSchemaForDepartmentAsync(id, HttpContext.RequestAborted));
+    }
 
     private static CreateDepartmentCustomFieldInput ToCreateInput(DepartmentCustomFieldRequest r) => new(
         r.Name, r.Label, r.Description, r.DataType,

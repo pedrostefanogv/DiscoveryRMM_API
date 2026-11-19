@@ -5,7 +5,10 @@ using Discovery.Core.Cqrs.Agents.Automation.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.CommandHandlers;
@@ -16,13 +19,20 @@ public sealed class RunAutomationTaskCommandHandler(
     IAutomationScriptService scriptService,
     IAgentCommandDispatcher dispatcher,
     IAutomationExecutionReportRepository reportRepo,
-    IAppPackageRepository appPackageRepo
+    IAppPackageRepository appPackageRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<RunAutomationTaskCommand, Result<AutomationExecutionDto>>
 {
     public async Task<Result<AutomationExecutionDto>> Handle(RunAutomationTaskCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<AutomationExecutionDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AutomationExecutionDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var task = await taskService.GetByIdAsync(cmd.TaskId, includeInactive: false, ct);
         if (task is null) return Result<AutomationExecutionDto>.Failure(Error.NotFound("Automation task not found or inactive."));
@@ -187,13 +197,20 @@ public sealed class RunAutomationScriptCommandHandler(
     IAgentRepository agentRepo,
     IAutomationScriptService scriptService,
     IAgentCommandDispatcher dispatcher,
-    IAutomationExecutionReportRepository reportRepo
+    IAutomationExecutionReportRepository reportRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<RunAutomationScriptCommand, Result<AutomationExecutionDto>>
 {
     public async Task<Result<AutomationExecutionDto>> Handle(RunAutomationScriptCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<AutomationExecutionDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AutomationExecutionDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var script = await scriptService.GetByIdAsync(cmd.ScriptId, includeInactive: false, ct);
         if (script is null) return Result<AutomationExecutionDto>.Failure(Error.NotFound("Automation script not found or inactive."));
@@ -210,13 +227,20 @@ public sealed class RunAutomationScriptCommandHandler(
 public sealed class ForceAutomationSyncCommandHandler(
     IAgentRepository agentRepo,
     IAgentCommandDispatcher dispatcher,
-    IAutomationExecutionReportRepository reportRepo
+    IAutomationExecutionReportRepository reportRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<ForceAutomationSyncCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(ForceAutomationSyncCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var flags = ResolveForceSyncFlags(cmd);
 
@@ -267,13 +291,20 @@ internal readonly record struct ForceSyncFlags(bool Policies, bool Inventory, bo
 
 public sealed class RefreshAgentDataCommandHandler(
     IAgentRepository agentRepo,
-    IAgentCommandDispatcher dispatcher
+    IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<RefreshAgentDataCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RefreshAgentDataCommand cmd, CancellationToken ct)
     {
         var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
         if (agent is null) return Result<VoidResult>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<VoidResult>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var payload = JsonSerializer.Serialize(new
         {

@@ -3,6 +3,9 @@ using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.AgentUpdates.Commands;
 using Discovery.Core.Cqrs.AgentUpdates.Queries;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
+using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,8 +16,27 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/agent-updates")]
 public class AgentUpdatesController(IMediator mediator) : ControllerBase
 {
+    private static async Task<IActionResult?> EnsureAgentAccessAsync(
+        Guid agentId,
+        ActionType action,
+        IScopeContext scopeContext,
+        IAgentRepository agentRepo,
+        ISiteRepository siteRepo)
+    {
+        var agent = await agentRepo.GetByIdAsync(agentId);
+        if (agent is null)
+            return new NotFoundObjectResult(new { error = "Agent not found." });
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Deployment, action);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return new ObjectResult(new { error = "Você não tem acesso a este agente." }) { StatusCode = StatusCodes.Status403Forbidden };
+
+        return null;
+    }
+
     [HttpGet("build/current")]
-    [RequirePermission(ResourceType.Deployment, ActionType.View)]
+    [RequirePermission(ResourceType.Deployment, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetCurrentBuild([FromQuery] string? platform, [FromQuery] string? architecture, [FromQuery] string? artifactType, CancellationToken ct)
     {
         var r = await mediator.Send(new GetCurrentAgentBuildQuery(platform, architecture, artifactType), ct);
@@ -26,7 +48,7 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     /// Accepts multipart/form-data with metadata fields and the binary file.
     /// </summary>
     [HttpPost("build/refresh")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
+    [RequirePermission(ResourceType.Deployment, ActionType.Edit, ScopeSource.Global)]
     [RequestSizeLimit(500_000_000)]
     public async Task<IActionResult> RefreshBuild(
         [FromForm] RefreshAgentBuildFormRequest request,
@@ -98,20 +120,35 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("agents/{agentId:guid}/events")]
-    [RequirePermission(ResourceType.Deployment, ActionType.View)]
-    public async Task<IActionResult> GetAgentEvents(Guid agentId, [FromQuery] int limit = 100, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Deployment, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetAgentEvents(
+        Guid agentId,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        [FromQuery] int limit = 100,
+        CancellationToken ct = default)
     {
+        if (await EnsureAgentAccessAsync(agentId, ActionType.View, scopeContext, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         var r = await mediator.Send(new ListAgentUpdateEventsQuery(agentId, limit), ct);
         return r.Match<IActionResult>(Ok, e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));
     }
 
     [HttpPost("agents/{agentId:guid}/force-update")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Edit)]
+    [RequirePermission(ResourceType.Deployment, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> ForceUpdate(
         Guid agentId,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
         [FromBody] ForceAgentUpdateCommand? cmd = null,
         CancellationToken ct = default)
     {
+        if (await EnsureAgentAccessAsync(agentId, ActionType.Edit, scopeContext, agentRepo, siteRepo) is { } denied)
+            return denied;
+
         var command = (cmd ?? new ForceAgentUpdateCommand(agentId, null, null)) with { AgentId = agentId };
         var r = await mediator.Send(command, ct);
         return r.Match<IActionResult>(_ => Ok(new { triggered = true }), e => BadRequest(new { errors = e.Select(x => new { x.Code, x.Message }) }));

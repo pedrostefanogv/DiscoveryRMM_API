@@ -24,13 +24,13 @@ public class DatabaseMaintenanceController(
 {
     /// <summary>Diagnóstico físico do PostgreSQL (somente leitura).</summary>
     [HttpGet("health")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetHealth(CancellationToken ct)
         => Ok(await healthService.GetReportAsync(ct));
 
     /// <summary>Últimas execuções persistidas da manutenção física.</summary>
     [HttpGet("runs")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetRuns([FromQuery] int? limit, CancellationToken ct)
     {
         var take = Math.Clamp(limit ?? 10, 1, 100);

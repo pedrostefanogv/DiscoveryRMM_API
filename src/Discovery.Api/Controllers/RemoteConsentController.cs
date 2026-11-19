@@ -31,7 +31,7 @@ public class RemoteConsentController(
     private string? CurrentUser => HttpContext.Items["Username"] as string;
 
     [HttpGet("effective")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetEffective(
         [FromQuery] Guid agentId,
         [FromQuery] Guid? userId,
@@ -69,7 +69,7 @@ public class RemoteConsentController(
     }
 
     [HttpGet("overrides")]
-    [RequirePermission(ResourceType.Users, ActionType.View)]
+    [RequirePermission(ResourceType.Users, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> ListOverrides(
         [FromQuery] RemoteConsentSubjectType? subjectType,
         [FromQuery] Guid? subjectId,
@@ -88,7 +88,7 @@ public class RemoteConsentController(
     }
 
     [HttpPost("overrides")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> CreateOverride([FromBody] RemoteConsentOverrideRequest request, CancellationToken ct = default)
     {
         var validation = await ValidateAsync(request, null, ct);
@@ -120,7 +120,7 @@ public class RemoteConsentController(
     }
 
     [HttpPut("overrides/{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> UpdateOverride(Guid id, [FromBody] RemoteConsentOverrideRequest request, CancellationToken ct = default)
     {
         var entity = await db.RemoteConsentPolicyOverrides.FirstOrDefaultAsync(item => item.Id == id, ct);
@@ -149,7 +149,7 @@ public class RemoteConsentController(
     }
 
     [HttpDelete("overrides/{id:guid}")]
-    [RequirePermission(ResourceType.Users, ActionType.Edit)]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> DeleteOverride(Guid id, CancellationToken ct = default)
     {
         var entity = await db.RemoteConsentPolicyOverrides.FirstOrDefaultAsync(item => item.Id == id, ct);

@@ -24,7 +24,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Lists all registered Quartz jobs with their current state.
     /// </summary>
     [HttpGet]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAllJobs(CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
@@ -85,7 +85,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Triggers a job immediately by name and group.
     /// </summary>
     [HttpPost("{jobGroup}/{jobName}/trigger")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> TriggerJob(
         string jobGroup, string jobName, [FromQuery] bool force, CancellationToken ct)
     {
@@ -108,7 +108,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Pauses all triggers for a job (no new executions until resumed).
     /// </summary>
     [HttpPost("{jobGroup}/{jobName}/pause")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> PauseJob(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
@@ -126,7 +126,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Resumes all triggers for a paused job.
     /// </summary>
     [HttpPost("{jobGroup}/{jobName}/resume")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> ResumeJob(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
@@ -146,7 +146,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Puts the scheduler in standby (pauses ALL jobs).
     /// </summary>
     [HttpPost("scheduler/standby")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> StandbyScheduler(CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
@@ -158,7 +158,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Starts the scheduler if it was in standby.
     /// </summary>
     [HttpPost("scheduler/start")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> StartScheduler(CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
@@ -172,7 +172,7 @@ public class JobsController(ISchedulerFactory schedulerFactory) : ControllerBase
     /// Retrieves detailed info about a specific job, including last execution result.
     /// </summary>
     [HttpGet("{jobGroup}/{jobName}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetJobDetail(string jobGroup, string jobName, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);

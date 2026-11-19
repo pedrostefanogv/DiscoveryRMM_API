@@ -17,7 +17,7 @@ public class DatabaseSanitizationController(IDatabaseSanitizationService sanitiz
 {
     /// <summary>Lista as verificações disponíveis (chave, título e descrição).</summary>
     [HttpGet("checks")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public IActionResult GetChecks() => Ok(DatabaseSanitizationChecks.All);
 
     /// <summary>
@@ -25,7 +25,7 @@ public class DatabaseSanitizationController(IDatabaseSanitizationService sanitiz
     /// persistido); <c>checks</c> nulo/vazio roda todas as verificações.
     /// </summary>
     [HttpPost("run")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
     public async Task<IActionResult> Run([FromBody] SanitizationRequest? request, CancellationToken ct)
     {
         var req = request ?? new SanitizationRequest(DryRun: null, Checks: null);

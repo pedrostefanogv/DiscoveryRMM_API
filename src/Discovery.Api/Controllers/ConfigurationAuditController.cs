@@ -13,7 +13,7 @@ namespace Discovery.Api.Controllers;
 public class ConfigurationAuditController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetRecentChanges([FromQuery] int days = 90, [FromQuery] int limit = 1000)
     {
         var result = await mediator.Send(new GetRecentAuditChangesQuery(days, limit));
@@ -21,7 +21,7 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{entityType}/{entityId:guid}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetEntityHistory(string entityType, Guid entityId, [FromQuery] int limit = 100)
     {
         var result = await mediator.Send(new GetEntityAuditHistoryQuery(entityType, entityId, limit));
@@ -29,7 +29,7 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{entityType}/{entityId:guid}/field/{fieldName}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetFieldHistory(string entityType, Guid entityId, string fieldName)
     {
         var result = await mediator.Send(new GetFieldAuditHistoryQuery(entityType, entityId, fieldName));
@@ -37,7 +37,7 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("by-user/{username}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetChangesByUser(string username, [FromQuery] int limit = 100)
     {
         var result = await mediator.Send(new GetAuditChangesByUserQuery(username, limit));
@@ -45,7 +45,7 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("report")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAuditReport([FromQuery] DateTime startDate, [FromQuery] DateTime endDate)
     {
         var result = await mediator.Send(new GetAuditReportQuery(startDate, endDate));
@@ -59,7 +59,7 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     /// os hashes encadeados. Entradas fora da chain (legado/fail-open) são ignoradas.
     /// </summary>
     [HttpGet("chain/verify")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> VerifyChain([FromQuery] DateTime? from, [FromQuery] DateTime? to)
     {
         var result = await mediator.Send(new VerifyAuditChainQuery(from, to));
@@ -70,7 +70,7 @@ public class ConfigurationAuditController(IMediator mediator) : ControllerBase
     /// Exporta as entradas encadeadas no período. format=json (default) ou csv.
     /// </summary>
     [HttpGet("chain/export")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> ExportChain(
         [FromQuery] DateTime? from, [FromQuery] DateTime? to, [FromQuery] string format = "json")
     {

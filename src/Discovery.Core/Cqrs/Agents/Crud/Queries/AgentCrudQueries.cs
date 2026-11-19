@@ -12,7 +12,7 @@ public sealed record GetAgentsByClientQuery(Guid ClientId) : IQuery<Result<IRead
 
 /// <summary>
 /// Agentes na lixeira (soft-deleted), paginados e com clientId resolvido.
-/// HasGlobalAccess/AllowedClientIds aplicam row-level security
+/// HasGlobalAccess/AllowedClientIds/AllowedSiteIds aplicam row-level security
 /// (ScopeSource.AccessList no controller).
 /// </summary>
 public sealed record GetDeletedAgentsQuery(
@@ -22,7 +22,8 @@ public sealed record GetDeletedAgentsQuery(
     int PageSize = 50,
     string? Search = null,
     bool HasGlobalAccess = true,
-    IReadOnlyList<Guid>? AllowedClientIds = null) : IQuery<Result<DeletedAgentsPageDto>>;
+    IReadOnlyList<Guid>? AllowedClientIds = null,
+    IReadOnlyList<Guid>? AllowedSiteIds = null) : IQuery<Result<DeletedAgentsPageDto>>;
 
 public sealed record GetAgentCustomFieldsQuery(Guid AgentId, bool IncludeSecrets = false, bool IncludeHidden = false) : IQuery<Result<IReadOnlyList<CustomFieldValueDto>>>;
 

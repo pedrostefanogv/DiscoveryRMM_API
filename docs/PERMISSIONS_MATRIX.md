@@ -1,10 +1,10 @@
 # Matriz de PermissÃµes â€” DiscoveryRMM API
 
-**Gerado em:** 05/05/2026
+**Gerado em:** 19/11/2026
 **Branch:** dev
 
 > Esta matriz documenta todos os endpoints da API com seus requisitos de permissÃ£o.
-> `Scope` = escopo de autorizaÃ§Ã£o aplicado: **G**lobal, de **R**ota, ou **I**nline (manual).
+> `Scope` = escopo de autorizaÃ§Ã£o aplicado: **G**lobal (`ScopeSource.Global`), **A**ccessList (`ScopeSource.AccessList`), de **R**ota (`ScopeSource.FromRoute`), ou **I**nline (manual). Todos os 571 atributos `[RequirePermission]` declaram `ScopeSource` explicitamente.
 
 ---
 
@@ -15,15 +15,15 @@
 | **Agents**        | Labels, info                                              | Regras de label   | Labels, regras                                                                | -                                                                                                                          | -               |
 | **Tickets**       | Listar, detalhes                                          | Criar             | Editar, workflow, comentÃ¡rios                                                 | -                                                                                                                          | -               |
 | **Clients**       | Listar, detalhes                                          | Criar             | Editar, custom fields                                                         | Excluir                                                                                                                    | -               |
-| **Sites**         | âœ– (nÃ£o tem controller prÃ³prio)                            | -                 | -                                                                             | -                                                                                                                          | -               |
+| **Sites**         | `SitesController` (listar, detalhes, custom fields, notas) | Criar site        | Editar site, notas, custom fields                                             | Excluir site                                                                                                               | -               |
 | **Reports**       | Datasets, templates                                       | Criar template    | -                                                                             | -                                                                                                                          | -               |
 | **ServerConfig**  | Todas GETs config                                         | Custom fields     | Todas PUTs/PATCHs config                                                      | Custom fields                                                                                                              | -               |
-| **ClientConfig**  | âœ– (nÃ£o usado)                                             | -                 | -                                                                             | -                                                                                                                          | -               |
-| **SiteConfig**    | MeshCentral site                                          | -                 | MeshCentral site                                                              | -                                                                                                                          | -               |
+| **ClientConfig**  | `GET .../configurations/clients/{clientId}` (`FromRoute`) | -                 | `PUT/PATCH .../configurations/clients/{clientId}` (`FromRoute`)               | `DELETE .../configurations/clients/{clientId}` (`FromRoute`)                                                               | -               |
+| **SiteConfig**    | `GET .../configurations/sites/{siteId}` (`AccessList`)    | -                 | `PUT/PATCH .../configurations/sites/{siteId}` (`AccessList`)                  | `DELETE .../configurations/sites/{siteId}` (`AccessList`)                                                                  | -               |
 | **Users**         | Listar, MFA keys                                          | Criar, API tokens | Editar, reset MFA, senha admin                                                | Desativar, revogar token                                                                                                   | -               |
 | **Automation**    | Scripts, tasks                                            | Scripts, tasks    | Scripts, tasks                                                                | Scripts, tasks                                                                                                             | Consumir script |
 | **Deployment**    | Tokens, updates                                           | Tokens, updates   | Tokens, updates                                                               | Revogar token                                                                                                              | -               |
-| **KnowledgeBase** | âœ– (nÃ£o tem controller)                                    | -                 | -                                                                             | -                                                                                                                          | -               |
+| **KnowledgeBase** | `KnowledgeController` (`GET /api/v1/knowledge*`)          | Criar artigo      | Editar artigo / pÃ¡ginas                                                       | Excluir artigo                                                                                                             | -               |
 | **AiChat**        | âœ” (`TicketAiController`, `AgentAuthController.AiChat.cs`) | `Execute`         | `/api/v{version}/tickets/{id}/ai/*`, `/api/v{version}/agent-auth/me/ai-chat*` | Agentes autenticados podem usar chat IA; usuÃ¡rios com permissÃ£o podem gerar triagem/resumo/sugestÃ£o de resposta em tickets |
 | **AppStore**      | CatÃ¡logo, diffs                                           | -                 | Custom, approvals, sync                                                       | Remover approval                                                                                                           | -               |
 | **Logs**          | Audit, monitoring                                         | -                 | -                                                                             | -                                                                                                                          | Ingest events   |
@@ -392,11 +392,14 @@ opera em cada escopo. NÃ£o Ã© uma regra: Ã© a configuraÃ§Ã£o de ativa�
 | ------------------ | ------------------------------------ | ----- |
 | Todos os endpoints | `Deployment.View/Create/Edit/Delete` | G     |
 
-### MeshCentral
+### Sites & SiteConfig
 
-| Endpoint                                                               | PermissÃ£o | Scope |
-| ---------------------------------------------------------------------- | --------- | ----- |
-| `Users.View/Create/Edit/Delete`, `Agents.Edit`, `SiteConfig.View/Edit` | â€”         | G     |
+| Endpoint                                                           | PermissÃ£o                                  | Scope |
+| ------------------------------------------------------------------ | ------------------------------------------ | ----- |
+| `/api/v1/clients/{clientId}/sites*` (`SitesController`)            | `Sites.View/Create/Edit/Delete`            | R     |
+| `GET /api/v1/sites` (`SitesController`)                            | `Sites.View`                               | A     |
+| `/api/v1/configurations/sites/{siteId}*` (`ConfigurationsController`) | `SiteConfig.View/Edit/Delete`           | A     |
+| `/api/v1/configurations/clients/{clientId}*` (`ConfigurationsController`) | `ClientConfig.View/Edit/Delete`      | R     |
 
 ### Admin Background Services
 
@@ -410,7 +413,8 @@ opera em cada escopo. NÃ£o Ã© uma regra: Ã© a configuraÃ§Ã£o de ativa�
 
 | SÃ­mbolo | Significado                                                                   |
 | ------- | ----------------------------------------------------------------------------- |
-| **G**   | `[RequirePermission(X, Y)]` â€” escopo Global                                   |
+| **G**   | `[RequirePermission(X, Y, ScopeSource.Global)]` â€” escopo Global               |
+| **A**   | `[RequirePermission(X, Y, ScopeSource.AccessList)]` â€” escopo por Access List (`IScopeContext` / `TenantScopePolicy`) |
 | **R**   | `[RequirePermission(X, Y, ScopeSource.FromRoute)]` â€” escopo via rota          |
 | **I**   | VerificaÃ§Ã£o inline com `IPermissionService` (escopo dinÃ¢mico por query param) |
 
@@ -418,8 +422,8 @@ opera em cada escopo. NÃ£o Ã© uma regra: Ã© a configuraÃ§Ã£o de ativa�
 
 ## Notas
 
-1. **PermissÃµes vazias**: `KnowledgeBase`, `RemoteDebug` nÃ£o tÃªm controllers implementados ainda.
-2. **Sites**: NÃ£o hÃ¡ `SitesController` dedicado â€” sites sÃ£o gerenciados via MeshCentral embed.
+1. **PermissÃµes e controllers**: `KnowledgeBase` e `Sites` possuem controllers dedicados (`KnowledgeController` e `SitesController`); `RemoteDebug` continua integrado aos fluxos de agente/sessÃ£o remota (`RemoteSessionsController` e `AgentsController`).
+2. **Sites & Escopo explÃ­cito**: Sites sÃ£o gerenciados nativamente por `SitesController` (`/api/v1/clients/{clientId}/sites` e `/api/v1/sites`); todos os 571 atributos `[RequirePermission]` declaram `ScopeSource` explicitamente (`171 Global`, `369 AccessList`, `31 FromRoute`).
 3. **AppStore scoped**: Endpoints de approvals/diffs usam escopo dinÃ¢mico resolvido por `AppApprovalScopeType` (Global/Client/Site/Agent).
 4. **Automation scoped**: Scripts e tasks resolvem escopo por `clientId` ou `scopeType/scopeId`.
 

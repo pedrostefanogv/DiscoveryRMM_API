@@ -16,6 +16,7 @@ public class AgentTokenAuthService : IAgentAuthService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const int MaxTokenCacheTtlSeconds = 600;
+    internal static readonly TimeSpan LastUsedUpdateCooldown = TimeSpan.FromMinutes(5);
 
     private readonly IAgentTokenRepository _tokenRepo;
     private readonly IAgentRepository _agentRepo;
@@ -72,6 +73,9 @@ public class AgentTokenAuthService : IAgentAuthService
     }
 
     public async Task<AgentToken?> ValidateTokenAsync(string rawToken)
+        => (await ValidateTokenWithStatusAsync(rawToken))?.Token;
+
+    public async Task<AgentTokenValidationResult?> ValidateTokenWithStatusAsync(string rawToken)
     {
         var hash = HashToken(rawToken);
         var cacheKey = GetTokenCacheKey(hash);
@@ -106,10 +110,15 @@ public class AgentTokenAuthService : IAgentAuthService
             return null;
         }
 
-        await _tokenRepo.UpdateLastUsedAsync(token.Id);
-        token.LastUsedAt = DateTime.UtcNow;
-        await CacheTokenAsync(token);
-        return token;
+        var now = DateTime.UtcNow;
+        if (token.LastUsedAt is null || now - token.LastUsedAt.Value >= LastUsedUpdateCooldown)
+        {
+            await _tokenRepo.UpdateLastUsedAsync(token.Id);
+            token.LastUsedAt = now;
+            await CacheTokenAsync(token);
+        }
+
+        return new AgentTokenValidationResult(token, IsAgentTrashed: agent.DeletedAt is not null);
     }
 
     public async Task RevokeTokenAsync(Guid tokenId)

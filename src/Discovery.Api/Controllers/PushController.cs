@@ -21,14 +21,14 @@ public class PushController(IMediator mediator, IWebPushSender webPushSender) : 
 
     /// <summary>Estado do Web Push e inscricoes do usuario (a chave publica VAPID vai aqui).</summary>
     [HttpGet]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetStatus()
         => (await mediator.Send(new GetPushStatusQuery(CurrentUserId), HttpContext.RequestAborted))
             .ToActionResult();
 
     /// <summary>Registra (ou reaponta) a inscricao deste navegador para o usuario autenticado.</summary>
     [HttpPost("subscriptions")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> Register([FromBody] RegisterPushSubscriptionRequest request)
     {
         var headerUserAgent = Request.Headers.UserAgent.ToString();
@@ -44,7 +44,7 @@ public class PushController(IMediator mediator, IWebPushSender webPushSender) : 
 
     /// <summary>Remove a inscricao deste navegador (idempotente).</summary>
     [HttpDelete("subscriptions")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> Unregister([FromQuery] string? endpoint)
         => (await mediator.Send(
                 new DeletePushSubscriptionCommand(CurrentUserId, endpoint ?? string.Empty),
@@ -53,7 +53,7 @@ public class PushController(IMediator mediator, IWebPushSender webPushSender) : 
 
     /// <summary>Envia um push de teste para as inscricoes do usuario autenticado.</summary>
     [HttpPost("test")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> SendTest()
     {
         if (!webPushSender.IsConfigured)

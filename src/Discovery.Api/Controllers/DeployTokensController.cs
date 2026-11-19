@@ -33,7 +33,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpGet]
-    [RequirePermission(ResourceType.Deployment, ActionType.View)]
+    [RequirePermission(ResourceType.Deployment, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll([FromQuery] Guid clientId, [FromQuery] Guid siteId)
     {
         var result = await _mediator.Send(new ListDeployTokensQuery(clientId, siteId));
@@ -41,7 +41,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Deployment, ActionType.Create)]
+    [RequirePermission(ResourceType.Deployment, ActionType.Create, ScopeSource.Global)]
     public async Task<IActionResult> Create([FromBody] CreateDeployTokenCommand cmd)
     {
         var result = await _mediator.Send(cmd);
@@ -56,7 +56,7 @@ public class DeployTokensController : ControllerBase
     /// installerType: "online" = bootstrap mínimo (.exe), "offline" = ZIP portátil com binário + config.
     /// </summary>
     [HttpPost("create-and-download")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Create)]
+    [RequirePermission(ResourceType.Deployment, ActionType.Create, ScopeSource.Global)]
     [RequestSizeLimit(500_000_000)]
     public async Task<IActionResult> CreateAndDownload([FromBody] CreateDeployTokenAndDownloadCommand cmd, CancellationToken ct)
     {
@@ -69,7 +69,7 @@ public class DeployTokensController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Deployment, ActionType.Delete)]
+    [RequirePermission(ResourceType.Deployment, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> Revoke(Guid id)
     {
         var result = await _mediator.Send(new RevokeDeployTokenCommand(id));

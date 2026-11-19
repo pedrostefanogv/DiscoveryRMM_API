@@ -3,6 +3,7 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.SlaCalendars.Commands;
 using Discovery.Core.Enums.Identity;
 using Discovery.Core.Cqrs.SlaCalendars.Queries;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,42 +15,95 @@ namespace Discovery.Api.Controllers;
 [Route("api/v{version:apiVersion}/sla-calendars")]
 public class SlaCalendarsController(IMediator mediator) : ControllerBase
 {
-    [HttpGet]
-    [RequirePermission(ResourceType.Sla, ActionType.View)]
-    public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null)
+    private async Task<(IActionResult? denied, SlaCalendarDetailDto? dto)> CheckCalendarAccessAsync(
+        Guid id,
+        ActionType action,
+        IScopeContext scopeContext)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Sla, action);
+        var result = await mediator.Send(new GetSlaCalendarByIdQuery(id));
+        if (result.IsFailure)
+            return (NotFoundOrBadRequest(result.Errors), null);
+
+        var dto = result.Value!;
+        if (!access.HasGlobalAccess)
+        {
+            if (dto.ClientId is null)
+            {
+                if (action != ActionType.View)
+                    return (StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas administradores globais podem alterar calendários globais." }), null);
+            }
+            else if (!access.AllowedClientIds.Contains(dto.ClientId.Value))
+            {
+                return (StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este calendário de SLA." }), null);
+            }
+        }
+
+        return (null, dto);
+    }
+
+    [HttpGet]
+    [RequirePermission(ResourceType.Sla, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetAll(
+        [FromServices] IScopeContext scopeContext,
+        [FromQuery] Guid? clientId = null)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Sla, ActionType.View);
+        if (!access.HasGlobalAccess && clientId.HasValue && !access.AllowedClientIds.Contains(clientId.Value))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este cliente." });
+
         var result = await mediator.Send(new ListSlaCalendarsQuery(clientId));
-        return result.ToActionResult();
+        if (result.IsFailure || access.HasGlobalAccess)
+            return result.ToActionResult();
+
+        return Ok(result.Value!.Where(c => c.ClientId is null || access.AllowedClientIds.Contains(c.ClientId.Value)).ToList());
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.Sla, ActionType.View)]
-    public async Task<IActionResult> GetById(Guid id)
+    [RequirePermission(ResourceType.Sla, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetById(Guid id, [FromServices] IScopeContext scopeContext)
     {
-        var result = await mediator.Send(new GetSlaCalendarByIdQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: NotFoundOrBadRequest);
+        var (denied, dto) = await CheckCalendarAccessAsync(id, ActionType.View, scopeContext);
+        return denied ?? Ok(dto);
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
-    public async Task<IActionResult> Create([FromBody] CreateSlaCalendarCommand cmd)
+    [RequirePermission(ResourceType.Sla, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> Create(
+        [FromBody] CreateSlaCalendarCommand cmd,
+        [FromServices] IScopeContext scopeContext)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Sla, ActionType.Edit);
+        if (!access.HasGlobalAccess && (!cmd.ClientId.HasValue || !access.AllowedClientIds.Contains(cmd.ClientId.Value)))
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso para criar calendário de SLA neste escopo." });
+
         var result = await mediator.Send(cmd);
         return result.Match<IActionResult>(success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto), failure: BadRequestWithFields);
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
-    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSlaCalendarCommand cmd)
+    [RequirePermission(ResourceType.Sla, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> Update(
+        Guid id,
+        [FromBody] UpdateSlaCalendarCommand cmd,
+        [FromServices] IScopeContext scopeContext)
     {
+        var (denied, _) = await CheckCalendarAccessAsync(id, ActionType.Edit, scopeContext);
+        if (denied is not null)
+            return denied;
+
         var result = await mediator.Send(cmd with { Id = id });
         return result.Match<IActionResult>(success: Ok, failure: NotFoundOrBadRequest);
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
-    public async Task<IActionResult> Delete(Guid id)
+    [RequirePermission(ResourceType.Sla, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> Delete(Guid id, [FromServices] IScopeContext scopeContext)
     {
+        var (denied, _) = await CheckCalendarAccessAsync(id, ActionType.Edit, scopeContext);
+        if (denied is not null)
+            return denied;
+
         var result = await mediator.Send(new DeleteSlaCalendarCommand(id));
         return result.Match<IActionResult>(success: _ => NoContent(), failure: ConflictAwareFailure);
     }
@@ -57,19 +111,24 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     // ── Feriados ──────────────────────────────────────────────────────────
 
     [HttpGet("{id:guid}/holidays")]
-    [RequirePermission(ResourceType.Sla, ActionType.View)]
-    public async Task<IActionResult> GetHolidays(Guid id)
+    [RequirePermission(ResourceType.Sla, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetHolidays(Guid id, [FromServices] IScopeContext scopeContext)
     {
-        var result = await mediator.Send(new GetSlaCalendarByIdQuery(id));
-        return result.Match<IActionResult>(
-            success: dto => Ok(dto.Holidays),
-            failure: NotFoundOrBadRequest);
+        var (denied, dto) = await CheckCalendarAccessAsync(id, ActionType.View, scopeContext);
+        return denied ?? Ok(dto!.Holidays);
     }
 
     [HttpPost("{id:guid}/holidays")]
-    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
-    public async Task<IActionResult> AddHoliday(Guid id, [FromBody] AddSlaCalendarHolidayCommand cmd)
+    [RequirePermission(ResourceType.Sla, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> AddHoliday(
+        Guid id,
+        [FromBody] AddSlaCalendarHolidayCommand cmd,
+        [FromServices] IScopeContext scopeContext)
     {
+        var (denied, _) = await CheckCalendarAccessAsync(id, ActionType.Edit, scopeContext);
+        if (denied is not null)
+            return denied;
+
         var result = await mediator.Send(cmd with { CalendarId = id });
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetHolidays), new { id }, dto),
@@ -77,17 +136,32 @@ public class SlaCalendarsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}/holidays/{holidayId:guid}")]
-    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
-    public async Task<IActionResult> UpdateHoliday(Guid id, Guid holidayId, [FromBody] UpdateSlaCalendarHolidayCommand cmd)
+    [RequirePermission(ResourceType.Sla, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> UpdateHoliday(
+        Guid id,
+        Guid holidayId,
+        [FromBody] UpdateSlaCalendarHolidayCommand cmd,
+        [FromServices] IScopeContext scopeContext)
     {
+        var (denied, _) = await CheckCalendarAccessAsync(id, ActionType.Edit, scopeContext);
+        if (denied is not null)
+            return denied;
+
         var result = await mediator.Send(cmd with { CalendarId = id, HolidayId = holidayId });
         return result.Match<IActionResult>(success: Ok, failure: ConflictAwareFailure);
     }
 
     [HttpDelete("{id:guid}/holidays/{holidayId:guid}")]
-    [RequirePermission(ResourceType.Sla, ActionType.Edit)]
-    public async Task<IActionResult> DeleteHoliday(Guid id, Guid holidayId)
+    [RequirePermission(ResourceType.Sla, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteHoliday(
+        Guid id,
+        Guid holidayId,
+        [FromServices] IScopeContext scopeContext)
     {
+        var (denied, _) = await CheckCalendarAccessAsync(id, ActionType.Edit, scopeContext);
+        if (denied is not null)
+            return denied;
+
         var result = await mediator.Send(new DeleteSlaCalendarHolidayCommand(id, holidayId));
         return result.Match<IActionResult>(success: _ => NoContent(), failure: NotFoundOrBadRequest);
     }

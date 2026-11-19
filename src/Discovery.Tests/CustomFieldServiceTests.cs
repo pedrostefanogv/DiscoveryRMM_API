@@ -857,7 +857,7 @@ public class CustomFieldServiceTests
             });
         await fixture.Db.SaveChangesAsync();
 
-        var handler = new GetAgentCustomFieldSchemaQueryHandler(new TestAgentRepository(fixture.Db), fixture.Service);
+        var handler = new GetAgentCustomFieldSchemaQueryHandler(new TestAgentRepository(fixture.Db), new F02SiteRepositoryStub(), F02ScopeContextStub.Global(), fixture.Service);
         var result = await handler.Handle(new GetAgentCustomFieldSchemaQuery(fixture.Agent.Id), CancellationToken.None);
 
         Assert.That(result.IsSuccess, Is.True, string.Join("; ", result.Errors.Select(e => e.Message)));

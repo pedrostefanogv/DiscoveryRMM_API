@@ -2,7 +2,10 @@ using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Agents.Automation.Commands;
 using Discovery.Core.Cqrs.Agents.Automation.Queries;
 using Discovery.Core.DTOs;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 
 namespace Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
@@ -11,7 +14,9 @@ public sealed class GetAutomationExecutionsQueryHandler(
     IAgentRepository agentRepo,
     IAutomationExecutionReportRepository reportRepo,
     IAutomationTaskRepository taskRepo,
-    IAutomationScriptRepository scriptRepo
+    IAutomationScriptRepository scriptRepo,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAutomationExecutionsQuery, Result<IReadOnlyList<AutomationExecutionDto>>>
 {
     public async Task<Result<IReadOnlyList<AutomationExecutionDto>>> Handle(GetAutomationExecutionsQuery q, CancellationToken ct)
@@ -19,6 +24,11 @@ public sealed class GetAutomationExecutionsQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<IReadOnlyList<AutomationExecutionDto>>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<IReadOnlyList<AutomationExecutionDto>>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var items = await reportRepo.GetByAgentIdAsync(
             q.AgentId, q.Limit, q.Status, q.SourceType, q.TaskId, q.ScriptId, q.CorrelationId);
@@ -57,7 +67,9 @@ public sealed class GetAutomationExecutionsQueryHandler(
 
 public sealed class GetAgentAutomationPoliciesQueryHandler(
     IAgentRepository agentRepo,
-    IAutomationTaskService taskService
+    IAutomationTaskService taskService,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
 ) : IRequestHandler<GetAgentAutomationPoliciesQuery, Result<AgentAutomationPolicyPreviewDto>>
 {
     public async Task<Result<AgentAutomationPolicyPreviewDto>> Handle(GetAgentAutomationPoliciesQuery q, CancellationToken ct)
@@ -65,6 +77,11 @@ public sealed class GetAgentAutomationPoliciesQueryHandler(
         var agent = await agentRepo.GetByIdAsync(q.AgentId);
         if (agent is null)
             return Result<AgentAutomationPolicyPreviewDto>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, ActionType.View);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<AgentAutomationPolicyPreviewDto>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
 
         var preview = await taskService.GetApplicablePoliciesForAgentAsync(q.AgentId, ct);
         return Result<AgentAutomationPolicyPreviewDto>.Success(preview);

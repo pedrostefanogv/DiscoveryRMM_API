@@ -15,7 +15,7 @@ public class NotificationsController(IMediator mediator) : ControllerBase
 {
     /// <summary>List notifications with optional filters.</summary>
     [HttpGet]
-    [RequirePermission(ResourceType.Dashboard, ActionType.View)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? recipientUserId = null,
         [FromQuery] Guid? recipientAgentId = null,
@@ -30,7 +30,7 @@ public class NotificationsController(IMediator mediator) : ControllerBase
 
     /// <summary>Mark a single notification as read.</summary>
     [HttpPut("{id:guid}/read")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.Edit)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> MarkAsRead(
         Guid id,
         [FromQuery] Guid? userId = null,
@@ -46,7 +46,7 @@ public class NotificationsController(IMediator mediator) : ControllerBase
 
     /// <summary>Delete a single notification by ID.</summary>
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.Dashboard, ActionType.Delete)]
+    [RequirePermission(ResourceType.Dashboard, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> Delete(
         Guid id,
         [FromQuery] Guid? userId = null,

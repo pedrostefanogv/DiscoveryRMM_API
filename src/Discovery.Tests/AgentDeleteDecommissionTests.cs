@@ -47,7 +47,7 @@ public class AgentDeleteDecommissionTests
     }
 
     private static RequestAgentDecommissionCommandHandler NewHandler(DiscoveryDbContext db, FakeDispatcher dispatcher)
-        => new(db, dispatcher, NullLogger<RequestAgentDecommissionCommandHandler>.Instance);
+        => new(db, dispatcher, new F02SiteRepositoryStub(), F02ScopeContextStub.Global(), NullLogger<RequestAgentDecommissionCommandHandler>.Instance);
 
     [Test]
     public async Task RequestDecommission_OnlineTrashedAgent_DispatchesDecommission()

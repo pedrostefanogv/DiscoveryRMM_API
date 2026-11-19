@@ -330,6 +330,26 @@ public static class E2ESeedHelper
             var permissions = await EnsureAllPermissionsAsync(db);
             var (adminRole, techRole) = await EnsureStandardRolesAsync(db, permissions);
 
+            // Alinha o modo de consentimento do servidor com Off por padrão no harness E2E
+            // (a migração M233 usa Off=0; o C# Entity default Prompt=2 bloquearia sessões
+            // screen/rdp/proxy/all em PendingConsent antes dos testes de fluxo ativo).
+            var serverConfig = await db.ServerConfigurations.FirstOrDefaultAsync();
+            if (serverConfig is null)
+            {
+                db.ServerConfigurations.Add(new ServerConfiguration
+                {
+                    Id = Guid.NewGuid(),
+                    RemoteConsentMode = RemoteConsentMode.Off,
+                    UpdatedAt = now
+                });
+            }
+            else
+            {
+                serverConfig.RemoteConsentMode = RemoteConsentMode.Off;
+            }
+            await db.SaveChangesAsync();
+            await sp.GetRequiredService<Discovery.Core.Interfaces.IRedisService>().DeleteAsync("config:server:singleton");
+
             var clientA = new Client { Id = Guid.NewGuid(), Name = "Tenant Alpha", IsActive = true, CreatedAt = now, UpdatedAt = now };
             var clientB = new Client { Id = Guid.NewGuid(), Name = "Tenant Beta", IsActive = true, CreatedAt = now, UpdatedAt = now };
             db.Clients.AddRange(clientA, clientB);

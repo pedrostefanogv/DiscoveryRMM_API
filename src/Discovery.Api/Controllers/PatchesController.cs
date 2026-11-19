@@ -3,9 +3,13 @@ using Discovery.Api.Filters;
 using Discovery.Core.Cqrs.Patches;
 using Discovery.Core.Enums;
 using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
+using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Infrastructure.Data;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Api.Controllers;
 
@@ -18,7 +22,7 @@ namespace Discovery.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v{version:apiVersion}/patches")]
-[RequirePermission(ResourceType.Patches, ActionType.View)]
+[RequirePermission(ResourceType.Patches, ActionType.View, ScopeSource.AccessList)]
 public sealed class PatchesController(
     IMediator mediator,
     IScopeContext scopeContext) : ControllerBase
@@ -160,14 +164,33 @@ public sealed class PatchesController(
 
     [HttpGet("approvals")]
     public async Task<IActionResult> GetApprovals(
+        [FromServices] ISiteRepository siteRepo,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] DiscoveryDbContext db,
         [FromQuery] PatchApprovalScopeType? scopeType = null,
         [FromQuery] Guid? scopeId = null,
         [FromQuery] string? search = null,
         [FromQuery] int limit = 200,
         CancellationToken ct = default)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.View);
+        if (!access.HasGlobalAccess && scopeType.HasValue && scopeType.Value != PatchApprovalScopeType.Global)
+        {
+            if (await EnsurePatchScopeAccessAsync(scopeType.Value, scopeId, access, siteRepo, agentRepo, allowGlobalRead: true) is { } denied)
+                return denied;
+        }
+
         var result = await mediator.Send(new ListPatchApprovalsQuery(scopeType, scopeId, search, limit), ct);
-        return result.ToActionResult();
+        if (result.IsFailure || access.HasGlobalAccess)
+            return result.ToActionResult();
+
+        var filtered = await FilterByPatchScopeAsync(
+            result.Value!,
+            x => (x.ScopeType, x.ScopeId),
+            access,
+            db,
+            ct);
+        return Ok(filtered);
     }
 
     [HttpGet("approvals/audit")]
@@ -175,16 +198,26 @@ public sealed class PatchesController(
         [FromQuery] int limit = 200,
         CancellationToken ct = default)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.View);
+        if (!access.HasGlobalAccess)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Auditoria global de aprovações requer acesso global." });
+
         var result = await mediator.Send(new ListPatchApprovalAuditQuery(limit), ct);
         return result.ToActionResult();
     }
 
     [HttpPost("approvals")]
-    [RequirePermission(ResourceType.Patches, ActionType.Edit)]
+    [RequirePermission(ResourceType.Patches, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> CreateApproval(
         [FromBody] CreateApprovalRequest request,
+        [FromServices] ISiteRepository siteRepo,
+        [FromServices] IAgentRepository agentRepo,
         CancellationToken ct = default)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.Edit);
+        if (await EnsurePatchScopeAccessAsync(request.ScopeType, request.ScopeId, access, siteRepo, agentRepo, allowGlobalRead: false) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new CreatePatchApprovalCommand(
             request.ScopeType,
             request.ScopeId,
@@ -205,9 +238,25 @@ public sealed class PatchesController(
     }
 
     [HttpDelete("approvals/{ruleId:guid}")]
-    [RequirePermission(ResourceType.Patches, ActionType.Delete)]
-    public async Task<IActionResult> DeleteApproval(Guid ruleId, CancellationToken ct = default)
+    [RequirePermission(ResourceType.Patches, ActionType.Delete, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteApproval(
+        Guid ruleId,
+        [FromServices] DiscoveryDbContext db,
+        [FromServices] ISiteRepository siteRepo,
+        [FromServices] IAgentRepository agentRepo,
+        CancellationToken ct = default)
     {
+        var rule = await db.PatchApprovals.AsNoTracking()
+            .Where(r => r.Id == ruleId)
+            .Select(r => new { r.ScopeType, r.ScopeId })
+            .FirstOrDefaultAsync(ct);
+        if (rule is null)
+            return NotFound(new { error = "Regra de aprovação não encontrada." });
+
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.Delete);
+        if (await EnsurePatchScopeAccessAsync(rule.ScopeType, rule.ScopeId, access, siteRepo, agentRepo, allowGlobalRead: false) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new DeletePatchApprovalCommand(
             ruleId, CurrentUserId(), RemoteIp()), ct);
         return result.ToActionResult();
@@ -217,29 +266,53 @@ public sealed class PatchesController(
 
     [HttpGet("policy")]
     public async Task<IActionResult> GetPolicy(
+        [FromServices] ISiteRepository siteRepo,
+        [FromServices] IAgentRepository agentRepo,
         [FromQuery] PatchApprovalScopeType scopeType = PatchApprovalScopeType.Global,
         [FromQuery] Guid? scopeId = null,
         CancellationToken ct = default)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.View);
+        if (await EnsurePatchScopeAccessAsync(scopeType, scopeId, access, siteRepo, agentRepo, allowGlobalRead: true) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new GetPatchPolicyQuery(scopeType, scopeId), ct);
         return result.ToActionResult();
     }
 
     [HttpGet("policies")]
-    public async Task<IActionResult> GetPolicies(CancellationToken ct = default)
+    public async Task<IActionResult> GetPolicies(
+        [FromServices] DiscoveryDbContext db,
+        CancellationToken ct = default)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.View);
         var result = await mediator.Send(new ListPatchPoliciesQuery(), ct);
-        return result.ToActionResult();
+        if (result.IsFailure || access.HasGlobalAccess)
+            return result.ToActionResult();
+
+        var filtered = await FilterByPatchScopeAsync(
+            result.Value!,
+            x => (x.ScopeType, x.ScopeId),
+            access,
+            db,
+            ct);
+        return Ok(filtered);
     }
 
     [HttpPut("policy")]
-    [RequirePermission(ResourceType.Patches, ActionType.Edit)]
+    [RequirePermission(ResourceType.Patches, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpdatePolicy(
         [FromBody] UpdatePolicyRequest request,
+        [FromServices] ISiteRepository siteRepo,
+        [FromServices] IAgentRepository agentRepo,
         [FromQuery] PatchApprovalScopeType scopeType = PatchApprovalScopeType.Global,
         [FromQuery] Guid? scopeId = null,
         CancellationToken ct = default)
     {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.Edit);
+        if (await EnsurePatchScopeAccessAsync(scopeType, scopeId, access, siteRepo, agentRepo, allowGlobalRead: false) is { } denied)
+            return denied;
+
         var result = await mediator.Send(new UpdatePatchPolicyCommand(
             scopeType,
             scopeId,
@@ -270,7 +343,7 @@ public sealed class PatchesController(
     // ── Ações em lote ──────────────────────────────────────────────────────
 
     [HttpPost("scan")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> Scan([FromBody] ScanScopeRequest? request = null, CancellationToken ct = default)
     {
         var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.Execute);
@@ -286,7 +359,7 @@ public sealed class PatchesController(
     }
 
     [HttpPost("install")]
-    [RequirePermission(ResourceType.Patches, ActionType.Execute)]
+    [RequirePermission(ResourceType.Patches, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> Install([FromBody] InstallScopeRequest request, CancellationToken ct = default)
     {
         var access = await scopeContext.GetAccessAsync(ResourceType.Patches, ActionType.Execute);
@@ -305,6 +378,102 @@ public sealed class PatchesController(
             request.OverrideWindow), ct);
 
         return AcceptedOrError(result);
+    }
+
+    private async Task<IActionResult?> EnsurePatchScopeAccessAsync(
+        PatchApprovalScopeType scopeType,
+        Guid? scopeId,
+        UserScopeAccess access,
+        ISiteRepository siteRepo,
+        IAgentRepository agentRepo,
+        bool allowGlobalRead)
+    {
+        if (access.HasGlobalAccess)
+            return null;
+
+        switch (scopeType)
+        {
+            case PatchApprovalScopeType.Global:
+                return allowGlobalRead
+                    ? null
+                    : StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas administradores globais podem alterar o escopo global." });
+
+            case PatchApprovalScopeType.Client:
+                return scopeId.HasValue && access.AllowedClientIds.Contains(scopeId.Value)
+                    ? null
+                    : StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este cliente." });
+
+            case PatchApprovalScopeType.Site:
+                if (!scopeId.HasValue)
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este site." });
+                var site = await siteRepo.GetByIdAsync(scopeId.Value);
+                if (site is null)
+                    return NotFound(new { error = "Site not found." });
+                return TenantScopePolicy.Allows(access, site.ClientId, scopeId.Value)
+                    ? null
+                    : StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este site." });
+
+            case PatchApprovalScopeType.Agent:
+                if (!scopeId.HasValue)
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este agente." });
+                var agent = await agentRepo.GetByIdAsync(scopeId.Value);
+                if (agent is null)
+                    return NotFound(new { error = "Agent not found." });
+                var agentSite = await siteRepo.GetByIdAsync(agent.SiteId);
+                return TenantScopePolicy.Allows(access, agentSite?.ClientId ?? Guid.Empty, agent.SiteId)
+                    ? null
+                    : StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a este agente." });
+
+            default:
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Escopo não autorizado." });
+        }
+    }
+
+    private static async Task<IReadOnlyList<T>> FilterByPatchScopeAsync<T>(
+        IReadOnlyList<T> items,
+        Func<T, (PatchApprovalScopeType scopeType, Guid? scopeId)> selector,
+        UserScopeAccess access,
+        DiscoveryDbContext db,
+        CancellationToken ct)
+    {
+        var siteIds = new HashSet<Guid>();
+        var agentIds = new HashSet<Guid>();
+        foreach (var item in items)
+        {
+            var (st, sid) = selector(item);
+            if (!sid.HasValue) continue;
+            if (st == PatchApprovalScopeType.Site) siteIds.Add(sid.Value);
+            else if (st == PatchApprovalScopeType.Agent) agentIds.Add(sid.Value);
+        }
+
+        var agentSiteMap = agentIds.Count == 0
+            ? new Dictionary<Guid, Guid>()
+            : await db.Agents.AsNoTracking()
+                .Where(a => agentIds.Contains(a.Id))
+                .ToDictionaryAsync(a => a.Id, a => a.SiteId, ct);
+
+        foreach (var sId in agentSiteMap.Values)
+            siteIds.Add(sId);
+
+        var siteClientMap = siteIds.Count == 0
+            ? new Dictionary<Guid, Guid>()
+            : await db.Sites.AsNoTracking()
+                .Where(s => siteIds.Contains(s.Id))
+                .ToDictionaryAsync(s => s.Id, s => s.ClientId, ct);
+
+        return items.Where(item =>
+        {
+            var (st, sid) = selector(item);
+            return st switch
+            {
+                PatchApprovalScopeType.Global => true,
+                PatchApprovalScopeType.Client => sid.HasValue && access.AllowedClientIds.Contains(sid.Value),
+                PatchApprovalScopeType.Site => sid.HasValue && TenantScopePolicy.Allows(access, siteClientMap.GetValueOrDefault(sid.Value), sid.Value),
+                PatchApprovalScopeType.Agent => sid.HasValue && agentSiteMap.TryGetValue(sid.Value, out var aSiteId)
+                    && TenantScopePolicy.Allows(access, siteClientMap.GetValueOrDefault(aSiteId), aSiteId),
+                _ => false
+            };
+        }).ToList();
     }
 
     private IActionResult AcceptedOrError(Discovery.Core.Cqrs.Result<PatchDispatchDto> result)

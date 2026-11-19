@@ -15,7 +15,7 @@ namespace Discovery.Api.Controllers;
 public class CustomFieldsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     /// <summary>
     /// Lista definições. Informando taskId ou scriptId devolve somente os campos
     /// vinculados àquela execução (visão reversa usada na página de tarefas/scripts).
@@ -31,7 +31,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetCustomFieldByIdQuery(id));
@@ -39,7 +39,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("values/{scopeType}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.View)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetValues(
         CustomFieldScopeType scopeType,
         [FromQuery] Guid? entityId = null,
@@ -52,7 +52,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPost]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Create)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Create, ScopeSource.Global)]
     public async Task<IActionResult> Create([FromBody] CreateCustomFieldCommand cmd)
     {
         var result = await mediator.Send(cmd);
@@ -60,7 +60,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCustomFieldCommand cmd)
     {
         var result = await mediator.Send(cmd with { Id = id });
@@ -68,7 +68,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("values/{definitionId:guid}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> UpsertValue(Guid definitionId, [FromBody] UpsertCustomFieldValueCommand cmd)
     {
         var result = await mediator.Send(cmd with { DefinitionId = definitionId });
@@ -76,7 +76,7 @@ public class CustomFieldsController(IMediator mediator) : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
-    [RequirePermission(ResourceType.ServerConfig, ActionType.Delete)]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Delete, ScopeSource.Global)]
     public async Task<IActionResult> Deactivate(Guid id)
     {
         var result = await mediator.Send(new DeactivateCustomFieldCommand(id));
