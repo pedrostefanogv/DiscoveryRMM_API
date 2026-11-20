@@ -428,6 +428,63 @@ public class NatsAgentMessagingScopeAndSubjectTests
     }
 
     [Test]
+    public async Task SupportChat_EnvelopeDeConversaAvulsaComIdentidadeVazia_EhIngerido()
+    {
+        // BUG REAL (2026-11-20 01:00, sessão b066d11d): o agent em Go publicava
+        // "ticketId":"" e "agentId":"" nas conversas AVULSAS. O System.Text.Json
+        // não converte "" para Guid?/Guid e lançava JsonException ANTES de
+        // qualquer validação — o envelope era descartado pelo catch do
+        // HandleSupportChatMessageAsync e a mensagem do usuário final nunca era
+        // persistida. O console do suporte ficava sem ela, embora o agent
+        // tivesse recebido PubAck do JetStream.
+        //
+        // O payload abaixo é o do log da API em produção, reproduzido cru.
+        var scopeFactory = new CountingScopeFactory(wasTransition: false, isTrashed: false);
+        var messaging = CreateMessaging(scopeFactory);
+
+        var realClient = Guid.NewGuid();
+        var realSite = Guid.NewGuid();
+        var realAgent = Guid.NewGuid();
+        var sessionId = Guid.Parse("b066d11d-84dc-401f-ba23-ba907fb5c5d4");
+
+        var subject = NatsSubjectBuilder.SupportChatAgentSubject(realClient, realSite, realAgent);
+        const string rawPayload = """
+        {"eventType":"Message","sessionId":"b066d11d-84dc-401f-ba23-ba907fb5c5d4","ticketId":"","agentId":"","authorKind":"enduser","body":"Teste do chat","clientMessageId":"0d1b6a5f-9d3a-4a2e-9d55-1c2f9a2f7b41"}
+        """;
+
+        await messaging.HandleSupportChatMessageAsync(subject, rawPayload, CancellationToken.None);
+
+        Assert.That(scopeFactory.RecordedChatEnvelopes, Has.Count.EqualTo(1),
+            "o envelope de conversa avulsa precisa chegar ao serviço de ingestão");
+        var recorded = scopeFactory.RecordedChatEnvelopes[0];
+        Assert.That(recorded.Envelope.SessionId, Is.EqualTo(sessionId));
+        Assert.That(recorded.Envelope.TicketId, Is.Null, "conversa avulsa não tem chamado");
+        Assert.That(recorded.Envelope.Body, Is.EqualTo("Teste do chat"));
+        Assert.That(recorded.AgentId, Is.EqualTo(realAgent), "o AgentId vem do SUBJECT, não do payload");
+        Assert.That(recorded.Envelope.AgentId, Is.EqualTo(realAgent));
+    }
+
+    [Test]
+    public async Task SupportChat_EnvelopeSemCamposDeIdentidade_EhIngerido()
+    {
+        // Formato NOVO do agent (omitempty): os campos de identidade não vêm.
+        var scopeFactory = new CountingScopeFactory(wasTransition: false, isTrashed: false);
+        var messaging = CreateMessaging(scopeFactory);
+
+        var realAgent = Guid.NewGuid();
+        var subject = NatsSubjectBuilder.SupportChatAgentSubject(Guid.NewGuid(), Guid.NewGuid(), realAgent);
+        const string rawPayload = """
+        {"eventType":"Message","sessionId":"b066d11d-84dc-401f-ba23-ba907fb5c5d4","authorKind":"enduser","body":"oi"}
+        """;
+
+        await messaging.HandleSupportChatMessageAsync(subject, rawPayload, CancellationToken.None);
+
+        Assert.That(scopeFactory.RecordedChatEnvelopes, Has.Count.EqualTo(1));
+        Assert.That(scopeFactory.RecordedChatEnvelopes[0].Envelope.TicketId, Is.Null);
+        Assert.That(scopeFactory.RecordedChatEnvelopes[0].AgentId, Is.EqualTo(realAgent));
+    }
+
+    [Test]
     public void DiRegistration_RegistersIAgentMessagingAsSingleton()
     {
         var services = new ServiceCollection();

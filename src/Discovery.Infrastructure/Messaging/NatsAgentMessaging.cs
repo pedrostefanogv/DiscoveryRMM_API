@@ -7,6 +7,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Serialization;
 using Discovery.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -40,7 +41,11 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter() }
+        // LenientGuidJsonConverter: aceita "" / "   " onde o contrato espera
+        // Guid/Guid? — o agent antigo publica "ticketId":"" e "agentId":"" nas
+        // conversas avulsas (sem chamado) e o envelope inteiro era descartado com
+        // JsonException ("Path: $.ticketId"). Ver o conversor para o detalhe.
+        Converters = { new JsonStringEnumConverter(), new LenientGuidJsonConverter() }
     };
     // Cache local de autorizacao de agent (TTL 30s) para reduzir DB/Redis hit por heartbeat.
     private readonly ConcurrentDictionary<Guid, (bool Authorized, DateTime ExpiresAt)> _authCache = new();
@@ -925,13 +930,23 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
                 subjectAgentId, envelope.AgentId, subject);
         }
 
+        // Normalização defensiva do contrato: campos de identidade vazios no
+        // payload não podem seguir adiante. O AgentId é SEMPRE o do subject
+        // (proteção contra spoofing) e o SessionId já foi validado acima.
         envelope.AgentId = subjectAgentId;
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var ingest = scope.ServiceProvider.GetService<ITicketChatIngestService>();
         if (ingest is null)
         {
-            _logger.LogWarning("NATS: ITicketChatIngestService indisponível; envelope de chat descartado (session={SessionId})", envelope.SessionId);
+            // LogError (e não Warning): sem o serviço de ingestão o chat de
+            // suporte perde TODAS as mensagens do usuário final em silêncio — o
+            // operador não vê nada no console. Um descarte aqui é um incidente,
+            // não um detalhe.
+            _logger.LogError(
+                "NATS: ITicketChatIngestService indisponível; envelope de chat DESCARTADO (session={SessionId}, eventType={EventType}, agent={AgentId}). " +
+                "As mensagens do usuário final não serão persistidas até o serviço ser registrado no DI.",
+                envelope.SessionId, envelope.EventType, subjectAgentId);
             return;
         }
 
