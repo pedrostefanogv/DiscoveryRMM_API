@@ -221,6 +221,86 @@ public class RemoteProxyPolicyTests
         Assert.That(policy.Entries, Is.Empty);
     }
 
+    // ── IsUnconfigured: distingue "não configurado" de "configurado vazio" ──
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    [TestCase("{}")]
+    [TestCase("null")]
+    [TestCase("{ }")]
+    public void IsUnconfigured_ReconheceDefaultDaMigration(string? json)
+    {
+        // A coluna é NOT NULL DEFAULT '{}', então este é o valor que o handler
+        // recebe quando nenhum escopo definiu política — e é o gatilho do
+        // fallback para o appsettings.
+        Assert.That(RemoteProxyPolicy.IsUnconfigured(json), Is.True);
+    }
+
+    [TestCase("""{"mode":"allowlist"}""")]
+    [TestCase("""{"entries":[]}""")]
+    [TestCase("""{"mode":"open"}""")]
+    [TestCase("""{"entries":[{"cidr":"10.0.0.0/8"}]}""")]
+    public void IsUnconfigured_ReconhecePoliticaExplicita(string json)
+    {
+        // Qualquer documento salvo pela UI tem ao menos "mode", então conta como
+        // configuração explícita — e o handler passa a usar o banco.
+        Assert.That(RemoteProxyPolicy.IsUnconfigured(json), Is.False);
+    }
+
+    [TestCase("{nao-e-json")]
+    [TestCase("[1,2,3]")]
+    [TestCase("42")]
+    public void IsUnconfigured_NaoTrataJsonCorrompidoComoNaoConfigurado(string json)
+    {
+        // Se um JSON corrompido fosse tratado como "não configurado", o handler
+        // cairia no appsettings e IGNORARIA a corrupção — em vez de bloquear
+        // tudo, que é o comportamento fail-closed correto.
+        Assert.That(RemoteProxyPolicy.IsUnconfigured(json), Is.False);
+    }
+
+    // ── Portas efetivas (restrição de sessão) ────────────────────────────
+
+    [Test]
+    public void EffectiveAllowedPorts_UnePortasDasEntradasEAsGlobais()
+    {
+        var policy = RemoteProxyPolicy.Parse("""
+            {
+              "entries":[
+                {"cidr":"192.168.10.0/24","ports":[8006,22]},
+                {"cidr":"10.0.0.0/8","ports":[443]}
+              ],
+              "allowedPorts":[8080]
+            }
+            """);
+
+        // O agent tem UM conjunto de portas por sessão, então a união é o que
+        // de fato restringe. Sem isto, declarar [8006] numa entrada liberaria
+        // TODAS as portas (o gate do agent é pulado quando o conjunto é vazio).
+        Assert.That(policy.EffectiveAllowedPorts, Is.EqualTo(new[] { 22, 443, 8006, 8080 }));
+    }
+
+    [Test]
+    public void EffectiveAllowedPorts_VazioQuandoNinguemDeclaraPorta()
+    {
+        var policy = RemoteProxyPolicy.Parse("""
+            {"entries":[{"cidr":"192.168.10.0/24"}]}
+            """);
+
+        // Vazio = todas as portas. É o default, e a UI precisa avisar disso.
+        Assert.That(policy.EffectiveAllowedPorts, Is.Empty);
+    }
+
+    [Test]
+    public void EffectiveAllowedPorts_DeduplicaEntreEntradas()
+    {
+        var policy = RemoteProxyPolicy.Parse("""
+            {"entries":[{"cidr":"10.0.0.1","ports":[22]},{"cidr":"10.0.0.2","ports":[22,80]}]}
+            """);
+
+        Assert.That(policy.EffectiveAllowedPorts, Is.EqualTo(new[] { 22, 80 }));
+    }
+
     [Test]
     public void BlockAll_EhBloqueioTotal()
     {

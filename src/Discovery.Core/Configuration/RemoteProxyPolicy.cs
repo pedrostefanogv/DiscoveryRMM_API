@@ -67,6 +67,30 @@ public class RemoteProxyPolicy
                   .Select(e => e.Cidr.Trim())
                   .ToArray();
 
+    /// <summary>
+    /// Portas EFETIVAMENTE aplicadas pelo agent.
+    ///
+    /// O agent tem UM conjunto de portas por sessão (Allowlist.ports), não um por
+    /// prefixo: as portas por entrada são uma conveniência de cadastro, e a
+    /// união delas com <see cref="AllowedPorts"/> é o que de fato vale.
+    ///
+    /// Consequência que a UI precisa deixar explícita: declarar portas em uma
+    /// entrada RESTRINGE a sessão inteira àquelas portas — não é "8006 só neste
+    /// CIDR, resto livre". Sem isto, cadastrar [8006] numa entrada e deixar outra
+    /// sem portas liberaria todas as portas para ambas (o agent pula o gate
+    /// quando o conjunto está vazio).
+    ///
+    /// Vazio = todas as portas (comportamento do agent).
+    /// </summary>
+    [JsonIgnore]
+    public int[] EffectiveAllowedPorts
+        => Entries.SelectMany(e => e.Ports ?? [])
+                  .Concat(AllowedPorts ?? [])
+                  .Where(p => p is >= 1 and <= 65535)
+                  .Distinct()
+                  .Order()
+                  .ToArray();
+
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
@@ -76,6 +100,47 @@ public class RemoteProxyPolicy
 
     /// <summary>Política default: allowlist vazia = bloqueio total (igual ao appsettings de hoje).</summary>
     public static RemoteProxyPolicy BlockAll() => new();
+
+    /// <summary>
+    /// True quando o JSON é o DEFAULT da migration ("{}"), isto é: nenhum escopo
+    /// definiu política.
+    ///
+    /// Existe porque a coluna do servidor é NOT NULL DEFAULT '{}' e portanto
+    /// nunca volta null. Distinguir "não configurado" de "configurado como
+    /// vazio" é o que permite o handler cair no bootstrap do appsettings sem
+    /// bloquear instalações que nunca abriram a tela.
+    ///
+    /// A assimetria com ConfigurationResolver é INTENCIONAL: o resolver alimenta
+    /// o GET de configuração efetiva e reflete só o banco (sem política =
+    /// bloqueio total); o handler decide o que o agent recebe e preserva o
+    /// appsettings como bootstrap. Não "unifique" os dois sem revisar isso.
+    /// </summary>
+    public static bool IsUnconfigured(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return true;
+
+        var trimmed = json.Trim();
+        if (trimmed is "{}" or "null") return true;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+
+            // Um documento que NÃO é objeto (array, número, string) é dado
+            // corrompido, não "não configurado": tratá-lo como default faria o
+            // handler cair no appsettings e ignorar a corrupção em silêncio. Só
+            // o objeto vazio é o default da migration.
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
+
+            return !doc.RootElement.EnumerateObject().Any();
+        }
+        catch (JsonException)
+        {
+            // JSON corrompido NÃO é "não configurado": deixamos o Parse tratá-lo
+            // (fail-closed), sem cair no appsettings.
+            return false;
+        }
+    }
 
     /// <summary>
     /// Leitura TOLERANTE (usada no caminho de runtime/resolução). JSON

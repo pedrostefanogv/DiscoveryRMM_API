@@ -501,7 +501,19 @@ public sealed class StartRemoteSessionCommandHandler(
             var json = await configurationResolver.GetEffectiveValueAsync<string>(
                 "Site", nameof(ServerConfiguration.RemoteProxyPolicyJson), agent.SiteId);
 
-            if (!string.IsNullOrWhiteSpace(json))
+            // "Não configurado" NÃO é o mesmo que "configurado como vazio".
+            //
+            // A coluna do servidor é NOT NULL DEFAULT '{}', então ela NUNCA volta
+            // null: um "{}" chegando aqui significa que ninguém definiu política
+            // em nenhum escopo (o default da migration), e não que o operador
+            // escolheu bloquear explicitamente. Tratar os dois casos igual tornaria
+            // o fallback abaixo código morto e — pior — BLOQUEARIA toda instalação
+            // que hoje só tem allowlist no appsettings e nunca abriu a tela.
+            //
+            // Bloqueio intencional continua expresso por uma entrada ausente com
+            // modo allowlist, ou por uma política salva pela UI (que sempre
+            // serializa ao menos o campo "mode").
+            if (!RemoteProxyPolicy.IsUnconfigured(json))
                 return RemoteProxyPolicy.Parse(json);
         }
         catch (Exception ex)
@@ -512,7 +524,8 @@ public sealed class StartRemoteSessionCommandHandler(
             return RemoteProxyPolicy.BlockAll();
         }
 
-        // Fallback de bootstrap: appsettings (comportamento anterior à UI).
+        // Bootstrap: appsettings (comportamento anterior à UI). Só chega aqui
+        // quando nenhum escopo definiu política.
         return new RemoteProxyPolicy
         {
             Mode = RemoteProxyPolicy.ModeAllowlist,
@@ -541,7 +554,9 @@ public sealed class StartRemoteSessionCommandHandler(
         {
             enabled = !open,
             defaultAllowlist = open ? [] : policy.EffectiveAllowlist,
-            allowedPorts = open ? [] : policy.AllowedPorts,
+            // União das portas por entrada + globais: o agent só tem um conjunto
+            // de portas por sessão, então é isto que de fato restringe.
+            allowedPorts = open ? [] : policy.EffectiveAllowedPorts,
             maxResponseBytes = policy.MaxResponseBytes > 0
                 ? policy.MaxResponseBytes
                 : DefaultProxyMaxResponseBytes,

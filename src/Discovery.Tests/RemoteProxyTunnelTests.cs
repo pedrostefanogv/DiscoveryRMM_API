@@ -197,7 +197,8 @@ public sealed class RemoteProxyTunnelTests
             }
         });
 
-        // resolvedProxyPolicyJson: null => cai no appsettings.
+        // resolvedProxyPolicyJson: null => o stub devolve "{}" (default da coluna,
+        // como em produção) e o handler tem de cair no appsettings.
         var handler = CreateStartHandler(agent, site, dispatcher, options, RemoteConsentMode.Off);
 
         var result = await handler.Handle(new StartRemoteSessionCommand(
@@ -217,6 +218,83 @@ public sealed class RemoteProxyTunnelTests
             Assert.That(allowlist, Is.EqualTo(new[] { "10.1.0.0/16" }));
             Assert.That(proxy.GetProperty("maxResponseBytes").GetInt32(), Is.EqualTo(2_097_152));
         });
+    }
+
+    [Test]
+    public async Task StartSession_Proxy_DefaultDaColunaNaoBloqueiaQuemUsaAppsettings()
+    {
+        // REGRESSÃO: a coluna do servidor é NOT NULL DEFAULT '{}', então a
+        // resolução NUNCA devolve null. Se "{}" fosse tratado como política
+        // explícita, toda instalação que só tem allowlist no appsettings (e nunca
+        // abriu a tela) passaria a ser BLOQUEADA no rollout.
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-4", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        var options = Options.Create(new RemoteAccessOptions
+        {
+            Enabled = true,
+            Proxy = new RemoteAccessProxyOptions { DefaultAllowlist = ["172.16.0.0/12"] }
+        });
+
+        // "{}" explícito = default da migration = ninguém configurou.
+        var handler = CreateStartHandler(
+            agent, site, dispatcher, options, RemoteConsentMode.Off,
+            resolvedProxyPolicyJson: "{}");
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        var allowlist = doc.RootElement.GetProperty("proxy").GetProperty("defaultAllowlist")
+            .EnumerateArray().Select(e => e.GetString()).ToArray();
+
+        Assert.That(allowlist, Is.EqualTo(new[] { "172.16.0.0/12" }),
+            "o default '{}' do banco não pode anular a allowlist do appsettings");
+    }
+
+    [Test]
+    public async Task StartSession_Proxy_PortasPorEntradaViramRestricaoDaSessao()
+    {
+        // O agent tem UM conjunto de portas por sessão (não um por prefixo). As
+        // portas digitadas numa entrada precisam virar o conjunto efetivo, senão
+        // a UI promete restrição de porta e entrega todas as portas.
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-5", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        var handler = CreateStartHandler(
+            agent, site, dispatcher, Options.Create(new RemoteAccessOptions { Enabled = true }),
+            RemoteConsentMode.Off,
+            resolvedProxyPolicyJson: """
+                {"entries":[{"cidr":"192.168.10.0/24","ports":[8006]}]}
+                """);
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        var ports = doc.RootElement.GetProperty("proxy").GetProperty("allowedPorts")
+            .EnumerateArray().Select(e => e.GetInt32()).ToArray();
+
+        Assert.That(ports, Is.EqualTo(new[] { 8006 }),
+            "a porta da entrada tem de restringir a sessão; vazio liberaria TODAS as portas");
     }
 
     [TestCase(RemoteSessionKind.Proxy)]
@@ -606,10 +684,14 @@ public sealed class RemoteProxyTunnelTests
                 return null;
 
             var inner = requested[0];
+            // Espelha a PRODUÇÃO: a coluna do servidor é NOT NULL DEFAULT '{}',
+            // então a resolução de string nunca devolve null — devolve "{}"
+            // quando nenhum escopo definiu política. Um stub que devolvesse null
+            // aqui daria falsa confiança sobre o caminho de fallback.
             object? value = inner == typeof(bool)
                 ? true
                 : inner == typeof(string)
-                    ? resolvedProxyPolicyJson
+                    ? resolvedProxyPolicyJson ?? "{}"
                     : null;
             var fromResult = typeof(Task).GetMethod(nameof(Task.FromResult))!.MakeGenericMethod(inner);
             return fromResult.Invoke(null, [value]);

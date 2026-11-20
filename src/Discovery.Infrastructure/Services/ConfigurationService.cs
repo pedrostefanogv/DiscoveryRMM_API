@@ -119,6 +119,12 @@ public class ConfigurationService : IConfigurationService
             throw new ArgumentException(sensorsSettingsError);
         }
 
+        // Allowlist de proxy: um JSON inválido aqui seria lido em runtime pelo
+        // parser tolerante, que cai em bloqueio total — o operador salvaria a
+        // política, veria "sucesso" e o proxy continuaria mudo, sem pista do
+        // motivo. Recusa o salvamento, como já se faz com IA e sensores.
+        EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
+
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
         config.UpdatedBy = updatedBy;
@@ -193,6 +199,7 @@ public class ConfigurationService : IConfigurationService
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
         ProtectSensitiveData(config);
+        EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
         await ValidateOrThrowAsync(config, [nameof(ClientConfiguration.AgentHomeTab)]);
         await _clientRepo.UpdateAsync(config);
 
@@ -233,6 +240,8 @@ public class ConfigurationService : IConfigurationService
         }
 
         ProtectSensitiveData(config);
+
+        EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
@@ -325,6 +334,7 @@ public class ConfigurationService : IConfigurationService
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
         ProtectSensitiveData(config);
+        EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
         await ValidateOrThrowAsync(config, [nameof(SiteConfiguration.AgentHomeTab)]);
         await _siteRepo.UpdateAsync(config);
         _resolver.ClearCache();
@@ -375,6 +385,8 @@ public class ConfigurationService : IConfigurationService
         }
 
         ProtectSensitiveData(config);
+
+        EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
@@ -547,6 +559,22 @@ public class ConfigurationService : IConfigurationService
     /// servidor: client/site guardam um override com campos anuláveis e já passam por
     /// SanitizeAiOverrideJson.
     /// </summary>
+    /// <summary>
+    /// Recusa o salvamento de uma allowlist de proxy que não desserializa.
+    ///
+    /// Sem esta guarda o parser tolerante (RemoteProxyPolicy.Parse) cairia em
+    /// bloqueio total em runtime: o operador veria "salvo com sucesso" e o proxy
+    /// continuaria recusando todos os destinos, sem pista do motivo real.
+    /// Mesmo tratamento já dado a AIIntegrationSettingsJson e SensorsSettingsJson.
+    /// </summary>
+    private static void EnsureRemoteProxyPolicyJsonValid(string? json)
+    {
+        if (!RemoteProxyPolicy.TryParseStrict(json, out _, out var error))
+        {
+            throw new ArgumentException(error);
+        }
+    }
+
     private static void EnsureServerAiSettingsJsonDeserializable(ServerConfiguration config)
     {
         if (string.IsNullOrWhiteSpace(config.AIIntegrationSettingsJson))
