@@ -128,7 +128,10 @@ public sealed class RemoteProxyTunnelTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(proxy.GetProperty("enabled").GetBoolean(), Is.True);
+            // Contraparte do contrato: no modo allowlist a chave vai como true,
+            // e é isso que mantém o gate de CIDR/porta ativo no agent.
+            Assert.That(proxy.GetProperty("enabled").GetBoolean(), Is.True,
+                "allowlist => enabled=true (gate ativo no agent)");
             var allowlist = proxy.GetProperty("defaultAllowlist")
                 .EnumerateArray().Select(e => e.GetString()).ToArray();
             Assert.That(allowlist, Is.EqualTo(new[] { "192.168.10.0/24" }),
@@ -167,9 +170,15 @@ public sealed class RemoteProxyTunnelTests
 
         Assert.Multiple(() =>
         {
+            // CONTRATO entre API e agent: "open" é expresso por enabled=false.
+            // O agent PRECISA ler esta chave em ParseProxyPolicy e chamar
+            // Allowlist.SetEnabled — quando não lia, a UI mostrava "liberado
+            // geral" e o proxy continuava bloqueando tudo com "allowlist vazia".
             Assert.That(proxy.GetProperty("enabled").GetBoolean(), Is.False,
                 "open => enabled=false (o agent mantém as proteções SSRF incondicionais)");
             Assert.That(proxy.GetProperty("defaultAllowlist").EnumerateArray(), Is.Empty);
+            // Portas vazias: sem restrição de porta no modo aberto.
+            Assert.That(proxy.GetProperty("allowedPorts").EnumerateArray(), Is.Empty);
         });
     }
 
