@@ -164,6 +164,61 @@ public class AgentRemoteSessionsController(
         return NoContent();
     }
 
+    /// <summary>
+    /// Reporta uma tentativa de acesso do proxy a um DESTINO (permitida ou
+    /// negada pela allowlist). O tráfego do proxy NÃO passa pela API
+    /// (viewer → NATS → agent), então o destino só é auditável se o agent
+    /// contar. Best-effort por design: falhar aqui nunca pode derrubar a
+    /// navegação do operador — devolve 204 mesmo se o log não for gravado.
+    /// </summary>
+    [HttpPost("{sessionId:guid}/proxy-destination")]
+    public async Task<IActionResult> ReportProxyDestination(
+        Guid sessionId,
+        [FromBody] AgentProxyDestinationReport? request,
+        CancellationToken ct = default)
+    {
+        if (!TryGetAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent não autenticado." });
+
+        if (request is null || string.IsNullOrWhiteSpace(request.Host))
+            return BadRequest(new { error = "Host obrigatório." });
+
+        if (request.Port is < 1 or > 65535)
+            return BadRequest(new { error = "Porta fora da faixa 1-65535." });
+
+        var raw = await sessionManager.GetRawSessionAsync(sessionId, ct);
+        if (raw is null)
+            return NotFound(new { error = "Remote session not found." });
+        if (raw.AgentId != agentId)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Session does not belong to this agent." });
+
+        // Sessão já encerrada: o log perderia sentido (não há a quem atribuir o
+        // acesso), mas responder 204 evita retry inútil do agent.
+        if (!RemoteSessionStatus.IsOpen(raw.Status))
+            return NoContent();
+
+        try
+        {
+            await sessionManager.AuditProxyDestinationAsync(
+                sessionId,
+                request.Host,
+                request.Port,
+                request.Allowed,
+                request.Reason,
+                request.Mode,
+                raw.UserId.ToString(),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[RemoteProxyAudit] Falha ao auditar destino {Host}:{Port} da sessão {SessionId}",
+                request.Host, request.Port, sessionId);
+        }
+
+        return NoContent();
+    }
+
     private object BuildPayload(Discovery.Core.Entities.RemoteSession session) => new
     {
         sessionId = session.Id,
@@ -192,3 +247,16 @@ public record AgentRemoteConsentDecision(
     DateTime? DecidedAtUtc = null);
 
 public record AgentRemoteStopRequest(string? Reason = null);
+
+/// <summary>
+/// Reporte de destino do proxy pelo agent. <c>Allowed=false</c> cobre as
+/// recusas da allowlist ("allowlist vazia", "IP fora da allowlist", "porta não
+/// permitida", "SSRF bloqueado"), que hoje só aparecem como erro na tela do
+/// operador e não deixavam rastro na auditoria.
+/// </summary>
+public record AgentProxyDestinationReport(
+    string Host,
+    int Port,
+    bool Allowed,
+    string? Reason = null,
+    string? Mode = null);

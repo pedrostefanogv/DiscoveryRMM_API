@@ -227,6 +227,13 @@ public sealed class StartRemoteSessionCommandHandler(
             options.Value.Liveness.MissedPingsBeforeClose,
             options.Value.Liveness.InitialGraceSeconds);
 
+        // Allowlist de proxy herdável, resolvida no escopo do AGENTE alvo
+        // (servidor → cliente → site). Só é calculada para sessões de proxy/all;
+        // para os demais kinds o custo é evitado.
+        var proxyPolicy = cmd.Kind is RemoteSessionKind.Proxy or RemoteSessionKind.All
+            ? await ResolveProxyPolicyAsync(agent, ct)
+            : RemoteProxyPolicy.BlockAll();
+
         var payload = JsonSerializer.Serialize(new
         {
             action = "start",
@@ -264,17 +271,22 @@ public sealed class StartRemoteSessionCommandHandler(
             auto = true,
             // Política de túnel PROXY (kind proxy/all): o agent abre os listeners
             // TCP locais e faz a ponte com os subjects .proxy.req/.proxy.resp/.tunnel.*.
-            // A allowlist, portas, teto de resposta e loopback vêm de RemoteAccess:Proxy
-            // (defesa em profundidade: o agent revalida).
+            //
+            // A allowlist vem da configuração HERDÁVEL (servidor → cliente → site
+            // do agent alvo), resolvida no mesmo escopo do gate de
+            // RemoteAccessEnabled acima. Antes ela era lida direto de
+            // RemoteAccess:Proxy (appsettings) e nenhuma tela conseguia alterá-la:
+            // o default vazio bloqueava TODO destino ("allowlist vazia: acesso
+            // bloqueado para <ip>:<porta>"). O appsettings continua como
+            // bootstrap/fallback quando a resolução não devolve valor.
+            //
+            // Modo "open" NÃO vira 0.0.0.0/0: vira enabled=false, que desliga o
+            // gate de CIDR/porta no agent mas MANTÉM as proteções SSRF
+            // incondicionais (link-local, multicast, 169.254.x.x, IMDS).
+            //
+            // Defesa em profundidade: o agent revalida tudo (BuildProxyAllowlist).
             proxy = cmd.Kind is RemoteSessionKind.Proxy or RemoteSessionKind.All
-                ? new
-                {
-                    enabled = true,
-                    defaultAllowlist = options.Value.Proxy.DefaultAllowlist ?? [],
-                    allowedPorts = options.Value.Proxy.AllowedPorts ?? [],
-                    maxResponseBytes = options.Value.Proxy.MaxResponseBytes,
-                    allowLoopback = options.Value.Proxy.AllowLoopback
-                }
+                ? BuildProxyPayload(proxyPolicy)
                 : null,
             // Política de túnel RDP (kind rdp/all): o agent ponteia a porta 3389
             // local com .tunnel.in/.tunnel.out (frames binários com header de 6B
@@ -472,6 +484,73 @@ public sealed class StartRemoteSessionCommandHandler(
                 sessionId, agentId);
         }
     }
+
+    /// <summary>
+    /// Resolve a allowlist de proxy no escopo do AGENTE alvo (servidor → cliente
+    /// → site). Fail-closed: qualquer falha de leitura devolve bloqueio total em
+    /// vez de liberar acesso — uma exceção aqui não pode virar "proxy aberto".
+    ///
+    /// Cai no appsettings (RemoteAccess:Proxy) apenas quando a configuração
+    /// herdável não devolve valor algum, preservando o comportamento de
+    /// instalações que ainda não passaram pela UI.
+    /// </summary>
+    private async Task<RemoteProxyPolicy> ResolveProxyPolicyAsync(Agent agent, CancellationToken ct)
+    {
+        try
+        {
+            var json = await configurationResolver.GetEffectiveValueAsync<string>(
+                "Site", nameof(ServerConfiguration.RemoteProxyPolicyJson), agent.SiteId);
+
+            if (!string.IsNullOrWhiteSpace(json))
+                return RemoteProxyPolicy.Parse(json);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[RemoteSession] Falha ao resolver RemoteProxyPolicyJson do site {SiteId}; aplicando bloqueio total.",
+                agent.SiteId);
+            return RemoteProxyPolicy.BlockAll();
+        }
+
+        // Fallback de bootstrap: appsettings (comportamento anterior à UI).
+        return new RemoteProxyPolicy
+        {
+            Mode = RemoteProxyPolicy.ModeAllowlist,
+            Entries = [.. (options.Value.Proxy.DefaultAllowlist ?? []).Select(cidr => new RemoteProxyEntry { Cidr = cidr })],
+            AllowedPorts = options.Value.Proxy.AllowedPorts ?? [],
+            MaxResponseBytes = options.Value.Proxy.MaxResponseBytes,
+            AllowLoopback = options.Value.Proxy.AllowLoopback
+        };
+    }
+
+    /// <summary>
+    /// Monta o bloco "proxy" do payload de start.
+    ///
+    /// As CHAVES são exatamente as que o agent já lê em ParseProxyPolicy
+    /// (session_tunnel_policy.go), então nenhum agente precisa ser atualizado.
+    ///
+    /// Modo "open" ⇒ enabled=false. Isto desliga o gate de CIDR/porta no agent
+    /// mas PRESERVA as proteções SSRF incondicionais (link-local, multicast,
+    /// 169.254.x.x, IMDS): "liberado geral" nunca alcança essas faixas.
+    /// </summary>
+    private static object BuildProxyPayload(RemoteProxyPolicy policy)
+    {
+        var open = policy.IsOpen;
+
+        return new
+        {
+            enabled = !open,
+            defaultAllowlist = open ? [] : policy.EffectiveAllowlist,
+            allowedPorts = open ? [] : policy.AllowedPorts,
+            maxResponseBytes = policy.MaxResponseBytes > 0
+                ? policy.MaxResponseBytes
+                : DefaultProxyMaxResponseBytes,
+            allowLoopback = policy.AllowLoopback
+        };
+    }
+
+    /// <summary>Espelha RemoteAccessProxyOptions.MaxResponseBytes (10 MiB).</summary>
+    private const long DefaultProxyMaxResponseBytes = 10 * 1024 * 1024;
 }
 
 public sealed class StopRemoteSessionCommandHandler(

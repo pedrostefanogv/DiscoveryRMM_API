@@ -256,6 +256,21 @@ public class ServerConfiguration
     public string SensorsSettingsJson { get; set; } = "{}";
 
     /// <summary>
+    /// Política de proxy/túnel do acesso remoto (allowlist de destinos, modo,
+    /// loopback). Formato: <see cref="Discovery.Core.Configuration.RemoteProxyPolicy"/>.
+    /// Default "{}" = allowlist vazia = bloqueio total, idêntico ao appsettings
+    /// anterior (zero surpresa no rollout).
+    /// </summary>
+    public string RemoteProxyPolicyJson { get; set; } = "{}";
+
+    /// <summary>
+    /// Habilita o uso das entradas de proxy cadastradas em escopo GLOBAL.
+    /// Nasce false: o cadastro global é pré-pronto porém inerte. Entradas de
+    /// Cliente/Site valem independentemente desta flag.
+    /// </summary>
+    public bool RemoteProxyGlobalEntriesEnabled { get; set; } = false;
+
+    /// <summary>
     /// Configurações globais de anexos de tickets (JSON).
     /// Exemplo: {"enabled":true,"maxFileSizeBytes":10485760,"allowedContentTypes":["image/jpeg","image/png","application/pdf"]}
     /// </summary>

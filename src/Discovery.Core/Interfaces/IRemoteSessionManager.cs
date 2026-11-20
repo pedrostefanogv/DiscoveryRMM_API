@@ -73,4 +73,22 @@ public interface IRemoteSessionManager
 
     /// <summary>Registra um evento de auditoria na sessão.</summary>
     Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// Registra uma tentativa de acesso do proxy a um DESTINO (permitida ou
+    /// negada pela allowlist). É o log que responde "quem acessou o quê, quando
+    /// e se foi barrado" — o tráfego em si não passa pela API (viewer → NATS →
+    /// agent), então o próprio agent reporta o destino.
+    ///
+    /// Eventos gerados: <c>proxy_destination_allowed</c> / <c>proxy_destination_denied</c>.
+    /// </summary>
+    Task AuditProxyDestinationAsync(
+        Guid sessionId,
+        string host,
+        int port,
+        bool allowed,
+        string? reason = null,
+        string? mode = null,
+        string? actorUserId = null,
+        CancellationToken ct = default);
 }

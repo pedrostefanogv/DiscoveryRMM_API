@@ -158,6 +158,13 @@ public class ClientConfiguration
     public string? RemoteConsentBannerText { get; set; }
 
     /// <summary>
+    /// Política de proxy/túnel do acesso remoto (allowlist de destinos) deste
+    /// cliente. null = herda do servidor; quando definida, SUBSTITUI a do
+    /// servidor por inteiro. Ver Discovery.Core.Configuration.RemoteProxyPolicy.
+    /// </summary>
+    public string? RemoteProxyPolicyJson { get; set; }
+
+    /// <summary>
     /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos sites e agents deste cliente.
     /// </summary>

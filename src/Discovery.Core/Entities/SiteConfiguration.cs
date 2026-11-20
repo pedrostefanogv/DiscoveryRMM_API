@@ -155,6 +155,14 @@ public class SiteConfiguration
     public string? RemoteConsentBannerText { get; set; }
 
     /// <summary>
+    /// Política de proxy/túnel do acesso remoto (allowlist de destinos) deste
+    /// site. null = herda do cliente e, na ausência dele, do servidor; quando
+    /// definida, SUBSTITUI a do nível acima por inteiro.
+    /// Ver Discovery.Core.Configuration.RemoteProxyPolicy.
+    /// </summary>
+    public string? RemoteProxyPolicyJson { get; set; }
+
+    /// <summary>
     /// Lista de campos bloqueados no nível de site (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos agents deste site (futuro).
     /// </summary>

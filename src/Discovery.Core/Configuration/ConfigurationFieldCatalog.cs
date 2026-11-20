@@ -59,7 +59,18 @@ public static class ConfigurationFieldCatalog
         "NatsServerHostInternal",
         "NatsServerHostExternal",
         "NatsUseWssExternal",
-        "NatsWebSocketExternalUrl"
+        "NatsWebSocketExternalUrl",
+        // Allowlist de proxy/túnel do acesso remoto, herdável servidor → cliente
+        // → site (Blob JSON). Sem entrar aqui o campo não aparece na UI nem é
+        // reconhecido em locks/herança — exatamente como os kill switches acima.
+        // Antes disto a allowlist só existia no appsettings.json e nenhuma tela
+        // conseguia alterá-la (o default vazio bloqueava todo destino).
+        "RemoteProxyPolicyJson",
+        // Liga/desliga o uso das entradas cadastradas em escopo GLOBAL. Nasce
+        // DESLIGADO: o cadastro global fica pré-pronto, mas inerte, até o
+        // operador liberar explicitamente. Entradas de Cliente/Site não são
+        // afetadas por esta flag.
+        "RemoteProxyGlobalEntriesEnabled"
     ];
 
     /// <summary>

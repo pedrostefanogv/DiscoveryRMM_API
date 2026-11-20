@@ -181,7 +181,20 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
         var updated = await _repo.UpdateAsync(session, ct);
 
         var actor = actorUserId?.ToString() ?? "system";
-        await AuditAsync(sessionId, "closed", JsonSerializer.Serialize(new { reason, durationSec = updated.DurationSeconds }), actor, null, ct);
+        // Duração + volume no fechamento: são os dois dados que a auditoria de
+        // conexão precisa para responder "quanto tempo e quanto trafegou".
+        // BytesSent é agregado por SESSÃO (não por destino) — o agent soma no
+        // contador da sessão, então o detalhamento por destino não é possível
+        // sem mudança no agent (ver auditoria de destinos do proxy).
+        await AuditAsync(sessionId, "closed",
+            JsonSerializer.Serialize(new
+            {
+                reason,
+                durationSec = updated.DurationSeconds,
+                bytesSent = updated.BytesSent,
+                framesSent = updated.FramesSent
+            }),
+            actor, null, ct);
 
         _logger.LogInformation("Remote session {SessionId} closed: {Reason}", sessionId, reason);
 
@@ -389,5 +402,42 @@ public sealed class RemoteSessionManager : IRemoteSessionManager
 
         await _auditRepo.AddAsync(audit, ct);
         _logger.LogDebug("Remote session {SessionId} audit recorded: {EventType}", sessionId, eventType);
+    }
+
+    /// <inheritdoc />
+    public async Task AuditProxyDestinationAsync(
+        Guid sessionId,
+        string host,
+        int port,
+        bool allowed,
+        string? reason = null,
+        string? mode = null,
+        string? actorUserId = null,
+        CancellationToken ct = default)
+    {
+        // Host/porta vêm do agent: normaliza e limita antes de persistir para não
+        // gravar texto arbitrário no Details (mesma cautela da allowlist de
+        // outcomes do consentimento).
+        var safeHost = string.IsNullOrWhiteSpace(host) ? "?" : host.Trim();
+        if (safeHost.Length > 255) safeHost = safeHost[..255];
+
+        var safeReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        if (safeReason is { Length: > 500 }) safeReason = safeReason[..500];
+
+        var safeMode = string.IsNullOrWhiteSpace(mode) ? null : mode.Trim();
+        if (safeMode is { Length: > 32 }) safeMode = safeMode[..32];
+
+        var eventType = allowed ? "proxy_destination_allowed" : "proxy_destination_denied";
+
+        var details = JsonSerializer.Serialize(new
+        {
+            host = safeHost,
+            port,
+            allowed,
+            reason = safeReason,
+            mode = safeMode
+        });
+
+        await AuditAsync(sessionId, eventType, details, actorUserId, null, ct);
     }
 }

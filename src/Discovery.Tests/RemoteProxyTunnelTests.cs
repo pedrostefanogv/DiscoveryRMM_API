@@ -87,6 +87,138 @@ public sealed class RemoteProxyTunnelTests
         Assert.That(ports, Is.EqualTo(new[] { 22, 80, 443, 8080 }));
     }
 
+    // ── 1b. Allowlist HERDÁVEL (config do banco vence o appsettings) ─────
+
+    [Test]
+    public async Task StartSession_Proxy_UsaAllowlistHerdavelDoBanco()
+    {
+        // O ponto da feature: a política vem da configuração herdável, e o
+        // operador consegue liberar 192.168.10.250:8006 sem editar appsettings
+        // nem reiniciar a API.
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-1", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        // appsettings continua vazio (bloqueio total): só o banco libera.
+        var options = Options.Create(new RemoteAccessOptions
+        {
+            Enabled = true,
+            Proxy = new RemoteAccessProxyOptions { DefaultAllowlist = [], AllowedPorts = [] }
+        });
+
+        var handler = CreateStartHandler(
+            agent, site, dispatcher, options, RemoteConsentMode.Off,
+            resolvedProxyPolicyJson: """
+                {"entries":[{"cidr":"192.168.10.0/24","ports":[8006]}]}
+                """);
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        var proxy = doc.RootElement.GetProperty("proxy");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(proxy.GetProperty("enabled").GetBoolean(), Is.True);
+            var allowlist = proxy.GetProperty("defaultAllowlist")
+                .EnumerateArray().Select(e => e.GetString()).ToArray();
+            Assert.That(allowlist, Is.EqualTo(new[] { "192.168.10.0/24" }),
+                "a allowlist do banco tem de vencer o appsettings vazio");
+        });
+    }
+
+    [Test]
+    public async Task StartSession_Proxy_ModoOpen_EnviaEnabledFalse()
+    {
+        // "Liberado geral" NÃO vira 0.0.0.0/0: vira enabled=false, que desliga o
+        // gate de CIDR/porta no agent mas preserva as proteções SSRF
+        // incondicionais (link-local, multicast, IMDS).
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-2", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        var handler = CreateStartHandler(
+            agent, site, dispatcher, Options.Create(new RemoteAccessOptions { Enabled = true }),
+            RemoteConsentMode.Off,
+            resolvedProxyPolicyJson: """{"mode":"open"}""");
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        var proxy = doc.RootElement.GetProperty("proxy");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(proxy.GetProperty("enabled").GetBoolean(), Is.False,
+                "open => enabled=false (o agent mantém as proteções SSRF incondicionais)");
+            Assert.That(proxy.GetProperty("defaultAllowlist").EnumerateArray(), Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task StartSession_Proxy_SemPoliticaHerdaAppsettingsComoBootstrap()
+    {
+        // Compatibilidade: sem valor no banco, vale o appsettings (comportamento
+        // anterior à UI) — quem só usa o arquivo não é afetado.
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-3", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        var options = Options.Create(new RemoteAccessOptions
+        {
+            Enabled = true,
+            Proxy = new RemoteAccessProxyOptions
+            {
+                DefaultAllowlist = ["10.1.0.0/16"],
+                AllowedPorts = [443],
+                MaxResponseBytes = 2_097_152
+            }
+        });
+
+        // resolvedProxyPolicyJson: null => cai no appsettings.
+        var handler = CreateStartHandler(agent, site, dispatcher, options, RemoteConsentMode.Off);
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        var proxy = doc.RootElement.GetProperty("proxy");
+
+        Assert.Multiple(() =>
+        {
+            var allowlist = proxy.GetProperty("defaultAllowlist")
+                .EnumerateArray().Select(e => e.GetString()).ToArray();
+            Assert.That(allowlist, Is.EqualTo(new[] { "10.1.0.0/16" }));
+            Assert.That(proxy.GetProperty("maxResponseBytes").GetInt32(), Is.EqualTo(2_097_152));
+        });
+    }
+
     [TestCase(RemoteSessionKind.Proxy)]
     [TestCase(RemoteSessionKind.Rdp)]
     public async Task StartSession_ProxyOrRdp_WithPromptConsent_RequiresConsentAndOmitsImmediateCredentials(RemoteSessionKind kind)
@@ -404,7 +536,8 @@ public sealed class RemoteProxyTunnelTests
         Site site,
         RecordingCommandDispatcher dispatcher,
         IOptions<RemoteAccessOptions> options,
-        RemoteConsentMode consentMode)
+        RemoteConsentMode consentMode,
+        string? resolvedProxyPolicyJson = null)
     {
         var agentRepo = new F02AgentRepositoryStub(agent);
         var siteRepo = new F02SiteRepositoryStub(site);
@@ -455,10 +588,32 @@ public sealed class RemoteProxyTunnelTests
                 })
                 : null);
 
+        // GetEffectiveValueAsync<T> é genérico: o valor devolvido tem de ser um
+        // Task<T> do tipo pedido, senão o DispatchProxy lança no cast.
+        //
+        // O gate de RemoteAccessEnabled pede bool (true = habilitado). A
+        // resolução da allowlist de proxy pede string, e devolver null nesse
+        // caso faz o handler cair no fallback do appsettings
+        // (RemoteAccessOptions) — que é exatamente o que estes testes verificam,
+        // preservando o comportamento anterior à configuração herdável.
         var configResolver = F02NullProxy<IConfigurationResolver>.Create((m, _) =>
-            m.Name == nameof(IConfigurationResolver.GetEffectiveValueAsync)
-                ? Task.FromResult(true)
-                : null);
+        {
+            if (m.Name != nameof(IConfigurationResolver.GetEffectiveValueAsync))
+                return null;
+
+            var requested = m.GetGenericArguments();
+            if (requested.Length != 1)
+                return null;
+
+            var inner = requested[0];
+            object? value = inner == typeof(bool)
+                ? true
+                : inner == typeof(string)
+                    ? resolvedProxyPolicyJson
+                    : null;
+            var fromResult = typeof(Task).GetMethod(nameof(Task.FromResult))!.MakeGenericMethod(inner);
+            return fromResult.Invoke(null, [value]);
+        });
 
         return new StartRemoteSessionCommandHandler(
             agentRepo,

@@ -522,5 +522,10 @@ public class RemoteSessionBandwidthCommandHandlerTests
 
         public Task AuditAsync(Guid sessionId, string eventType, string? details = null, string? actorUserId = null, string? ipAddress = null, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task AuditProxyDestinationAsync(
+            Guid sessionId, string host, int port, bool allowed, string? reason = null,
+            string? mode = null, string? actorUserId = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 }

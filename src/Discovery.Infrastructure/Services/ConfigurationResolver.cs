@@ -242,6 +242,21 @@ public class ConfigurationResolver : IConfigurationResolver
         var consentMessage = ResolveStringValue("RemoteConsentMessage", blocked, site?.RemoteConsentMessage, client?.RemoteConsentMessage, server.RemoteConsentMessage);
         var consentBannerText = ResolveStringValue("RemoteConsentBannerText", blocked, site?.RemoteConsentBannerText, client?.RemoteConsentBannerText, server.RemoteConsentBannerText);
 
+        // Allowlist de proxy/túnel do acesso remoto (servidor → cliente → site).
+        // O escopo mais específico que DEFINIR o campo substitui o de cima por
+        // inteiro; ausente em todos cai em allowlist vazia (bloqueio total), que é
+        // o default de hoje no appsettings (zero surpresa no rollout).
+        //
+        // A flag global é resolvida separadamente e SÓ afeta o escopo servidor:
+        // com ela desligada, as entradas globais ficam inertes e a política do
+        // servidor é zerada, mas Cliente/Site continuam valendo.
+        var proxyGlobalEntriesEnabled = ResolveValue(
+            "RemoteProxyGlobalEntriesEnabled", blocked, (bool?)null, (bool?)null, server.RemoteProxyGlobalEntriesEnabled);
+        var proxy = ResolveRemoteProxyPolicy(
+            site?.RemoteProxyPolicyJson, client?.RemoteProxyPolicyJson, server.RemoteProxyPolicyJson,
+            proxyGlobalEntriesEnabled.Value);
+        var proxySource = ResolveObjectSource("RemoteProxyPolicyJson", blocked, site?.RemoteProxyPolicyJson, client?.RemoteProxyPolicyJson);
+
         var agentUpdate = ResolveAgentUpdate(site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson, server.AgentUpdatePolicyJson);
         var agentUpdateSource = ResolveObjectSource("AgentUpdatePolicyJson", blocked, site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson);
 
@@ -275,6 +290,8 @@ public class ConfigurationResolver : IConfigurationResolver
             RemoteAccessEnabled = remoteAccess.Value,
             RemoteAccessRecordingEnabled = remoteAccessRecording.Value,
             RemoteAccessRecordingAutoDeleteExpired = remoteAccessRecordingAutoDelete.Value,
+            RemoteProxy = proxy,
+            RemoteProxyGlobalEntriesEnabled = proxyGlobalEntriesEnabled.Value,
             AutomaticLoggingEnabled = automaticLogging.Value,
             McpToolCallsPerMinute = ResolveMcpToolCallsPerMinute(site?.McpToolCallsPerMinute, client?.McpToolCallsPerMinute, server.McpToolCallsPerMinute),
             OpenTelemetryEnabled = openTelemetry.Value,
@@ -313,6 +330,8 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["RemoteAccessEnabled"] = (int)remoteAccess.Source;
         resolved.Inheritance["RemoteAccessRecordingEnabled"] = (int)remoteAccessRecording.Source;
         resolved.Inheritance["RemoteAccessRecordingAutoDeleteExpired"] = (int)remoteAccessRecordingAutoDelete.Source;
+        resolved.Inheritance["RemoteProxyPolicyJson"] = (int)proxySource;
+        resolved.Inheritance["RemoteProxyGlobalEntriesEnabled"] = (int)proxyGlobalEntriesEnabled.Source;
         resolved.Inheritance["AutomaticLoggingEnabled"] = (int)automaticLogging.Source;
         resolved.Inheritance["McpToolCallsPerMinute"] = (int)mcpToolCalls.Source;
         resolved.Inheritance["OpenTelemetryEnabled"] = (int)openTelemetry.Source;
@@ -381,6 +400,34 @@ public class ConfigurationResolver : IConfigurationResolver
 
         var client = await _clientRepo.GetByClientIdAsync(clientId.Value);
         return ResolveBackgroundProcessing(client?.BackgroundProcessingSettingsJson, server.BackgroundProcessingSettingsJson);
+    }
+
+    /// <summary>
+    /// Resolve a allowlist de proxy (site ?? cliente ?? servidor), substituindo
+    /// por inteiro (não há merge campo-a-campo: a lista é uma unidade de política).
+    ///
+    /// <paramref name="globalEntriesEnabled"/> = false zera APENAS o escopo
+    /// servidor: as entradas globais ficam cadastradas porém inertes, enquanto
+    /// Cliente/Site seguem valendo. É o comportamento de "cadastro global
+    /// pré-pronto, mas desativado num primeiro momento".
+    ///
+    /// Sempre fail-closed: o parse tolerante cai em allowlist vazia diante de
+    /// JSON ausente/corrompido — nunca em modo "open".
+    /// </summary>
+    private static RemoteProxyPolicy ResolveRemoteProxyPolicy(
+        string? siteJson, string? clientJson, string serverJson, bool globalEntriesEnabled)
+    {
+        if (!string.IsNullOrWhiteSpace(siteJson))
+            return RemoteProxyPolicy.Parse(siteJson);
+
+        if (!string.IsNullOrWhiteSpace(clientJson))
+            return RemoteProxyPolicy.Parse(clientJson);
+
+        // Escopo servidor: inerte enquanto a flag global estiver desligada.
+        if (!globalEntriesEnabled)
+            return RemoteProxyPolicy.BlockAll();
+
+        return RemoteProxyPolicy.Parse(serverJson);
     }
 
     private static AgentUpdatePolicy ResolveAgentUpdate(string? siteJson, string? clientJson, string serverJson)

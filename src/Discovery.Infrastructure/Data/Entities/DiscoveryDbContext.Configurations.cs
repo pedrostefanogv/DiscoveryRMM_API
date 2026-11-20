@@ -37,6 +37,10 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.RemoteAccessRecordingEnabled).HasColumnName("remote_access_recording_enabled");
             entity.Property(config => config.RemoteAccessRecordingAutoDeleteExpired).HasColumnName("remote_access_recording_auto_delete_expired");
             entity.Property(config => config.AutomaticLoggingEnabled).HasColumnName("automatic_logging_enabled");
+            // Allowlist de proxy do acesso remoto (herdável) + flag que torna as
+            // entradas GLOBAIS inertes até liberação explícita.
+            entity.Property(config => config.RemoteProxyPolicyJson).HasColumnName("remote_proxy_policy_json");
+            entity.Property(config => config.RemoteProxyGlobalEntriesEnabled).HasColumnName("remote_proxy_global_entries_enabled");
             entity.Property(config => config.OpenTelemetryEnabled).HasColumnName("open_telemetry_enabled");
             entity.Property(config => config.MigrationsRunOnStartup).HasColumnName("migrations_run_on_startup");
             entity.Property(config => config.RealtimeContractMode).HasColumnName("realtime_contract_mode").HasMaxLength(16);
@@ -123,6 +127,9 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.RemoteAccessRecordingEnabled).HasColumnName("remote_access_recording_enabled");
             entity.Property(config => config.RemoteAccessRecordingAutoDeleteExpired).HasColumnName("remote_access_recording_auto_delete_expired");
             entity.Property(config => config.AutomaticLoggingEnabled).HasColumnName("automatic_logging_enabled");
+            // Allowlist de proxy do acesso remoto (null = herda do servidor).
+            // A flag de entradas globais NÃO existe aqui: ela é só do servidor.
+            entity.Property(config => config.RemoteProxyPolicyJson).HasColumnName("remote_proxy_policy_json");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.BackgroundProcessingSettingsJson).HasColumnName("background_processing_settings_json").HasColumnType("jsonb");
@@ -177,6 +184,8 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.RemoteAccessRecordingEnabled).HasColumnName("remote_access_recording_enabled");
             entity.Property(config => config.RemoteAccessRecordingAutoDeleteExpired).HasColumnName("remote_access_recording_auto_delete_expired");
             entity.Property(config => config.AutomaticLoggingEnabled).HasColumnName("automatic_logging_enabled");
+            // Allowlist de proxy do acesso remoto (null = herda de cliente/servidor).
+            entity.Property(config => config.RemoteProxyPolicyJson).HasColumnName("remote_proxy_policy_json");
             entity.Property(config => config.AppStorePolicy).HasColumnName("app_store_policy").HasConversion<int?>();
             entity.Property(config => config.AIIntegrationSettingsJson).HasColumnName("ai_integration_settings_json");
             entity.Property(config => config.InventoryIntervalHours).HasColumnName("inventory_interval_hours");

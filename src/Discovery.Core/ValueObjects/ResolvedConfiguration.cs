@@ -69,6 +69,21 @@ public class ResolvedConfiguration
     /// <summary>Remoção automática de gravações expiradas.</summary>
     public bool RemoteAccessRecordingAutoDeleteExpired { get; set; }
 
+    /// <summary>
+    /// Política de proxy/túnel do acesso remoto já resolvida (servidor → cliente
+    /// → site). O escopo mais específico que definir o campo SUBSTITUI o de cima
+    /// por inteiro. Sempre sanitizada e fail-closed: JSON ausente/inválido cai em
+    /// allowlist vazia (bloqueio total), nunca em "open".
+    /// </summary>
+    public RemoteProxyPolicy RemoteProxy { get; set; } = RemoteProxyPolicy.BlockAll();
+
+    /// <summary>
+    /// Habilita o uso das entradas de proxy cadastradas em escopo GLOBAL
+    /// (servidor). Nasce false: cadastro global pré-pronto, porém inerte.
+    /// Não afeta entradas de Cliente/Site.
+    /// </summary>
+    public bool RemoteProxyGlobalEntriesEnabled { get; set; }
+
     /// <summary>Log automático habilitado.</summary>
     public bool AutomaticLoggingEnabled { get; set; }
 
