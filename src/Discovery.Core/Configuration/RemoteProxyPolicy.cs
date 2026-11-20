@@ -53,6 +53,21 @@ public class RemoteProxyPolicy
     /// <summary>Teto de bytes por resposta. 0 ou negativo = usa o default do servidor.</summary>
     public long MaxResponseBytes { get; set; }
 
+    /// <summary>
+    /// Aceita certificado TLS inválido (autoassinado, cadeia incompleta, nome
+    /// divergente) nos destinos HTTPS do proxy.
+    ///
+    /// Muitos equipamentos de rede — Proxmox, iDRAC/iLO, switches, impressoras —
+    /// servem HTTPS com certificado autoassinado. Sem esta opção o proxy falha
+    /// com "x509: certificate signed by unknown authority" e o operador conclui
+    /// que o destino está inacessível.
+    ///
+    /// RISCO: desliga a validação da cadeia APENAS para as conexões desta
+    /// sessão de proxy, tornando-a suscetível a interceptação na rede local.
+    /// Por isso o default é FALSE e a UI exige confirmação explícita.
+    /// </summary>
+    public bool InsecureSkipVerify { get; set; }
+
     /// <summary>True quando o modo é "open" (comparação case-insensitive).</summary>
     [JsonIgnore]
     public bool IsOpen => string.Equals(Mode?.Trim(), ModeOpen, StringComparison.OrdinalIgnoreCase);
@@ -256,7 +271,8 @@ public class RemoteProxyPolicy
             Entries = [.. entries],
             AllowLoopback = AllowLoopback,
             AllowedPorts = (AllowedPorts ?? []).Where(p => p is >= 1 and <= 65535).Distinct().Order().ToArray(),
-            MaxResponseBytes = MaxResponseBytes > 0 ? MaxResponseBytes : 0
+            MaxResponseBytes = MaxResponseBytes > 0 ? MaxResponseBytes : 0,
+            InsecureSkipVerify = InsecureSkipVerify
         };
     }
 }

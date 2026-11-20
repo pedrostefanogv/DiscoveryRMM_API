@@ -13,6 +13,17 @@ internal static class PowerAndUpdatePayloadValidator
         "rollback"
     };
 
+    /// <summary>
+    /// Verbos aceitos no comando genérico de energia (CommandType.PowerAction).
+    /// Hoje só o reinício direto no setup do firmware (BIOS/UEFI). Qualquer novo
+    /// modo precisa entrar AQUI e ser implementado no agent (verbo no
+    /// handleFirmwareRestart / executeSystemPowerAction).
+    /// </summary>
+    private static readonly HashSet<string> PowerActionVerbs = new(StringComparer.Ordinal)
+    {
+        "restart-firmware"
+    };
+
     private static readonly Regex SemVerRegex = new(
         "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -138,6 +149,99 @@ internal static class PowerAndUpdatePayloadValidator
         out string normalizedPayload,
         out string validationError)
         => TryNormalizePowerAction(payload, defaultDelaySeconds: 30, out normalizedPayload, out validationError);
+
+    /// <summary>
+    /// Valida/normaliza o comando genérico de energia (CommandType.PowerAction).
+    /// Diferente de restart/shutdown, o atraso pode ser 0 (execução imediata) —
+    /// é o caso do reinício direto no firmware.
+    /// </summary>
+    internal static bool TryNormalizePowerActionCommand(
+        JsonElement payload,
+        out string normalizedPayload,
+        out string validationError)
+    {
+        normalizedPayload = string.Empty;
+        validationError = string.Empty;
+
+        if (!PayloadJsonHelpers.TryGetRequiredString(payload, "action", out var action, out validationError))
+            return false;
+
+        action = action.ToLowerInvariant();
+        if (!PowerActionVerbs.Contains(action))
+        {
+            validationError = "field 'action' must be one of: " + string.Join(", ", PowerActionVerbs) + ".";
+            return false;
+        }
+
+        var delaySeconds = 0;
+        if (payload.TryGetProperty("delaySeconds", out var delayElement) && delayElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!PayloadJsonHelpers.TryReadNonNegativeInt(delayElement, out delaySeconds))
+            {
+                validationError = "field 'delaySeconds' must be a non-negative integer.";
+                return false;
+            }
+        }
+
+        var force = false;
+        if (payload.TryGetProperty("force", out var forceElement) && forceElement.ValueKind != JsonValueKind.Null)
+        {
+            if (forceElement.ValueKind == JsonValueKind.True || forceElement.ValueKind == JsonValueKind.False)
+            {
+                force = forceElement.GetBoolean();
+            }
+            else
+            {
+                validationError = "field 'force' must be a boolean.";
+                return false;
+            }
+        }
+
+        // notifyUser=false por padrão: o poweraction não usa o contador do
+        // restart/shutdown; o verbo decide o próprio fluxo.
+        var notifyUser = false;
+        if (payload.TryGetProperty("notifyUser", out var notifyElement) && notifyElement.ValueKind != JsonValueKind.Null)
+        {
+            if (notifyElement.ValueKind == JsonValueKind.True || notifyElement.ValueKind == JsonValueKind.False)
+            {
+                notifyUser = notifyElement.GetBoolean();
+            }
+            else
+            {
+                validationError = "field 'notifyUser' must be a boolean.";
+                return false;
+            }
+        }
+
+        string? message = null;
+        if (payload.TryGetProperty("message", out var msgElement) && msgElement.ValueKind != JsonValueKind.Null)
+        {
+            if (!PayloadJsonHelpers.TryReadString(msgElement, out var providedMessage))
+            {
+                validationError = "field 'message' must be a string when provided.";
+                return false;
+            }
+
+            message = providedMessage.Trim();
+            if (message.Length > 512)
+            {
+                validationError = "field 'message' must be at most 512 characters.";
+                return false;
+            }
+        }
+
+        var normalized = new Dictionary<string, object?>
+        {
+            ["action"] = action,
+            ["delaySeconds"] = delaySeconds,
+            ["force"] = force,
+            ["notifyUser"] = notifyUser,
+            ["message"] = message
+        };
+
+        normalizedPayload = JsonSerializer.Serialize(normalized, PayloadJsonHelpers.JsonOptions);
+        return true;
+    }
 
     private static bool TryNormalizePowerAction(
         JsonElement payload,

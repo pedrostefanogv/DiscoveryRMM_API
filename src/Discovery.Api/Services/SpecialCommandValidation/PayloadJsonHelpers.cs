@@ -123,6 +123,27 @@ internal static class PayloadJsonHelpers
         return false;
     }
 
+    /// <summary>
+    /// Lê um inteiro >= 0 (diferente de <see cref="TryReadPositiveInt"/>, aceita
+    /// 0). Usado por comandos que não têm atraso por padrão, como o poweraction.
+    /// </summary>
+    internal static bool TryReadNonNegativeInt(JsonElement element, out int value)
+    {
+        value = 0;
+
+        if (element.ValueKind == JsonValueKind.Number)
+            return element.TryGetInt32(out value) && value >= 0;
+
+        if (element.ValueKind == JsonValueKind.String &&
+            int.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value) &&
+            value >= 0)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     internal static bool TryReadString(JsonElement element, out string value)
     {
         value = string.Empty;

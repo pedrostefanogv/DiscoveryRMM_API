@@ -306,6 +306,74 @@ public sealed class RemoteProxyTunnelTests
             "a porta da entrada tem de restringir a sessão; vazio liberaria TODAS as portas");
     }
 
+    [Test]
+    public async Task StartSession_Proxy_EncaminhaInsecureSkipVerifyParaCertificadoAutoassinado()
+    {
+        // Equipamentos de rede (Proxmox, iDRAC, switches) servem HTTPS com
+        // certificado autoassinado. O agent SEMPRE soube ler "insecureSkipVerify"
+        // (session_tunnel_policy.go), mas o servidor nunca enviava a chave — o
+        // operador recebia "x509: certificate signed by unknown authority" e
+        // concluía que o destino estava fora do ar.
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-TLS", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        var handler = CreateStartHandler(
+            agent, site, dispatcher, Options.Create(new RemoteAccessOptions { Enabled = true }),
+            RemoteConsentMode.Off,
+            resolvedProxyPolicyJson: """
+                {"entries":[{"cidr":"192.168.10.0/24","ports":[8006]}],"insecureSkipVerify":true}
+                """);
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        var proxy = doc.RootElement.GetProperty("proxy");
+
+        Assert.That(proxy.GetProperty("insecureSkipVerify").GetBoolean(), Is.True,
+            "o agent precisa receber a chave para aceitar o certificado autoassinado");
+    }
+
+    [Test]
+    public async Task StartSession_Proxy_InsecureSkipVerifyEhFalsoPorPadrao()
+    {
+        // Default seguro: sem escolha explícita, a cadeia TLS continua validada.
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var agent = new Agent { Id = agentId, SiteId = siteId, Hostname = "LAN-HOST-TLS2", AgentVersion = "9.9.9" };
+        var site = new Site { Id = siteId, ClientId = clientId, Name = "Main Site" };
+        var dispatcher = new RecordingCommandDispatcher();
+
+        var handler = CreateStartHandler(
+            agent, site, dispatcher, Options.Create(new RemoteAccessOptions { Enabled = true }),
+            RemoteConsentMode.Off,
+            resolvedProxyPolicyJson: """{"entries":[{"cidr":"10.0.0.0/8"}]}""");
+
+        var result = await handler.Handle(new StartRemoteSessionCommand(
+            AgentId: agentId, UserId: Guid.NewGuid(), TenantId: clientId, SiteId: siteId,
+            Kind: RemoteSessionKind.Proxy, Transport: RemoteTransport.Nats,
+            Quality: QualityProfile.High, Codec: RemoteCodec.Jpeg), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+
+        using var doc = JsonDocument.Parse(dispatcher.Commands[0].Payload);
+        Assert.That(
+            doc.RootElement.GetProperty("proxy").GetProperty("insecureSkipVerify").GetBoolean(),
+            Is.False,
+            "a validação TLS não pode ser relaxada sem escolha explícita");
+    }
+
     [TestCase(RemoteSessionKind.Proxy)]
     [TestCase(RemoteSessionKind.Rdp)]
     public async Task StartSession_ProxyOrRdp_WithPromptConsent_RequiresConsentAndOmitsImmediateCredentials(RemoteSessionKind kind)

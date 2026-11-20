@@ -67,6 +67,7 @@ public sealed class SpecialCommandPayloadValidator
                 CommandType.WindowsUpdate => PowerAndUpdatePayloadValidator.TryNormalizeWindowsUpdate(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.SoftwareInstall => SoftwareAndAutomationPayloadValidator.TryNormalizeSoftwareInstall(document.RootElement, out normalizedPayload, out validationError),
                 CommandType.RunSensors => SoftwareAndAutomationPayloadValidator.TryNormalizeRunSensors(document.RootElement, out normalizedPayload, out validationError),
+                CommandType.PowerAction => PowerAndUpdatePayloadValidator.TryNormalizePowerActionCommand(document.RootElement, out normalizedPayload, out validationError),
                 _ => true
             };
         }

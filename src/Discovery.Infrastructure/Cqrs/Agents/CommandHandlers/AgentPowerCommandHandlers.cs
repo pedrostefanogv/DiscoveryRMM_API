@@ -76,6 +76,41 @@ public sealed class ShutdownAgentCommandHandler(
     }
 }
 
+/// <summary>
+/// Comando genérico de energia (CommandType.PowerAction). Mesmo recorte de
+/// tenant e mesmo contrato de retorno (commandId) que restart/shutdown.
+/// </summary>
+public sealed class PowerActionCommandHandler(
+    IAgentRepository agentRepo,
+    IAgentCommandDispatcher dispatcher,
+    ISiteRepository siteRepo,
+    IScopeContext scopeContext
+) : IRequestHandler<PowerActionCommand, Result<Guid>>
+{
+    public async Task<Result<Guid>> Handle(PowerActionCommand cmd, CancellationToken ct)
+    {
+        var agent = await agentRepo.GetByIdAsync(cmd.AgentId);
+        if (agent is null) return Result<Guid>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
+        var access = await scopeContext.GetAccessAsync(ResourceType.Agents, ActionType.Execute);
+        if (!TenantScopePolicy.Allows(access, site?.ClientId ?? Guid.Empty, agent.SiteId))
+            return Result<Guid>.Failure(Error.Forbidden("Você não tem acesso a este agente."));
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = cmd.Action,
+            delaySeconds = cmd.DelaySeconds,
+            force = cmd.Force,
+            notifyUser = cmd.NotifyUser,
+            message = cmd.Reason
+        });
+        var command = new AgentCommand { AgentId = cmd.AgentId, CommandType = CommandType.PowerAction, Payload = payload };
+        var dispatched = await dispatcher.DispatchAsync(command, ct);
+        return Result<Guid>.Success(dispatched.Id);
+    }
+}
+
 public sealed class WakeOnLanCommandHandler(
     IAgentRepository agentRepo,
     ISiteRepository siteRepo,

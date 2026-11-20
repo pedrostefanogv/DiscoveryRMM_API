@@ -186,6 +186,44 @@ public class RemoteProxyPolicyInheritanceTests
         });
     }
 
+    // ── Serialização para o console ──────────────────────────────────────
+
+    [Test]
+    public async Task Politica_resolvida_serializa_entries_para_o_console()
+    {
+        // O console deriva os atalhos de navegação a partir de
+        // ResolvedConfiguration.RemoteProxy (endpoint /effective). Este teste
+        // fixa o CONTRATO de serialização: se Entries deixar de sair no JSON (ou
+        // mudar de forma), os atalhos da tela de proxy ficam vazios em silêncio.
+        await using var db = CreateDb();
+        var siteId = await SeedAsync(db,
+            server: null, client: null, site: ProxmoxSite, globalEnabled: true);
+
+        var resolved = await BuildResolver(db).ResolveForSiteAsync(siteId);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            resolved.RemoteProxy,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(root.TryGetProperty("mode", out var mode), Is.True);
+            Assert.That(mode.GetString(), Is.EqualTo(RemoteProxyPolicy.ModeAllowlist));
+
+            Assert.That(root.TryGetProperty("entries", out var entries), Is.True,
+                "o console lê 'entries' para montar os atalhos de navegação");
+            Assert.That(entries.GetArrayLength(), Is.EqualTo(1));
+
+            var first = entries[0];
+            Assert.That(first.GetProperty("cidr").GetString(), Is.EqualTo("192.168.10.0/24"));
+            Assert.That(first.GetProperty("ports").EnumerateArray().Select(p => p.GetInt32()),
+                Is.EqualTo(new[] { 8006 }));
+        });
+    }
+
     // ── Catálogo ─────────────────────────────────────────────────────────
 
     [Test]

@@ -104,7 +104,7 @@ public static class PowerCommandResultClassifier
         // fora de reentrega, apagado pela retenção) esconderia o fato de que nada
         // foi executado e o comando nunca mais rodaria. Failed torna o desfecho
         // visível e acionável.
-        var isManualPower = commandType is CommandType.Restart or CommandType.Shutdown;
+        var isManualPower = commandType is CommandType.Restart or CommandType.Shutdown or CommandType.PowerAction;
 
         var status = statusCode switch
         {

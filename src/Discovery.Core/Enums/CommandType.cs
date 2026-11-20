@@ -53,5 +53,11 @@ public enum CommandType
     // Sensores: pede ao agent para executar agora um conjunto de sensores
     // (payload { sensorIds?: string[], forceSync?: bool }). Disparado pela aba
     // "Sensores" do detalhe do agente.
-    RunSensors = 26
+    RunSensors = 26,
+
+    // Comando genérico de energia: o verbo vai no campo "action" do payload.
+    // Hoje expõe apenas "restart-firmware" (reinício direto no setup do
+    // firmware/BIOS, exclusivo de boot UEFI). Novos modos (opções avançadas,
+    // modo de segurança, etc.) entram como novos verbos neste mesmo tipo.
+    PowerAction = 27
 }

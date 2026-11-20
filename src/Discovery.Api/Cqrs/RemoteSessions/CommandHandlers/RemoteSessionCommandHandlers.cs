@@ -560,7 +560,13 @@ public sealed class StartRemoteSessionCommandHandler(
             maxResponseBytes = policy.MaxResponseBytes > 0
                 ? policy.MaxResponseBytes
                 : DefaultProxyMaxResponseBytes,
-            allowLoopback = policy.AllowLoopback
+            allowLoopback = policy.AllowLoopback,
+            // Equipamentos de rede (Proxmox, iDRAC, switches) servem HTTPS com
+            // certificado autoassinado: sem esta chave o proxy morre com
+            // "x509: certificate signed by unknown authority". O agent já lia
+            // "insecureSkipVerify" (session_tunnel_policy.go) — o servidor é que
+            // nunca enviava.
+            insecureSkipVerify = policy.InsecureSkipVerify
         };
     }
 

@@ -965,6 +965,31 @@ public class AgentsController : ControllerBase
             });
     }
 
+    /// <summary>
+    /// Comando genérico de energia. Hoje o único verbo exposto é
+    /// <c>restart-firmware</c>: reinicia direto no setup do firmware (BIOS/UEFI).
+    /// O agent valida a capacidade e devolve falha tipada em Legacy/CSM.
+    /// </summary>
+    [HttpPost("{id:guid}/power")]
+    [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> PowerAction(Guid id, [FromBody] PowerActionCommand cmd)
+    {
+        // Fail-fast do campo obrigatório: sem isto um payload sem "action" só
+        // falharia no validador do dispatcher (InvalidOperationException -> 500).
+        if (string.IsNullOrWhiteSpace(cmd.Action))
+            return BadRequest(new { error = "field 'action' is required." });
+
+        var result = await _mediator.Send(cmd with { AgentId = id });
+        return result.Match<IActionResult>(
+            success: commandId => Accepted(new { agentId = id, commandType = "poweraction", action = cmd.Action, commandId }),
+            failure: errors => errors[0].Code switch
+            {
+                "NotFound" => NotFound(new { error = errors[0].Message }),
+                "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, new { error = errors[0].Message }),
+                _ => BadRequest(new { error = errors[0].Message })
+            });
+    }
+
     [HttpPost("{id:guid}/wake-on-lan")]
     [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]
     public async Task<IActionResult> WakeOnLan(Guid id, CancellationToken ct = default)

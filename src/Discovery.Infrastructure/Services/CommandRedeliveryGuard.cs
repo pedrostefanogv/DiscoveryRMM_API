@@ -60,7 +60,7 @@ public sealed class CommandRedeliveryGuard(
     /// agente que confirmaria o comando, então cada reentrega é um novo reboot.
     /// </summary>
     internal static bool IsPowerCommand(CommandType commandType)
-        => commandType is CommandType.Restart or CommandType.Shutdown;
+        => commandType is CommandType.Restart or CommandType.Shutdown or CommandType.PowerAction;
 
     /// <summary>
     /// Verdadeiro quando o comando de patch termina com reinício/desligamento
