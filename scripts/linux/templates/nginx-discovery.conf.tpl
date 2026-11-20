@@ -156,6 +156,35 @@ client_max_body_size 64m;
     proxy_buffering off;
   }
 
+  # WebSocket do acesso remoto (WebRDP RDCleanPath e tunel do Proxy LAN).
+  #
+  # OBRIGATORIO ter location PROPRIO. O `location /api/` (acima) envia
+  # `Connection ""` ao upstream para preservar o keepalive — mas isso REMOVE o
+  # `Connection: Upgrade` de uma requisicao WebSocket. Sem esse header o ASP.NET
+  # Core nao reconhece o upgrade e o endpoint devolve
+  # HTTP 400 "Endpoint exige upgrade para WebSocket" (visto em producao no
+  # /tunnel/ws do WebRDP).
+  #
+  # O prefixo `^~` garante precedencia sobre o `location /api/` por prefixo.
+  # Mesmo padrao ja usado em /hubs/ (SignalR) e /nats/ (WebSocket do NATS).
+  #
+  # proxy_read_timeout 1h: uma sessao de acesso remoto dura o quanto o operador
+  # precisar; o default de 60s derrubaria a conexao no meio do uso.
+  # proxy_buffering off: frames de tela/RDP devem fluir sem spool em disco.
+  location ^~ /api/v1/remote-sessions {
+    proxy_pass http://discovery_api_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    proxy_buffering off;
+  }
+
   location /hubs/ {
     proxy_pass http://discovery_api_backend;
     proxy_http_version 1.1;
