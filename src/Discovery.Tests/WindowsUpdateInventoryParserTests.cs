@@ -116,6 +116,30 @@ public class WindowsUpdateInventoryParserTests
     }
 
     [Test]
+    public void ParsesIsOptionalFlag()
+    {
+        var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""
+        [
+          {
+            "updateKey": "guid:aaaaaaaa-1111-2222-3333-444455556666:1",
+            "title": "Optional Preview Update",
+            "isPending": true,
+            "isOptional": true
+          },
+          {
+            "updateKey": "guid:bbbbbbbb-1111-2222-3333-444455556666:1",
+            "title": "Regular Update",
+            "isPending": true
+          }
+        ]
+        """));
+
+        Assert.That(entries, Has.Count.EqualTo(2));
+        Assert.That(entries[0].IsOptional, Is.True);
+        Assert.That(entries[1].IsOptional, Is.False);
+    }
+
+    [Test]
     public void ParsesSeveritySourceAndRejectsUnknownValues()
     {
         var entries = WindowsUpdateInventoryParser.ParseUpdates(Json("""

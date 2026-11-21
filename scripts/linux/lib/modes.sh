@@ -212,6 +212,7 @@ update_all_components() {
   # Storage de objetos (mesma garantia do update_api): persiste as variaveis e
   # confere servico/bucket/configuracao — sem instalar/atualizar nada.
   update_object_storage_environment_file || warn "Falha ao atualizar variaveis de storage (nao-bloqueante)"
+  ensure_object_storage || warn "Falha ao garantir o object storage (nao-bloqueante)"
   log "Reiniciando servicos..."
   if sudo systemctl list-unit-files --no-legend discovery-api.service 2>/dev/null | grep -q .; then
     # Health check pos-restart com rollback automatico para a release anterior.
@@ -320,8 +321,36 @@ apply_nats_reconfiguration_only() {
 
   DISCOVERY_OPS_DIR="${DISCOVERY_OPS_DIR:-/opt/discovery-ops}"
 
-  prompt_nats_configuration
-  prompt_remote_session_duration
+  local nats_step=1 rc=0
+  local prev_back_hint="${WIZARD_SHOW_BACK_HINT:-0}"
+  WIZARD_SHOW_BACK_HINT=1
+  WIZARD_REPROMPT=0
+  while (( nats_step <= 2 )); do
+    rc=0
+    case "$nats_step" in
+      1) prompt_nats_configuration || rc=$? ;;
+      2) prompt_remote_session_duration || rc=$? ;;
+    esac
+    if (( rc == ${WIZARD_BACK_RC:-10} )); then
+      if (( nats_step > 1 )); then
+        nats_step=$((nats_step - 1))
+        WIZARD_REPROMPT=1
+      else
+        echo "Voce ja esta na primeira etapa." >&2
+        WIZARD_REPROMPT=1
+      fi
+      continue
+    elif (( rc != 0 )); then
+      WIZARD_SHOW_BACK_HINT="$prev_back_hint"
+      WIZARD_REPROMPT=0
+      return "$rc"
+    fi
+    WIZARD_REPROMPT=0
+    nats_step=$((nats_step + 1))
+  done
+  WIZARD_SHOW_BACK_HINT="$prev_back_hint"
+  WIZARD_REPROMPT=0
+
   validate_security_inputs
   normalize_nats_settings
   normalize_site_realtime_settings
@@ -728,7 +757,7 @@ switch_tls_provider() {
   # Persiste as credenciais do novo provedor ANTES de emitir: o template ACME
   # le os valores do discovery.env (nunca via argv — segredo em /proc).
   local tmp_file; tmp_file="$(mktemp)"
-  cp "$env_file" "$tmp_file"
+  sudo cat "$env_file" > "$tmp_file"
 
   _set_env_key() {
     local key="$1" value="$2"
@@ -824,43 +853,43 @@ data_cleanup_menu() {
 
 cleanup_agent_builds() {
   local builds_dir="${DISCOVERY_API_SHARED:-/opt/discovery-api/shared}/agent-update-builds"
-  if [[ ! -d "$builds_dir" ]]; then
+  if ! sudo test -d "$builds_dir"; then
     echo "[cleanup] diretório não existe: $builds_dir"
     return
   fi
-  local total_size before after
-  before=$(du -sh "$builds_dir" 2>/dev/null | cut -f1)
+  local before after
+  before=$(sudo du -sh "$builds_dir" 2>/dev/null | cut -f1)
   echo "[cleanup] builds antigos — antes: $before"
   # Remove TODOS os builds EXCETO a versão ativa (a mais recente).
   local active_version
-  active_version=$(ls "$builds_dir/agent-updates/current/" 2>/dev/null | sort -V | tail -1)
+  active_version=$(sudo ls "$builds_dir/agent-updates/current/" 2>/dev/null | sort -V | tail -1)
   if [[ -n "$active_version" ]]; then
     echo "[cleanup] versão ativa: $active_version (preservada)"
-    for ver_dir in "$builds_dir/agent-updates/current/"*/; do
-      local ver_name
+    local ver_dir ver_name size
+    while IFS= read -r ver_dir; do
+      [[ -n "$ver_dir" ]] || continue
       ver_name=$(basename "$ver_dir")
       if [[ "$ver_name" != "$active_version" ]]; then
-        local size
-        size=$(du -sh "$ver_dir" 2>/dev/null | cut -f1)
+        size=$(sudo du -sh "$ver_dir" 2>/dev/null | cut -f1)
         echo "[cleanup] removendo build antigo: $ver_name ($size)"
-        rm -rf "$ver_dir"
+        sudo rm -rf "$ver_dir"
       fi
-    done
+    done < <(sudo find "$builds_dir/agent-updates/current" -mindepth 1 -maxdepth 1 -type d 2>/dev/null || true)
   fi
   # Remove diretórios vazios.
-  find "$builds_dir" -type d -empty -delete 2>/dev/null || true
-  after=$(du -sh "$builds_dir" 2>/dev/null | cut -f1)
+  sudo find "$builds_dir" -type d -empty -delete 2>/dev/null || true
+  after=$(sudo du -sh "$builds_dir" 2>/dev/null | cut -f1)
   echo "[cleanup] builds antigos — depois: $after"
 }
 
 cleanup_journal() {
   local before
-  before=$(journalctl --disk-usage 2>/dev/null | grep -oP "[\d.]+[GKM]" | head -1 || echo "?")
+  before=$(sudo journalctl --disk-usage 2>/dev/null | grep -oP "[\d.]+[GKM]" | head -1 || echo "?")
   echo "[cleanup] journal — antes: $before"
   # Reduz o journal para 200 MB máximo e 2 semanas de retenção.
-  journalctl --vacuum-size=200M --vacuum-time=14d 2>/dev/null || true
+  sudo journalctl --vacuum-size=200M --vacuum-time=14d 2>/dev/null || true
   local after
-  after=$(journalctl --disk-usage 2>/dev/null | grep -oP "[\d.]+[GKM]" | head -1 || echo "?")
+  after=$(sudo journalctl --disk-usage 2>/dev/null | grep -oP "[\d.]+[GKM]" | head -1 || echo "?")
   echo "[cleanup] journal — depois: $after"
 }
 
@@ -881,9 +910,9 @@ cleanup_go_cache() {
 cleanup_temp_files() {
   echo "[cleanup] limpando temp files..."
   # Staging de instaladores P2P (agent-side, já limpos pelo agente)
-  rm -rf /tmp/Discovery 2>/dev/null || true
-  rm -rf "$DISCOVERY_API_BASE/shared/tmp" 2>/dev/null || true
+  sudo rm -rf /tmp/Discovery 2>/dev/null || true
+  sudo rm -rf "${DISCOVERY_API_BASE:-/opt/discovery-api}/shared/tmp" 2>/dev/null || true
   # Temp do sistema (arquivos com mais de 7 dias)
-  find /tmp -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
+  sudo find /tmp -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
   echo "[cleanup] temp files limpos"
 }

@@ -69,6 +69,34 @@ validate_dotnet_runtime() {
   esac
 }
 
+map_arch_to_dotnet_install_arch() {
+  local arch_raw="${1:-}"
+  local arch
+  arch="$(printf '%s' "$arch_raw" | tr '[:upper:]' '[:lower:]')"
+
+  case "$arch" in
+    amd64|x86_64)  printf 'x64'   ;;
+    arm64|aarch64) printf 'arm64' ;;
+    armhf|armv7l)  printf 'arm'   ;;
+    *)             return 1       ;;
+  esac
+}
+
+# ── Wizard navigation helpers ──────────────────────────────────────────────
+WIZARD_BACK_RC=10
+WIZARD_REPROMPT=0
+WIZARD_SHOW_BACK_HINT=0
+
+is_wizard_back_input() {
+  local raw="${1:-}"
+  local normalized
+  normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$normalized" in
+    voltar|back|\<) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 wizard_step_label() {
   local legacy_root_step="${1:-}"
   local step_label="${2:-$legacy_root_step}"
@@ -89,6 +117,9 @@ wizard_header() {
   echo "----------------------------------------"
   echo " $title"
   echo "----------------------------------------"
+  if [[ "${NON_INTERACTIVE:-0}" -eq 0 && "${WIZARD_SHOW_BACK_HINT:-0}" -eq 1 ]]; then
+    echo " Dica: digite 'voltar' (ou '<') para retornar a etapa anterior."
+  fi
 }
 
 refresh_sudo_credentials() {
@@ -397,4 +428,50 @@ prune_backups() {
     sudo rm -f "$f" 2>/dev/null || true
     log "Backup antigo removido: $f"
   done
+}
+
+# Carrega multiplas chaves de um arquivo KEY=VALUE em uma unica chamada awk,
+# preenchendo apenas variaveis que estejam vazias/unset no ambiente atual.
+load_env_keys_if_unset() {
+  local env_file="$1"
+  shift
+  (( $# > 0 )) || return 0
+  sudo test -f "$env_file" 2>/dev/null || return 0
+
+  local -a pending_keys=()
+  local k
+  for k in "$@"; do
+    [[ -n "$k" ]] || continue
+    [[ -z "${!k:-}" ]] && pending_keys+=("$k")
+  done
+  (( ${#pending_keys[@]} > 0 )) || return 0
+
+  local keys_csv
+  keys_csv="$(IFS=,; printf '%s' "${pending_keys[*]}")"
+
+  local line key val
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    if [[ -n "$key" && -z "${!key:-}" ]]; then
+      printf -v "$key" '%s' "$val"
+    fi
+  done < <(sudo awk -v keys="$keys_csv" '
+    BEGIN {
+      n = split(keys, arr, ",")
+      for (i = 1; i <= n; i++) want[arr[i]] = 1
+    }
+    /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+    {
+      sub(/\r$/, "")
+      eq = index($0, "=")
+      if (eq <= 1) next
+      k = substr($0, 1, eq - 1)
+      if ((k in want) && !(k in seen)) {
+        seen[k] = 1
+        print k "=" substr($0, eq + 1)
+      }
+    }
+  ' "$env_file" 2>/dev/null || true)
 }

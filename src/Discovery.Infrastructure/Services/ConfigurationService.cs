@@ -100,6 +100,12 @@ public class ConfigurationService : IConfigurationService
                 converted = MergeAiSecrets(aiJson, config.AIIntegrationSettingsJson);
             }
 
+            if (prop.Name.Equals(nameof(ServerConfiguration.RemoteAccessWebRtcPolicyJson), StringComparison.OrdinalIgnoreCase)
+                && converted is string webRtcJson)
+            {
+                converted = MergeWebRtcSecrets(webRtcJson, config.RemoteAccessWebRtcPolicyJson);
+            }
+
             converted = ProtectPatchValue(key, converted);
             prop.SetValue(config, converted);
             await _audit.LogChangeAsync("Server", config.Id, key, MaskForAudit(key, oldValue), MaskForAudit(key, converted?.ToString()), null, updatedBy);
@@ -199,6 +205,11 @@ public class ConfigurationService : IConfigurationService
         config.CreatedBy = existing.CreatedBy;
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
+        if (!string.IsNullOrWhiteSpace(config.RemoteAccessWebRtcPolicyJson))
+        {
+            config.RemoteAccessWebRtcPolicyJson = MergeWebRtcSecrets(
+                config.RemoteAccessWebRtcPolicyJson, existing.RemoteAccessWebRtcPolicyJson);
+        }
         ProtectSensitiveData(config);
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
             EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
@@ -235,6 +246,11 @@ public class ConfigurationService : IConfigurationService
             if (prop is null || !prop.CanWrite) continue;
             var oldValue = prop.GetValue(config)?.ToString();
             var converted = ConvertToPropertyValue(value, prop.PropertyType);
+            if (prop.Name.Equals(nameof(ClientConfiguration.RemoteAccessWebRtcPolicyJson), StringComparison.OrdinalIgnoreCase)
+                && converted is string webRtcJson)
+            {
+                converted = MergeWebRtcSecrets(webRtcJson, config.RemoteAccessWebRtcPolicyJson);
+            }
             converted = ProtectPatchValue(key, converted);
             EnsureAllowedPatchValue("Client", key, converted, blockedFields);
             prop.SetValue(config, converted);
@@ -336,6 +352,11 @@ public class ConfigurationService : IConfigurationService
         config.CreatedBy = existing.CreatedBy;
         config.Version = existing.Version + 1;
         config.UpdatedBy = updatedBy;
+        if (!string.IsNullOrWhiteSpace(config.RemoteAccessWebRtcPolicyJson))
+        {
+            config.RemoteAccessWebRtcPolicyJson = MergeWebRtcSecrets(
+                config.RemoteAccessWebRtcPolicyJson, existing.RemoteAccessWebRtcPolicyJson);
+        }
         ProtectSensitiveData(config);
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
             EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
@@ -382,6 +403,11 @@ public class ConfigurationService : IConfigurationService
             if (prop is null || !prop.CanWrite) continue;
             var oldValue = prop.GetValue(config)?.ToString();
             var converted = ConvertToPropertyValue(value, prop.PropertyType);
+            if (prop.Name.Equals(nameof(ClientConfiguration.RemoteAccessWebRtcPolicyJson), StringComparison.OrdinalIgnoreCase)
+                && converted is string webRtcJson)
+            {
+                converted = MergeWebRtcSecrets(webRtcJson, config.RemoteAccessWebRtcPolicyJson);
+            }
             converted = ProtectPatchValue(key, converted);
             EnsureAllowedPatchValue("Site", key, converted, blockedFields);
             prop.SetValue(config, converted);
@@ -688,6 +714,41 @@ public class ConfigurationService : IConfigurationService
                 incoming.EmbeddingApiKey = existing.EmbeddingApiKey;
 
             return JsonSerializer.Serialize(incoming, JsonOptions);
+        }
+        catch
+        {
+            return incomingJson;
+        }
+    }
+
+    /// <summary>
+    /// Preserva <c>Ice.TurnCredential</c> quando o console reenvia a política sem
+    /// preencher a senha (o GET redige o segredo e emite <c>turnCredentialConfigured</c>).
+    /// Só preserva se ainda houver URLs TURN configuradas; remover todos os TURN
+    /// limpa a credencial junto.
+    /// </summary>
+    internal static string MergeWebRtcSecrets(string? incomingJson, string? existingJson)
+    {
+        if (string.IsNullOrWhiteSpace(incomingJson) || string.IsNullOrWhiteSpace(existingJson))
+            return incomingJson ?? string.Empty;
+
+        try
+        {
+            var incoming = JsonSerializer.Deserialize<Discovery.Core.Configuration.RemoteAccessWebRtcPolicy>(incomingJson, JsonOptions);
+            var existing = JsonSerializer.Deserialize<Discovery.Core.Configuration.RemoteAccessWebRtcPolicy>(existingJson, JsonOptions);
+            if (incoming?.Ice is null || existing?.Ice is null)
+                return incomingJson;
+
+            var hasTurnUrls = incoming.Ice.TurnUrls?.Any(u => !string.IsNullOrWhiteSpace(u)) ?? false;
+            if (hasTurnUrls
+                && string.IsNullOrWhiteSpace(incoming.Ice.TurnCredential)
+                && !string.IsNullOrWhiteSpace(existing.Ice.TurnCredential))
+            {
+                incoming.Ice.TurnCredential = existing.Ice.TurnCredential;
+                return incoming.ToJson();
+            }
+
+            return incomingJson;
         }
         catch
         {

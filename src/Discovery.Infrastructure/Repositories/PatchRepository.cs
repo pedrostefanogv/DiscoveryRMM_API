@@ -38,6 +38,8 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         string? severity,
         bool descending,
         string? source = null,
+        string? updateType = null,
+        bool? isOptional = null,
         CancellationToken ct = default)
     {
         var safePage = Math.Max(1, page);
@@ -95,6 +97,24 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             var severityValue = severity.Trim();
             query = query.Where(update => update.Severity != null &&
                 EF.Functions.ILike(update.Severity, severityValue));
+        }
+
+        switch (updateType?.Trim().ToLowerInvariant())
+        {
+            case "feature":
+                query = query.Where(update => update.UpdateType == "feature");
+                break;
+            case "driver":
+                query = query.Where(update => update.UpdateType == "driver");
+                break;
+            case "software":
+                query = query.Where(update => update.UpdateType == null || update.UpdateType == "software");
+                break;
+        }
+
+        if (isOptional.HasValue)
+        {
+            query = query.Where(update => update.IsOptional == isOptional.Value);
         }
 
         var patterns = SoftwareSearchTerms.BuildPatterns(search);
@@ -593,6 +613,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
         row.IsHidden = entry.IsHidden;
         row.IsDownloaded = entry.IsDownloaded;
         row.IsMandatory = entry.IsMandatory;
+        row.IsOptional = entry.IsOptional;
         row.RequiresReboot = entry.RequiresReboot;
         row.MaxDownloadSize = entry.MaxDownloadSize;
         row.MinDownloadSize = entry.MinDownloadSize;
@@ -1101,9 +1122,16 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             .Select(group => new PatchInventoryGroup
             {
                 GroupKey = group.Key,
+                KbIds = group.Max(row => row.Update.KbIds),
                 Title = group.Max(row => row.Update.Title) ?? string.Empty,
+                Description = group.Max(row => row.Update.Description),
                 Classification = group.Max(row => row.Update.Classification),
                 Severity = group.Max(row => row.Update.Severity),
+                SupportUrl = group.Max(row => row.Update.SupportUrl),
+                UpdateType = group.Max(row => row.Update.UpdateType),
+                IsOptional = group.Count(row => row.Update.IsOptional) > 0,
+                RequiresReboot = group.Count(row => row.Update.RequiresReboot) > 0,
+                Source = group.Max(row => row.Update.Source),
                 PublishedAt = group.Max(row => row.Update.PublishedAt),
                 PendingAgents = group.Count(row => row.Update.IsPending),
                 InstalledAgents = group.Count(row => row.Update.IsInstalled),

@@ -302,6 +302,9 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
         // auto-aprovado com duplo consentimento; update de OS respeita "os".
         // Aprovação MANUAL continua possível para qualquer origem (operador
         // decide caso a caso), mas sem consentimento não há automação.
+        if (PatchSourcePolicy.IsWaaSFeatureSource(update.Source))
+            return false;
+
         if (PatchSourcePolicy.IsThirdPartySource(update.Source))
         {
             if (!PatchSourcePolicy.ThirdPartyConsented(policy.Sources, policy.AllowThirdPartyApps))
@@ -314,11 +317,16 @@ public sealed class PatchApprovalResolver(DiscoveryDbContext db) : IPatchApprova
             return false;
         }
 
-        var severities = PatchJson.ParseStringArray(policy.AutoApproveSeverities);
-        if (severities.Count > 0 && !string.IsNullOrWhiteSpace(update.Severity) &&
-            severities.Any(value => string.Equals(value, update.Severity, StringComparison.OrdinalIgnoreCase)))
+        // Updates opcionais/previas nao devem ser auto-aprovados apenas por
+        // severidade generica: exigem classificacao explicita ou aprovacao manual.
+        if (!update.IsOptional)
         {
-            return true;
+            var severities = PatchJson.ParseStringArray(policy.AutoApproveSeverities);
+            if (severities.Count > 0 && !string.IsNullOrWhiteSpace(update.Severity) &&
+                severities.Any(value => string.Equals(value, update.Severity, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
         }
 
         var classifications = PatchJson.ParseStringArray(policy.AutoApproveClassifications);

@@ -21,6 +21,7 @@ public class AgentWindowsUpdateEntry
     public bool IsHidden { get; set; }
     public bool IsDownloaded { get; set; }
     public bool IsMandatory { get; set; }
+    public bool IsOptional { get; set; }
     public bool RequiresReboot { get; set; }
     public long? MaxDownloadSize { get; set; }
     public long? MinDownloadSize { get; set; }
@@ -182,8 +183,14 @@ public class PatchInventoryGroup
     public string GroupKey { get; set; } = string.Empty;
     public string? KbIds { get; set; }
     public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
     public string? Classification { get; set; }
     public string? Severity { get; set; }
+    public string? SupportUrl { get; set; }
+    public string? UpdateType { get; set; }
+    public bool IsOptional { get; set; }
+    public bool RequiresReboot { get; set; }
+    public string? Source { get; set; }
     public DateTime? PublishedAt { get; set; }
     public int PendingAgents { get; set; }
     public int InstalledAgents { get; set; }

@@ -7,39 +7,94 @@ prompt_if_empty() {
   local secret="${3:-0}"
   local default_value="${4:-}"
   local current_value="${!var_name:-}"
+  local reprompt="${WIZARD_REPROMPT:-0}"
 
-  if [[ -n "$current_value" ]]; then
-    return
+  if [[ -n "$current_value" && "$reprompt" -eq 0 ]]; then
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$current_value" ]]; then
+      return 0
+    fi
     if [[ -n "$default_value" ]]; then
       printf -v "$var_name" '%s' "$default_value"
-      return
+      return 0
     fi
     fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
   fi
 
+  local effective_default="${current_value:-$default_value}"
   local input=""
-  if [[ "$secret" -eq 1 ]]; then
-    if [[ -n "$default_value" ]]; then
-      read -r -s -p "$prompt_text (pressione Enter para usar o valor padrao): " input
-      input="${input:-$default_value}"
+  while true; do
+    if [[ "$secret" -eq 1 ]]; then
+      if [[ -n "$current_value" ]]; then
+        read -r -s -p "$prompt_text (Enter para manter atual): " input
+      elif [[ -n "$effective_default" ]]; then
+        read -r -s -p "$prompt_text (pressione Enter para usar o valor padrao): " input
+      else
+        read -r -s -p "$prompt_text: " input
+      fi
+      printf '\n'
     else
-      read -r -s -p "$prompt_text" input
+      if [[ -n "$effective_default" ]]; then
+        read -r -p "$prompt_text [$effective_default]: " input
+      else
+        read -r -p "$prompt_text: " input
+      fi
     fi
-    printf '\n'
-  else
-    if [[ -n "$default_value" ]]; then
-      read -r -p "$prompt_text [$default_value]: " input
-      input="${input:-$default_value}"
-    else
-      read -r -p "$prompt_text: " input
+
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
     fi
+
+    input="${input:-$effective_default}"
+    if [[ -n "$input" ]]; then
+      printf -v "$var_name" '%s' "$input"
+      return 0
+    fi
+    echo "Valor obrigatorio nao informado para $var_name. Tente novamente (ou digite 'voltar')." >&2
+  done
+}
+
+prompt_yes_no() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local default_yn="${3:-n}"
+  local current_value="${!var_name:-}"
+  local reprompt="${WIZARD_REPROMPT:-0}"
+
+  if [[ -n "$current_value" && "$reprompt" -eq 0 ]]; then
+    return 0
   fi
 
-  [[ -n "$input" ]] || fail "Valor obrigatorio nao informado para $var_name"
-  printf -v "$var_name" '%s' "$input"
+  local norm_default="$default_yn"
+  if [[ -n "$current_value" ]]; then
+    case "$(printf '%s' "$current_value" | tr '[:upper:]' '[:lower:]')" in
+      1|true|yes|y|sim|s) norm_default="y" ;;
+      0|false|no|n|nao)   norm_default="n" ;;
+    esac
+  fi
+
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    printf -v "$var_name" '%s' "$norm_default"
+    return 0
+  fi
+
+  local input="" normalized=""
+  while true; do
+    read -r -p "$prompt_text [$norm_default]: " input
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    input="${input:-$norm_default}"
+    normalized="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$normalized" in
+      1|true|yes|y|sim|s) printf -v "$var_name" '%s' "y"; return 0 ;;
+      0|false|no|n|nao)   printf -v "$var_name" '%s' "n"; return 0 ;;
+      *) echo "Resposta invalida: '$input'. Digite y/n (ou s/n, ou 'voltar')." >&2 ;;
+    esac
+  done
 }
 
 prompt_repo_url() {
@@ -47,35 +102,59 @@ prompt_repo_url() {
   local prompt_text="$2"
   local default_value="${3:-}"
   local current_value="${!var_name:-}"
+  local reprompt="${WIZARD_REPROMPT:-0}"
 
-  if [[ -n "$current_value" ]]; then
+  if [[ -n "$current_value" && "$reprompt" -eq 0 ]]; then
     is_valid_repo_url "$current_value" || fail "URL invalida para $var_name: $current_value"
-    return
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$current_value" ]]; then
+      is_valid_repo_url "$current_value" || fail "URL invalida para $var_name: $current_value"
+      return 0
+    fi
     if [[ -n "$default_value" ]]; then
       printf -v "$var_name" '%s' "$default_value"
-      return
+      return 0
     fi
     fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
   fi
 
+  local effective_default="${current_value:-$default_value}"
   while true; do
     local input=""
-    if [[ -n "$default_value" ]]; then
-      read -r -p "$prompt_text [$default_value]: " input
-      input="${input:-$default_value}"
+    if [[ -n "$effective_default" ]]; then
+      read -r -p "$prompt_text [$effective_default]: " input
     else
       read -r -p "$prompt_text: " input
     fi
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    input="${input:-$effective_default}"
     [[ -n "$input" ]] || { echo "Valor obrigatorio nao informado para $var_name" >&2; continue; }
     if is_valid_repo_url "$input"; then
       printf -v "$var_name" '%s' "$input"
-      return
+      return 0
     fi
     echo "URL invalida. Use https://.../repo.git ou git@host:org/repo.git" >&2
   done
+}
+
+is_valid_postgres_identifier() {
+  [[ "${1:-}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]]
+}
+
+is_valid_postgres_password_value() {
+  local pw="${1:-}"
+  (( ${#pw} >= 12 )) || return 1
+  local pw_lower weak
+  pw_lower="$(printf '%s' "$pw" | tr '[:upper:]' '[:lower:]')"
+  for weak in "troque-esta-senha" "changeme" "changeme123" "password" "password1" "password123" "123456" "12345678" "admin123" "discovery" "discovery123"; do
+    [[ "$pw_lower" == "$weak" ]] && return 1
+  done
+  return 0
 }
 
 prompt_postgres_password() {
@@ -86,37 +165,69 @@ prompt_postgres_password() {
       POSTGRES_PASSWORD="$existing_password"
       POSTGRES_PASSWORD_AUTO=0
       log "Senha PostgreSQL carregada do discovery.env existente."
-      return
     fi
   fi
 
-  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
-    POSTGRES_PASSWORD_AUTO=0
-    return
+  if [[ -n "${POSTGRES_PASSWORD:-}" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
+    POSTGRES_PASSWORD_AUTO="${POSTGRES_PASSWORD_AUTO:-0}"
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+      POSTGRES_PASSWORD_AUTO="${POSTGRES_PASSWORD_AUTO:-0}"
+      return 0
+    fi
     POSTGRES_PASSWORD="$(generate_random_password 24)"
     POSTGRES_PASSWORD_AUTO=1
     log "POSTGRES_PASSWORD nao informado; gerando senha aleatoria."
-    return
+    return 0
   fi
 
   local generated_password
   generated_password="$(generate_random_password 24)"
-  echo "Entrada oculta. Pressione Enter para usar a senha gerada automaticamente."
-  local input=""
-  read -r -s -p "Senha PostgreSQL: " input
-  printf '\n'
-  if [[ -z "$input" ]]; then
-    POSTGRES_PASSWORD="$generated_password"
-    POSTGRES_PASSWORD_AUTO=1
-    log "Senha PostgreSQL nao informada; gerada automaticamente."
-    return
+  if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+    echo "Entrada oculta. Pressione Enter para manter a senha atual."
+  else
+    echo "Entrada oculta. Pressione Enter para usar a senha gerada automaticamente."
   fi
 
-  POSTGRES_PASSWORD_AUTO=0
-  POSTGRES_PASSWORD="$input"
+  local input=""
+  while true; do
+    read -r -s -p "Senha PostgreSQL: " input
+    printf '\n'
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    if [[ -z "$input" ]]; then
+      if [[ -n "${POSTGRES_PASSWORD:-}" ]]; then
+        return 0
+      fi
+      POSTGRES_PASSWORD="$generated_password"
+      POSTGRES_PASSWORD_AUTO=1
+      log "Senha PostgreSQL nao informada; gerada automaticamente."
+      return 0
+    fi
+    if is_valid_postgres_password_value "$input"; then
+      POSTGRES_PASSWORD_AUTO=0
+      POSTGRES_PASSWORD="$input"
+      return 0
+    fi
+    echo "Senha PostgreSQL invalida: minimo 12 caracteres e nao pode ser um placeholder comum (ex: admin123)." >&2
+  done
+}
+
+prompt_postgres_configuration() {
+  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "7/10" "7/10")"
+  echo "O instalador cria o usuario e o database se nao existirem."
+  echo "----------------------------------------"
+  prompt_validated_value POSTGRES_DB "Nome do database PostgreSQL" "discovery" \
+    is_valid_postgres_identifier \
+    "Nome de database invalido: use letras/digitos/underscore (ate 63 chars, iniciando por letra ou _)." || return $?
+  prompt_validated_value POSTGRES_USER "Usuario PostgreSQL" "discovery_app" \
+    is_valid_postgres_identifier \
+    "Usuario PostgreSQL invalido: use letras/digitos/underscore (ate 63 chars, iniciando por letra ou _)." || return $?
+  prompt_postgres_password || return $?
 }
 
 generate_random_nats_user() {
@@ -126,64 +237,107 @@ generate_random_nats_user() {
   printf '%s' "$generated_user"
 }
 
+is_valid_nats_user_value() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+is_valid_nats_password_value() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9._+!@#%^*-]{12,128}$ ]]
+}
+
 prompt_nats_user() {
-  if [[ -n "${NATS_USER:-}" ]]; then
+  if [[ -n "${NATS_USER:-}" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
     NATS_USER_AUTO="${NATS_USER_AUTO:-0}"
-    return
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "${NATS_USER:-}" ]]; then
+      NATS_USER_AUTO="${NATS_USER_AUTO:-0}"
+      return 0
+    fi
     NATS_USER="$(generate_random_nats_user)"
     NATS_USER_AUTO=1
     log "NATS_USER nao informado; gerando usuario aleatorio."
-    return
+    return 0
   fi
 
-  local generated_user
+  local generated_user default_display
   generated_user="$(generate_random_nats_user)"
-  echo "Pressione Enter para usar um usuario NATS gerado automaticamente."
+  default_display="${NATS_USER:-$generated_user}"
+  echo "Pressione Enter para usar [$default_display]."
   local input=""
-  read -r -p "Usuario NATS [$generated_user]: " input
-  input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  if [[ -z "$input" ]]; then
-    NATS_USER="$generated_user"
-    NATS_USER_AUTO=1
-    log "Usuario NATS nao informado; gerado automaticamente."
-    return
-  fi
-
-  NATS_USER_AUTO=0
-  NATS_USER="$input"
+  while true; do
+    read -r -p "Usuario NATS [$default_display]: " input
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [[ -z "$input" ]]; then
+      if [[ -n "${NATS_USER:-}" ]]; then
+        return 0
+      fi
+      NATS_USER="$generated_user"
+      NATS_USER_AUTO=1
+      log "Usuario NATS nao informado; gerado automaticamente."
+      return 0
+    fi
+    if is_valid_nats_user_value "$input"; then
+      NATS_USER_AUTO=0
+      NATS_USER="$input"
+      return 0
+    fi
+    echo "Usuario NATS invalido: use 1-64 caracteres de [A-Za-z0-9._-]." >&2
+  done
 }
 
 prompt_nats_password() {
-  if [[ -n "${NATS_PASSWORD:-}" ]]; then
+  if [[ -n "${NATS_PASSWORD:-}" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
     NATS_PASSWORD_AUTO="${NATS_PASSWORD_AUTO:-0}"
-    return
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "${NATS_PASSWORD:-}" ]]; then
+      NATS_PASSWORD_AUTO="${NATS_PASSWORD_AUTO:-0}"
+      return 0
+    fi
     NATS_PASSWORD="$(generate_random_password 24)"
     NATS_PASSWORD_AUTO=1
     log "NATS_PASSWORD nao informado; gerando senha aleatoria."
-    return
+    return 0
   fi
 
   local generated_password
   generated_password="$(generate_random_password 24)"
-  echo "Entrada oculta. Pressione Enter para usar uma senha NATS gerada automaticamente."
-  local input=""
-  read -r -s -p "Senha NATS: " input
-  printf '\n'
-  if [[ -z "$input" ]]; then
-    NATS_PASSWORD="$generated_password"
-    NATS_PASSWORD_AUTO=1
-    log "Senha NATS nao informada; gerada automaticamente."
-    return
+  if [[ -n "${NATS_PASSWORD:-}" ]]; then
+    echo "Entrada oculta. Pressione Enter para manter a senha NATS atual."
+  else
+    echo "Entrada oculta. Pressione Enter para usar uma senha NATS gerada automaticamente."
   fi
-
-  NATS_PASSWORD_AUTO=0
-  NATS_PASSWORD="$input"
+  local input=""
+  while true; do
+    read -r -s -p "Senha NATS: " input
+    printf '\n'
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    if [[ -z "$input" ]]; then
+      if [[ -n "${NATS_PASSWORD:-}" ]]; then
+        return 0
+      fi
+      NATS_PASSWORD="$generated_password"
+      NATS_PASSWORD_AUTO=1
+      log "Senha NATS nao informada; gerada automaticamente."
+      return 0
+    fi
+    if is_valid_nats_password_value "$input"; then
+      NATS_PASSWORD_AUTO=0
+      NATS_PASSWORD="$input"
+      return 0
+    fi
+    echo "Senha NATS invalida: use 12-128 caracteres de [A-Za-z0-9._+!@#%^*-] (sem espacos, aspas, \$ ou backtick)." >&2
+  done
 }
 
 # ── Cloudflare Tunnel ──────────────────────────────────────────────────────
@@ -192,12 +346,16 @@ prompt_nats_password() {
 # montado (cloudflared tunnel run --token ... / cloudflared service install ...).
 # Aceitamos o comando inteiro e extraimos o token; o token puro tambem vale.
 prompt_cloudflare_tunnel_token() {
-  if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+  if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
     normalize_cloudflare_tunnel_token
-    return
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+      normalize_cloudflare_tunnel_token
+      return 0
+    fi
     fail "Variavel obrigatoria ausente para modo nao interativo: CLOUDFLARE_TUNNEL_TOKEN"
   fi
 
@@ -209,17 +367,30 @@ prompt_cloudflare_tunnel_token() {
 
   while true; do
     local input=""
-    read -r -s -p "Cloudflare Tunnel token/comando (entrada oculta): " input
+    if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+      read -r -s -p "Cloudflare Tunnel token/comando (Enter para manter atual): " input
+    else
+      read -r -s -p "Cloudflare Tunnel token/comando (entrada oculta): " input
+    fi
     printf '\n'
+
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+
     # Um paste do painel costuma trazer 2-3 linhas (service install + tunnel run).
     # Consumir o restante evita que elas sejam lidas como resposta do proximo prompt.
     drain_cloudflare_tunnel_paste
+
+    if [[ -z "$input" && -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+      return 0
+    fi
 
     local extracted
     extracted="$(extract_cloudflare_tunnel_token "$input")"
     if is_valid_cloudflare_tunnel_token "$extracted"; then
       printf -v CLOUDFLARE_TUNNEL_TOKEN '%s' "$extracted"
-      return
+      return 0
     fi
 
     echo "Nao foi possivel identificar o token do Cloudflare no texto informado." >&2
@@ -246,7 +417,7 @@ drain_cloudflare_tunnel_paste() {
 
 prompt_nats_configuration() {
   load_existing_nats_defaults
-  wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/9" "7/8")"
+  wizard_header "Mensageria (NATS)" "$(wizard_step_label "8/10" "8/10")"
   echo "Configure as credenciais e hosts do NATS local."
   echo "Esses dados sao usados pela API e agentes para mensagens."
   echo "Se usuario ou senha ficarem em branco, o instalador gera valores aleatorios."
@@ -254,15 +425,27 @@ prompt_nats_configuration() {
   echo "Para ajustar TTL/limites, use as variaveis NATS_JS_* no arquivo de config."
   echo "----------------------------------------"
 
-  prompt_nats_user
-  prompt_nats_password
-  prompt_if_empty NATS_AUTH_USER "Usuario de bypass da API no NATS (auth_users)" 0 "$NATS_USER"
-  prompt_if_empty NATS_AUTH_PASSWORD "Senha de bypass da API no NATS" 1 "$NATS_PASSWORD"
-  prompt_if_empty NATS_BIND_HOST "Host de bind do NATS (ex: 0.0.0.0 ou 127.0.0.1)" 0 "0.0.0.0"
-  prompt_if_empty NATS_MONITOR_HOST "Host do monitor HTTP do NATS (porta 8222)" 0 "127.0.0.1"
+  prompt_nats_user || return $?
+  prompt_nats_password || return $?
+  prompt_validated_value NATS_AUTH_USER "Usuario de bypass da API no NATS (auth_users)" "$NATS_USER" \
+    is_valid_nats_user_value \
+    "Usuario NATS invalido: use 1-64 caracteres de [A-Za-z0-9._-]." || return $?
+  while true; do
+    prompt_if_empty NATS_AUTH_PASSWORD "Senha de bypass da API no NATS" 1 "$NATS_PASSWORD" || return $?
+    if is_valid_nats_password_value "$NATS_AUTH_PASSWORD"; then
+      break
+    fi
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+      fail "NATS_AUTH_PASSWORD invalida: use 12-128 caracteres de [A-Za-z0-9._+!@#%^*-]."
+    fi
+    echo "Senha NATS invalida: use 12-128 caracteres de [A-Za-z0-9._+!@#%^*-]." >&2
+    NATS_AUTH_PASSWORD=""
+  done
+  prompt_if_empty NATS_BIND_HOST "Host de bind do NATS (ex: 0.0.0.0 ou 127.0.0.1)" 0 "0.0.0.0" || return $?
+  prompt_if_empty NATS_MONITOR_HOST "Host do monitor HTTP do NATS (porta 8222)" 0 "127.0.0.1" || return $?
   # Aceita y/n (padrao dos demais prompts); normalize_nats_settings converte para 1/0.
-  prompt_if_empty NATS_AUTH_CALLOUT_ENABLED "Habilitar NATS auth callout? (y/n)" 0 "y"
-  prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH"
+  prompt_yes_no NATS_AUTH_CALLOUT_ENABLED "Habilitar NATS auth callout? (y/n)" "y" || return $?
+  prompt_if_empty NATS_AUTH_CALLOUT_SUBJECT "Subject do auth callout" 0 "\$SYS.REQ.USER.AUTH" || return $?
 }
 
 # ── Remote session duration wizard ─────────────────────────────────────────
@@ -291,10 +474,10 @@ load_existing_remote_session_defaults() {
 # encerrada. Padrao: 1 hora.
 prompt_remote_session_duration() {
   load_existing_remote_session_defaults
-  wizard_header "Sessões remotas" "$(wizard_step_label "10/10" "9/9")"
-  echo "Duração máxima de uma sessão remota sem precisar reconectar."
-  echo "Enquanto o navegador estiver saudável a sessão se renova sozinha;"
-  echo "ao atingir este teto ela é encerrada. Padrão: 1 hora."
+  wizard_header "Sessoes remotas" "$(wizard_step_label "9/10" "9/10")"
+  echo "Duracao maxima de uma sessao remota sem precisar reconectar."
+  echo "Enquanto o navegador estiver saudavel a sessao se renova sozinha;"
+  echo "ao atingir este teto ela e encerrada. Padrao: 1 hora."
   echo "----------------------------------------"
 
   local current="${REMOTE_SESSION_MAX_DURATION_HOURS:-1}"
@@ -302,22 +485,25 @@ prompt_remote_session_duration() {
   while true; do
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
       REMOTE_SESSION_MAX_DURATION_HOURS="$current"
-      return
+      return 0
     fi
-    read -r -p "Duração máxima da sessão remota (horas, 1-24) [$current]: " answer
+    read -r -p "Duracao maxima da sessao remota (horas, 1-24) [$current]: " answer
+    if is_wizard_back_input "$answer"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
     answer="${answer:-$current}"
     if [[ "$answer" =~ ^[0-9]+$ ]] && (( answer >= 1 && answer <= 24 )); then
       REMOTE_SESSION_MAX_DURATION_HOURS="$answer"
-      return
+      return 0
     fi
-    echo "Informe um número inteiro entre 1 e 24."
+    echo "Informe um numero inteiro entre 1 e 24." >&2
   done
 }
 
 # ── Update policy wizard ───────────────────────────────────────────────────
 
 prompt_selfupdate_settings() {
-  wizard_header "Politica de atualizacao" "$(wizard_step_label "9/10" "8/9")"
+  wizard_header "Politica de atualizacao" "$(wizard_step_label "9/10" "9/10")"
   echo "O update do servidor e SEMPRE manual, executado pelo administrador via:"
   echo "  ./scripts/linux/install_discovery_server.sh --mode update"
   echo "  (ou a opcao 3 'Atualizar instalacao existente' do bootstrap)"
@@ -341,40 +527,54 @@ prompt_selfupdate_settings() {
     DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
     DISCOVERY_APPLY_SYSTEM_UPDATES="${current_apply_updates:-1}"
     case "$DISCOVERY_APPLY_SYSTEM_UPDATES" in 0|1) ;; *) DISCOVERY_APPLY_SYSTEM_UPDATES="1" ;; esac
-    return
+    return 0
   fi
 
   # Interativo: Enter mantem o valor atual (S em instalacao nova, N quando ja
   # estava desabilitado). Um valor explicito no --config/ambiente pula a
-  # pergunta.
-  if [[ -z "${DISCOVERY_APPLY_SYSTEM_UPDATES:-}" ]]; then
+  # pergunta na primeira passagem, mas permite alterar ao voltar (WIZARD_REPROMPT=1).
+  if [[ -z "${DISCOVERY_APPLY_SYSTEM_UPDATES:-}" || "${WIZARD_REPROMPT:-0}" -eq 1 ]]; then
     local apply_updates_default="S"
     [[ "$current_apply_updates" == "0" ]] && apply_updates_default="N"
     echo
     echo "Verificar e instalar tambem os updates do SO (apt-get update + upgrade)?"
     echo "Vale para esta instalacao e para os updates manuais seguintes."
     local apply_updates_choice
-    read -r -p "Atualizar o SO automaticamente (S/n) [$apply_updates_default]: " apply_updates_choice
-    apply_updates_choice="${apply_updates_choice:-$apply_updates_default}"
-    apply_updates_choice="$(printf '%s' "$apply_updates_choice" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    case "$apply_updates_choice" in
-      n|nao|não|no|0) DISCOVERY_APPLY_SYSTEM_UPDATES="0" ;;
-      *)          DISCOVERY_APPLY_SYSTEM_UPDATES="1" ;;
-    esac
+    while true; do
+      read -r -p "Atualizar o SO automaticamente (S/n) [$apply_updates_default]: " apply_updates_choice
+      if is_wizard_back_input "$apply_updates_choice"; then
+        return "${WIZARD_BACK_RC:-10}"
+      fi
+      apply_updates_choice="${apply_updates_choice:-$apply_updates_default}"
+      apply_updates_choice="$(printf '%s' "$apply_updates_choice" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      case "$apply_updates_choice" in
+        n|nao|não|no|0) DISCOVERY_APPLY_SYSTEM_UPDATES="0"; break ;;
+        s|sim|y|yes|1)  DISCOVERY_APPLY_SYSTEM_UPDATES="1"; break ;;
+        *) echo "Opcao invalida: '$apply_updates_choice'. Digite S ou N (ou 'voltar')." >&2 ;;
+      esac
+    done
   fi
 
-  if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]]; then
+  if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" || "${WIZARD_REPROMPT:-0}" -eq 1 ]]; then
+    local clean_default="1"
+    [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "0" ]] && clean_default="2"
     echo
     echo "Modo de build para os updates manuais:"
     echo "  1) Limpo (remove cache antes do build)"
     echo "  2) Incremental (mais rapido, sem limpeza de cache)"
     local clean_build_choice
-    read -r -p "Escolha [1]: " clean_build_choice
-    clean_build_choice="${clean_build_choice:-1}"
-    case "$clean_build_choice" in
-      2) DISCOVERY_CLEAN_BUILD="0" ;;
-      *) DISCOVERY_CLEAN_BUILD="1" ;;
-    esac
+    while true; do
+      read -r -p "Escolha [$clean_default]: " clean_build_choice
+      if is_wizard_back_input "$clean_build_choice"; then
+        return "${WIZARD_BACK_RC:-10}"
+      fi
+      clean_build_choice="${clean_build_choice:-$clean_default}"
+      case "$clean_build_choice" in
+        1) DISCOVERY_CLEAN_BUILD="1"; break ;;
+        2) DISCOVERY_CLEAN_BUILD="0"; break ;;
+        *) echo "Opcao invalida: '$clean_build_choice'. Digite 1 ou 2 (ou 'voltar')." >&2 ;;
+      esac
+    done
   fi
 }
 
@@ -382,24 +582,33 @@ prompt_selfupdate_settings() {
 
 prompt_tls_certificate_configuration() {
   load_existing_tls_defaults
-  wizard_header "Certificado TLS" "$(wizard_step_label "6/9" "5/8")"
+  wizard_header "Certificado TLS" "$(wizard_step_label "4/10" "4/10")"
   echo "1) self-signed  - certificado local gerado pelo instalador"
   echo "2) zerossl-acme - ZeroSSL via ACME com validacao DNS manual"
   echo "3) letsencrypt-acme - Let's Encrypt via ACME com validacao DNS manual"
   echo "----------------------------------------"
 
-  prompt_if_empty TLS_CERT_PROVIDER "Modo de certificado TLS (1/2/3 ou self-signed/zerossl-acme/letsencrypt-acme)" 0 "self-signed"
-  case "$(printf '%s' "$TLS_CERT_PROVIDER" | tr '[:upper:]' '[:lower:]')" in
-    1) TLS_CERT_PROVIDER="self-signed" ;;
-    2) TLS_CERT_PROVIDER="zerossl-acme" ;;
-    3) TLS_CERT_PROVIDER="letsencrypt-acme" ;;
-  esac
+  while true; do
+    prompt_if_empty TLS_CERT_PROVIDER "Modo de certificado TLS (1/2/3 ou self-signed/zerossl-acme/letsencrypt-acme)" 0 "self-signed" || return $?
+    case "$(printf '%s' "$TLS_CERT_PROVIDER" | tr '[:upper:]' '[:lower:]')" in
+      1|self-signed|selfsigned|local) TLS_CERT_PROVIDER="self-signed"; break ;;
+      2|zerossl|zerossl-acme|acme)    TLS_CERT_PROVIDER="zerossl-acme"; break ;;
+      3|letsencrypt|lets-encrypt|le|letsencrypt-acme) TLS_CERT_PROVIDER="letsencrypt-acme"; break ;;
+      *)
+        if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+          fail "TLS_CERT_PROVIDER invalido: $TLS_CERT_PROVIDER (use self-signed, zerossl-acme ou letsencrypt-acme)"
+        fi
+        echo "Opcao invalida: '$TLS_CERT_PROVIDER'. Use 1 (self-signed), 2 (zerossl-acme) ou 3 (letsencrypt-acme)." >&2
+        TLS_CERT_PROVIDER=""
+        ;;
+    esac
+  done
   normalize_tls_certificate_provider
 
   if [[ "$TLS_CERT_PROVIDER" == "zerossl-acme" ]]; then
-    prompt_zerossl_acme_configuration
+    prompt_zerossl_acme_configuration || return $?
   elif [[ "$TLS_CERT_PROVIDER" == "letsencrypt-acme" ]]; then
-    prompt_letsencrypt_acme_configuration
+    prompt_letsencrypt_acme_configuration || return $?
   fi
 }
 
@@ -408,20 +617,25 @@ prompt_zerossl_acme_configuration() {
   echo "ZeroSSL ACME usa desafio DNS-01. O instalador exibira o registro TXT,"
   echo "aguardara sua confirmacao e validara o DNS com dig antes de continuar."
   echo
-  prompt_if_empty ZEROSSL_CERT_DOMAIN "Dominio do certificado" 0 "$(resolve_fido2_server_domain)"
-  if [[ -z "${ZEROSSL_CERT_ALT_DOMAINS:-}" && "$NON_INTERACTIVE" -eq 0 ]]; then
-    read -r -p "SANs adicionais separados por virgula (opcional): " ZEROSSL_CERT_ALT_DOMAINS
+  prompt_if_empty ZEROSSL_CERT_DOMAIN "Dominio do certificado" 0 "$(resolve_fido2_server_domain)" || return $?
+  if [[ ( -z "${ZEROSSL_CERT_ALT_DOMAINS:-}" || "${WIZARD_REPROMPT:-0}" -eq 1 ) && "$NON_INTERACTIVE" -eq 0 ]]; then
+    local alt_input=""
+    read -r -p "SANs adicionais separados por virgula (opcional) [${ZEROSSL_CERT_ALT_DOMAINS:-}]: " alt_input
+    if is_wizard_back_input "$alt_input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    ZEROSSL_CERT_ALT_DOMAINS="${alt_input:-${ZEROSSL_CERT_ALT_DOMAINS:-}}"
   fi
   ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-}"
-  prompt_if_empty ZEROSSL_ACME_EMAIL "Email da conta ZeroSSL/ACME"
-  prompt_if_empty ZEROSSL_ACME_EAB_KID "ZeroSSL EAB KID"
-  prompt_if_empty ZEROSSL_ACME_EAB_HMAC_KEY "ZeroSSL EAB HMAC Key"
-  prompt_if_empty ZEROSSL_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8"
-  prompt_if_empty ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600"
-  prompt_if_empty ZEROSSL_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15"
+  prompt_if_empty ZEROSSL_ACME_EMAIL "Email da conta ZeroSSL/ACME" || return $?
+  prompt_if_empty ZEROSSL_ACME_EAB_KID "ZeroSSL EAB KID" || return $?
+  prompt_if_empty ZEROSSL_ACME_EAB_HMAC_KEY "ZeroSSL EAB HMAC Key" || return $?
+  prompt_if_empty ZEROSSL_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8" || return $?
+  prompt_if_empty ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600" || return $?
+  prompt_if_empty ZEROSSL_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15" || return $?
   ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-30}"
   echo "Renovacao recomendada: checar diariamente e renovar quando faltar ate ${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY} dias."
-  prompt_if_empty ZEROSSL_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao ZeroSSL? (1/0)" 0 "1"
+  prompt_if_empty ZEROSSL_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao ZeroSSL? (1/0)" 0 "1" || return $?
   normalize_zerossl_auto_renew_enabled
   normalize_tls_certificate_provider
 }
@@ -432,18 +646,23 @@ prompt_letsencrypt_acme_configuration() {
   echo "aguardara sua confirmacao e validara o DNS com dig antes de continuar."
   echo "Nao requer EAB (diferente do ZeroSSL)."
   echo
-  prompt_if_empty LETSENCRYPT_CERT_DOMAIN "Dominio do certificado" 0 "$(resolve_fido2_server_domain)"
-  if [[ -z "${LETSENCRYPT_CERT_ALT_DOMAINS:-}" && "$NON_INTERACTIVE" -eq 0 ]]; then
-    read -r -p "SANs adicionais separados por virgula (opcional): " LETSENCRYPT_CERT_ALT_DOMAINS
+  prompt_if_empty LETSENCRYPT_CERT_DOMAIN "Dominio do certificado" 0 "$(resolve_fido2_server_domain)" || return $?
+  if [[ ( -z "${LETSENCRYPT_CERT_ALT_DOMAINS:-}" || "${WIZARD_REPROMPT:-0}" -eq 1 ) && "$NON_INTERACTIVE" -eq 0 ]]; then
+    local alt_input=""
+    read -r -p "SANs adicionais separados por virgula (opcional) [${LETSENCRYPT_CERT_ALT_DOMAINS:-}]: " alt_input
+    if is_wizard_back_input "$alt_input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    LETSENCRYPT_CERT_ALT_DOMAINS="${alt_input:-${LETSENCRYPT_CERT_ALT_DOMAINS:-}}"
   fi
   LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-}"
-  prompt_if_empty LETSENCRYPT_ACME_EMAIL "Email da conta Let's Encrypt/ACME"
-  prompt_if_empty LETSENCRYPT_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8"
-  prompt_if_empty LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600"
-  prompt_if_empty LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15"
+  prompt_if_empty LETSENCRYPT_ACME_EMAIL "Email da conta Let's Encrypt/ACME" || return $?
+  prompt_if_empty LETSENCRYPT_DNS_RESOLVERS "Resolvers para validar DNS (separados por virgula)" 0 "1.1.1.1,8.8.8.8" || return $?
+  prompt_if_empty LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS "Timeout de propagacao DNS em segundos" 0 "600" || return $?
+  prompt_if_empty LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS "Intervalo de consulta DNS em segundos" 0 "15" || return $?
   LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-30}"
   echo "Renovacao recomendada: checar diariamente e renovar quando faltar ate ${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY} dias."
-  prompt_if_empty LETSENCRYPT_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao Let's Encrypt? (1/0)" 0 "1"
+  prompt_if_empty LETSENCRYPT_AUTO_RENEW_ENABLED "Criar timer automatico de renovacao Let's Encrypt? (1/0)" 0 "1" || return $?
   normalize_letsencrypt_auto_renew_enabled
   normalize_tls_certificate_provider
 }
@@ -775,33 +994,42 @@ prompt_validated_value() {
   local validator="$4"
   local error_text="$5"
   local current_value="${!var_name:-}"
+  local reprompt="${WIZARD_REPROMPT:-0}"
 
-  if [[ -n "$current_value" ]]; then
+  if [[ -n "$current_value" && "$reprompt" -eq 0 ]]; then
     "$validator" "$current_value" || fail "$error_text"
-    return
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "$current_value" ]]; then
+      "$validator" "$current_value" || fail "$error_text"
+      return 0
+    fi
     if [[ -n "$default_value" ]]; then
       printf -v "$var_name" '%s' "$default_value"
       "$validator" "$default_value" || fail "$error_text"
-      return
+      return 0
     fi
     fail "Variavel obrigatoria ausente para modo nao interativo: $var_name"
   fi
 
+  local effective_default="${current_value:-$default_value}"
   local input=""
   while true; do
-    if [[ -n "$default_value" ]]; then
-      read -r -p "$prompt_text [$default_value]: " input
-      input="${input:-$default_value}"
+    if [[ -n "$effective_default" ]]; then
+      read -r -p "$prompt_text [$effective_default]: " input
     else
       read -r -p "$prompt_text: " input
     fi
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    input="${input:-$effective_default}"
     input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     if [[ -n "$input" ]] && "$validator" "$input"; then
       printf -v "$var_name" '%s' "$input"
-      return
+      return 0
     fi
     echo "$error_text" >&2
   done
@@ -810,24 +1038,28 @@ prompt_validated_value() {
 # Selecao do modo de storage. Default rustfs; valores fora de 1/2/3 (ou dos
 # nomes) sao re-perguntados em vez de derrubar o instalador.
 prompt_object_storage_mode() {
-  if [[ -n "${DISCOVERY_OBJECT_STORAGE_MODE:-}" ]]; then
-    return
+  if [[ -n "${DISCOVERY_OBJECT_STORAGE_MODE:-}" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    DISCOVERY_OBJECT_STORAGE_MODE="rustfs"
-    return
+    DISCOVERY_OBJECT_STORAGE_MODE="${DISCOVERY_OBJECT_STORAGE_MODE:-rustfs}"
+    return 0
   fi
 
+  local default_mode="${DISCOVERY_OBJECT_STORAGE_MODE:-rustfs}"
   local input=""
   while true; do
-    read -r -p "Storage de arquivos (1/2/3 ou rustfs/external/skip) [rustfs]: " input
-    input="${input:-rustfs}"
+    read -r -p "Storage de arquivos (1/2/3 ou rustfs/external/skip) [$default_mode]: " input
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    input="${input:-$default_mode}"
     input="$(printf '%s' "$input" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$input" in
-      1|local|rustfs) DISCOVERY_OBJECT_STORAGE_MODE="rustfs"; return ;;
-      2|external|s3)  DISCOVERY_OBJECT_STORAGE_MODE="external"; return ;;
-      3|skip|none)    DISCOVERY_OBJECT_STORAGE_MODE="skip"; return ;;
+      1|local|rustfs) DISCOVERY_OBJECT_STORAGE_MODE="rustfs"; return 0 ;;
+      2|external|s3)  DISCOVERY_OBJECT_STORAGE_MODE="external"; return 0 ;;
+      3|skip|none)    DISCOVERY_OBJECT_STORAGE_MODE="skip"; return 0 ;;
       *) echo "Opcao invalida: '$input'. Use 1 (RustFS local), 2 (provedor externo) ou 3 (configurar depois)." >&2 ;;
     esac
   done
@@ -835,12 +1067,12 @@ prompt_object_storage_mode() {
 
 prompt_object_storage_configuration() {
   load_existing_object_storage_defaults
-  wizard_header "Storage de arquivos (anexos/prints)" "$(wizard_step_label "8/10" "6/9")"
+  wizard_header "Storage de arquivos (anexos/prints)" "$(wizard_step_label "5/10" "5/10")"
   echo "1) RustFS local      - instala o servidor de objetos nesta maquina (S3 compativel)."
   echo "2) Provedor externo  - S3 compativel ja existente (R2/S3/MinIO/...)."
   echo "3) Configurar depois - nao instala e nao altera nada."
   echo "----------------------------------------"
-  prompt_object_storage_mode
+  prompt_object_storage_mode || return $?
 
   case "$(printf '%s' "${DISCOVERY_OBJECT_STORAGE_MODE:-rustfs}" | tr '[:upper:]' '[:lower:]')" in
     1|local|rustfs) DISCOVERY_OBJECT_STORAGE_MODE="rustfs" ;;
@@ -854,17 +1086,22 @@ prompt_object_storage_configuration() {
     echo "O nginx publica o caminho do bucket no MESMO host do portal (sem DNS novo)."
     prompt_validated_value DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket" "discovery-files" \
       is_valid_object_storage_bucket \
-      "Bucket invalido: use minusculas, digitos, ponto e hifen (3-63, sem comecar/terminar com ponto ou hifen)."
+      "Bucket invalido: use minusculas, digitos, ponto e hifen (3-63, sem comecar/terminar com ponto ou hifen)." || return $?
     prompt_validated_value DISCOVERY_OBJECT_STORAGE_ENDPOINT \
       "Endpoint publico do storage (host ou https://host, SEM path)" \
       "$(resolve_object_storage_default_endpoint)" \
       is_valid_object_storage_endpoint \
-      "Endpoint invalido: use host[:porta] ou http(s)://host[:porta], SEM path."
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1"
-    prompt_if_empty RUSTFS_VERSION "Versao do RustFS a instalar (fixa, sem auto-update)" 0 "1.0.1"
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED "Publicar o bucket pelo nginx? (y/N)" 0 "y"
-    if [[ "$NON_INTERACTIVE" -eq 0 && -z "${RUSTFS_SHA256:-}" ]]; then
-      read -r -p "sha256 do pacote do RustFS (opcional, recomendado; Enter = nao verificar): " RUSTFS_SHA256
+      "Endpoint invalido: use host[:porta] ou http(s)://host[:porta], SEM path." || return $?
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1" || return $?
+    prompt_if_empty RUSTFS_VERSION "Versao do RustFS a instalar (fixa, sem auto-update)" 0 "1.0.1" || return $?
+    prompt_yes_no DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED "Publicar o bucket pelo nginx? (y/N)" "y" || return $?
+    if [[ "$NON_INTERACTIVE" -eq 0 && ( -z "${RUSTFS_SHA256:-}" || "${WIZARD_REPROMPT:-0}" -eq 1 ) ]]; then
+      local sha_input=""
+      read -r -p "sha256 do pacote do RustFS (opcional, recomendado; Enter = ${RUSTFS_SHA256:-nao verificar}): " sha_input
+      if is_wizard_back_input "$sha_input"; then
+        return "${WIZARD_BACK_RC:-10}"
+      fi
+      RUSTFS_SHA256="${sha_input:-${RUSTFS_SHA256:-}}"
     fi
   elif [[ "$DISCOVERY_OBJECT_STORAGE_MODE" == "external" ]]; then
     echo
@@ -872,15 +1109,15 @@ prompt_object_storage_configuration() {
     prompt_validated_value DISCOVERY_OBJECT_STORAGE_ENDPOINT \
       "Endpoint do storage (host ou http(s)://host[:porta], SEM path)" "" \
       is_valid_object_storage_endpoint \
-      "Endpoint invalido: use host[:porta] ou http(s)://host[:porta], SEM path."
+      "Endpoint invalido: use host[:porta] ou http(s)://host[:porta], SEM path." || return $?
     prompt_validated_value DISCOVERY_OBJECT_STORAGE_BUCKET "Nome do bucket" "" \
       is_valid_object_storage_bucket \
-      "Bucket invalido: use minusculas, digitos, ponto e hifen (3-63, sem comecar/terminar com ponto ou hifen)."
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1"
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ACCESS_KEY "Access key"
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_SECRET_KEY "Secret key" 1
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE "Usar path-style? (y/N)" 0 "y"
-    prompt_if_empty DISCOVERY_OBJECT_STORAGE_SSL_VERIFY "Verificar certificado TLS do storage? (y/N)" 0 "y"
+      "Bucket invalido: use minusculas, digitos, ponto e hifen (3-63, sem comecar/terminar com ponto ou hifen)." || return $?
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_REGION "Regiao S3" 0 "us-east-1" || return $?
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_ACCESS_KEY "Access key" || return $?
+    prompt_if_empty DISCOVERY_OBJECT_STORAGE_SECRET_KEY "Secret key" 1 || return $?
+    prompt_yes_no DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE "Usar path-style? (y/N)" "y" || return $?
+    prompt_yes_no DISCOVERY_OBJECT_STORAGE_SSL_VERIFY "Verificar certificado TLS do storage? (y/N)" "y" || return $?
   else
     log "Storage de arquivos: configuracao adiada (nada sera instalado/alterado)."
   fi
@@ -898,9 +1135,10 @@ prompt_object_storage_configuration() {
 }
 
 confirm_installation() {
-  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then return; fi
+  if [[ "$NON_INTERACTIVE" -eq 1 ]]; then return 0; fi
 
-  wizard_header "Revisao final" "$(wizard_step_label "10/10" "9/9")"
+  WIZARD_JUMP_STEP=""
+  wizard_header "Revisao final" "$(wizard_step_label "10/10" "10/10")"
   echo "Revise TODOS os campos abaixo antes de executar. Nada foi alterado no servidor ainda."
   echo "----------------------------------------"
   print_selected_configuration_summary
@@ -908,12 +1146,37 @@ confirm_installation() {
   echo "Pre-requisitos/acoes que serao executados:"
   print_prerequisite_plan_summary
   echo
+  echo "Etapas disponiveis para edicao rapida:"
+  echo "  1) Repositorios Git          6) OpenAPI / Scalar"
+  echo "  2) Canal / Branch            7) Banco de dados (PostgreSQL)"
+  echo "  3) Acesso do portal/API      8) Mensageria (NATS)"
+  echo "  4) Certificado TLS           9) Sessoes remotas & Atualizacao"
+  echo "  5) Storage de arquivos"
+  echo
 
-  local confirm
-  read -r -p "Confirma os dados e inicia a instalacao? (s/N): " confirm
-  confirm="$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  case "$confirm" in
-    s|sim|y|yes) ;;
-    *) fail "Instalacao cancelada pelo usuario." ;;
-  esac
+  local confirm="" edit_step=""
+  while true; do
+    read -r -p "Acao: (s) Confirmar e iniciar | (v) Voltar etapa | (e) Editar etapa (1-9) | (c) Cancelar [s]: " confirm
+    if is_wizard_back_input "$confirm"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+    confirm="$(printf '%s' "${confirm:-s}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$confirm" in
+      s|sim|y|yes) return 0 ;;
+      v|voltar|back) return "${WIZARD_BACK_RC:-10}" ;;
+      e|editar|edit)
+        read -r -p "Informe o numero da etapa para editar (1-9): " edit_step
+        edit_step="$(printf '%s' "$edit_step" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [[ "$edit_step" =~ ^[1-9]$ ]]; then
+          WIZARD_JUMP_STEP="$edit_step"
+          return 20
+        fi
+        echo "Etapa invalida: '$edit_step'. Informe um numero de 1 a 9." >&2
+        ;;
+      c|cancelar|n|nao|no)
+        fail "Instalacao cancelada pelo usuario." ;;
+      *)
+        echo "Opcao invalida: '$confirm'. Use s (confirmar), v (voltar), e (editar 1-9) ou c (cancelar)." >&2 ;;
+    esac
+  done
 }

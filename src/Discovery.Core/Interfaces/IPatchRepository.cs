@@ -19,6 +19,8 @@ public interface IPatchRepository
         string? severity,
         bool descending,
         string? source = null,
+        string? updateType = null,
+        bool? isOptional = null,
         CancellationToken ct = default);
 
     Task<AgentWindowsUpdateSnapshot?> GetSnapshotAsync(Guid agentId, CancellationToken ct = default);

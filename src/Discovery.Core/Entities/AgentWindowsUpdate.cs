@@ -45,6 +45,7 @@ public class AgentWindowsUpdate
     public bool IsHidden { get; set; }
     public bool IsDownloaded { get; set; }
     public bool IsMandatory { get; set; }
+    public bool IsOptional { get; set; }
     public bool RequiresReboot { get; set; }
 
     public long? MaxDownloadSize { get; set; }

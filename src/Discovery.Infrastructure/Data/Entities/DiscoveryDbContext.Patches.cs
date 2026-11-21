@@ -47,6 +47,7 @@ public partial class DiscoveryDbContext
             entity.Property(update => update.IsHidden).HasColumnName("is_hidden");
             entity.Property(update => update.IsDownloaded).HasColumnName("is_downloaded");
             entity.Property(update => update.IsMandatory).HasColumnName("is_mandatory");
+            entity.Property(update => update.IsOptional).HasColumnName("is_optional");
             entity.Property(update => update.RequiresReboot).HasColumnName("requires_reboot");
             entity.Property(update => update.MaxDownloadSize).HasColumnName("max_download_size");
             entity.Property(update => update.MinDownloadSize).HasColumnName("min_download_size");

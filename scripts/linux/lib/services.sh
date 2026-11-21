@@ -89,10 +89,10 @@ install_nk_tool() {
   local arch; arch="$(uname -m)"
   local nk_arch
   case "$arch" in
-    x86_64)  nk_arch="amd64" ;;
-    aarch64) nk_arch="arm64" ;;
-    armv7l)  nk_arch="armv7" ;;
-    *)       fail "Arquitetura nao suportada para download do nk: $arch" ;;
+    x86_64|amd64)  nk_arch="amd64" ;;
+    aarch64|arm64) nk_arch="arm64" ;;
+    armv7l|armhf)  nk_arch="armv7" ;;
+    *)             fail "Arquitetura nao suportada para download do nk: $arch" ;;
   esac
 
   local nk_bin="/usr/local/bin/nk"
@@ -100,18 +100,30 @@ install_nk_tool() {
   local nk_zip="$tmp_dir/nkeys.zip"; local nk_path=""
   local release_tag
   release_tag="$(curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "https://api.github.com/repos/nats-io/nkeys/releases/latest" | jq -r '.tag_name')"
-  [[ -n "$release_tag" && "$release_tag" != "null" ]] || fail "Nao foi possivel descobrir a versao mais recente do nkeys."
+  if [[ -z "$release_tag" || "$release_tag" == "null" ]]; then
+    rm -rf "$tmp_dir"
+    fail "Nao foi possivel descobrir a versao mais recente do nkeys."
+  fi
 
   local nk_url="https://github.com/nats-io/nkeys/releases/download/${release_tag}/nkeys-${release_tag}-linux-${nk_arch}.zip"
   log "Baixando ferramenta nk (geracao de chaves NATS)..."
-  curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "$nk_url" -o "$nk_zip"
-  unzip -q "$nk_zip" -d "$tmp_dir"
+  if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 "$nk_url" -o "$nk_zip"; then
+    rm -rf "$tmp_dir"
+    fail "Falha ao baixar ferramenta nk de $nk_url"
+  fi
+  if ! unzip -q "$nk_zip" -d "$tmp_dir"; then
+    rm -rf "$tmp_dir"
+    fail "Pacote nk invalido (unzip)."
+  fi
 
   nk_path="$(cd "$tmp_dir" && find . -type f -name nk | head -n 1)"
   nk_path="${nk_path#./}"; nk_path="$tmp_dir/$nk_path"
   # [[ -f ]] e obrigatorio: com find vazio, nk_path vira "$tmp_dir/" (nao-vazio)
   # e o check por -n passaria vazio, falhando no install com erro criptico.
-  [[ -f "$nk_path" ]] || fail "Nao foi possivel localizar o binario nk no pacote baixado."
+  if [[ ! -f "$nk_path" ]]; then
+    rm -rf "$tmp_dir"
+    fail "Nao foi possivel localizar o binario nk no pacote baixado."
+  fi
 
   sudo install -m 0755 "$nk_path" "$nk_bin"
   rm -rf "$tmp_dir"
@@ -124,10 +136,10 @@ install_nats_cli() {
   local arch; arch="$(uname -m)"
   local nats_arch
   case "$arch" in
-    x86_64)  nats_arch="amd64" ;;
-    aarch64) nats_arch="arm64" ;;
-    armv7l)  nats_arch="arm7" ;;
-    *)       warn "Arquitetura nao suportada para download do nats CLI: $arch"; return 1 ;;
+    x86_64|amd64)  nats_arch="amd64" ;;
+    aarch64|arm64) nats_arch="arm64" ;;
+    armv7l|armhf)  nats_arch="arm7" ;;
+    *)             warn "Arquitetura nao suportada para download do nats CLI: $arch"; return 1 ;;
   esac
 
   local tmp_dir; tmp_dir="$(mktemp -d)"
@@ -223,40 +235,48 @@ load_existing_nats_defaults() {
   local env_exists=0
   if sudo test -f "$env_file"; then
     env_exists=1
-    NATS_AUTH_USER="${NATS_AUTH_USER:-$(env_file_get "Nats__AuthUser" "$env_file")}"
-    NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$(env_file_get "Nats__AuthPassword" "$env_file")}"
-    local existing_callout_enabled
-    existing_callout_enabled="$(env_file_get "Nats__AuthCallout__Enabled" "$env_file" | tr '[:upper:]' '[:lower:]')"
-    if [[ -z "${NATS_AUTH_CALLOUT_ENABLED:-}" && -n "$existing_callout_enabled" ]]; then
-      if [[ "$existing_callout_enabled" == "true" ]]; then NATS_AUTH_CALLOUT_ENABLED="1"
-      elif [[ "$existing_callout_enabled" == "false" ]]; then NATS_AUTH_CALLOUT_ENABLED="0"; fi
-    fi
-    NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$(env_file_get "Nats__AuthCallout__Subject" "$env_file")}"
-    NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$(env_file_get "Nats__ServerHostExternal" "$env_file")}"
-    NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$(env_file_get "Nats__ServerHostInternal" "$env_file")}"
-    local existing_use_wss_external
-    existing_use_wss_external="$(env_file_get "Nats__UseWssExternal" "$env_file" | tr '[:upper:]' '[:lower:]')"
-    if [[ -z "${NATS_USE_WSS_EXTERNAL:-}" && -n "$existing_use_wss_external" ]]; then
-      if [[ "$existing_use_wss_external" == "true" ]]; then NATS_USE_WSS_EXTERNAL="true"
-      elif [[ "$existing_use_wss_external" == "false" ]]; then NATS_USE_WSS_EXTERNAL="false"; fi
-    fi
-    NATS_WS_PORT="${NATS_WS_PORT:-$(env_file_get "NATS_WS_PORT" "$env_file")}"
-    NATS_WS_HOST="${NATS_WS_HOST:-$(env_file_get "NATS_WS_HOST" "$env_file")}"
-    NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(env_file_get "NATS_WS_TLS_ENABLED" "$env_file")}"
-    NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$(env_file_get "Nats__AccountSeed" "$env_file")}"
-    NATS_XKEY_SEED="${NATS_XKEY_SEED:-$(env_file_get "Nats__XKeySeed" "$env_file")}"
-    NATS_ACCOUNT_PUBLIC_KEY="${NATS_ACCOUNT_PUBLIC_KEY:-$(env_file_get "Nats__AccountPublicKey" "$env_file")}"
-    NATS_XKEY_PUBLIC_KEY="${NATS_XKEY_PUBLIC_KEY:-$(env_file_get "Nats__XKeyPublicKey" "$env_file")}"
-    NATS_JS_ENABLED="${NATS_JS_ENABLED:-$(env_file_get "NATS_JS_ENABLED" "$env_file")}"
-    NATS_JS_STORE_DIR="${NATS_JS_STORE_DIR:-$(env_file_get "NATS_JS_STORE_DIR" "$env_file")}"
-    NATS_JS_MAX_MEMORY_STORE="${NATS_JS_MAX_MEMORY_STORE:-$(env_file_get "NATS_JS_MAX_MEMORY_STORE" "$env_file")}"
-    NATS_JS_MAX_FILE_STORE="${NATS_JS_MAX_FILE_STORE:-$(env_file_get "NATS_JS_MAX_FILE_STORE" "$env_file")}"
-    NATS_JS_FANOUT_STREAM_ENABLED="${NATS_JS_FANOUT_STREAM_ENABLED:-$(env_file_get "NATS_JS_FANOUT_STREAM_ENABLED" "$env_file")}"
-    NATS_JS_FANOUT_STREAM_NAME="${NATS_JS_FANOUT_STREAM_NAME:-$(env_file_get "NATS_JS_FANOUT_STREAM_NAME" "$env_file")}"
-    NATS_JS_FANOUT_STREAM_SUBJECTS="${NATS_JS_FANOUT_STREAM_SUBJECTS:-$(env_file_get "NATS_JS_FANOUT_STREAM_SUBJECTS" "$env_file")}"
-    NATS_JS_FANOUT_STREAM_MAX_AGE="${NATS_JS_FANOUT_STREAM_MAX_AGE:-$(env_file_get "NATS_JS_FANOUT_STREAM_MAX_AGE" "$env_file")}"
-    NATS_JS_FANOUT_STREAM_MAX_BYTES="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-$(env_file_get "NATS_JS_FANOUT_STREAM_MAX_BYTES" "$env_file")}"
-    NATS_JS_FANOUT_STREAM_DUPE_WINDOW="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-$(env_file_get "NATS_JS_FANOUT_STREAM_DUPE_WINDOW" "$env_file")}"
+    load_env_keys_if_unset "$env_file" \
+      NATS_WS_PORT NATS_WS_HOST NATS_WS_TLS_ENABLED \
+      NATS_JS_ENABLED NATS_JS_STORE_DIR NATS_JS_MAX_MEMORY_STORE NATS_JS_MAX_FILE_STORE \
+      NATS_JS_FANOUT_STREAM_ENABLED NATS_JS_FANOUT_STREAM_NAME NATS_JS_FANOUT_STREAM_SUBJECTS \
+      NATS_JS_FANOUT_STREAM_MAX_AGE NATS_JS_FANOUT_STREAM_MAX_BYTES NATS_JS_FANOUT_STREAM_DUPE_WINDOW
+
+    local line key val
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      key="${line%%=*}"
+      val="${line#*=}"
+      case "$key" in
+        Nats__AuthUser) NATS_AUTH_USER="${NATS_AUTH_USER:-$val}" ;;
+        Nats__AuthPassword) NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$val}" ;;
+        Nats__AuthCallout__Enabled)
+          if [[ -z "${NATS_AUTH_CALLOUT_ENABLED:-}" ]]; then
+            case "$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')" in
+              true) NATS_AUTH_CALLOUT_ENABLED="1" ;;
+              false) NATS_AUTH_CALLOUT_ENABLED="0" ;;
+            esac
+          fi ;;
+        Nats__AuthCallout__Subject) NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$val}" ;;
+        Nats__ServerHostExternal) NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$val}" ;;
+        Nats__ServerHostInternal) NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$val}" ;;
+        Nats__UseWssExternal)
+          if [[ -z "${NATS_USE_WSS_EXTERNAL:-}" ]]; then
+            case "$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')" in
+              true) NATS_USE_WSS_EXTERNAL="true" ;;
+              false) NATS_USE_WSS_EXTERNAL="false" ;;
+            esac
+          fi ;;
+        Nats__AccountSeed) NATS_ACCOUNT_SEED="${NATS_ACCOUNT_SEED:-$val}" ;;
+        Nats__XKeySeed) NATS_XKEY_SEED="${NATS_XKEY_SEED:-$val}" ;;
+        Nats__AccountPublicKey) NATS_ACCOUNT_PUBLIC_KEY="${NATS_ACCOUNT_PUBLIC_KEY:-$val}" ;;
+        Nats__XKeyPublicKey) NATS_XKEY_PUBLIC_KEY="${NATS_XKEY_PUBLIC_KEY:-$val}" ;;
+      esac
+    done < <(sudo awk '
+      /^(Nats__AuthUser|Nats__AuthPassword|Nats__AuthCallout__Enabled|Nats__AuthCallout__Subject|Nats__ServerHostExternal|Nats__ServerHostInternal|Nats__UseWssExternal|Nats__AccountSeed|Nats__XKeySeed|Nats__AccountPublicKey|Nats__XKeyPublicKey)=/ {
+        sub(/\r$/, "")
+        print
+      }
+    ' "$env_file" 2>/dev/null || true)
   fi
 
   if sudo test -f "$nats_conf"; then
@@ -284,12 +304,10 @@ load_existing_site_realtime_defaults() {
   local env_file="/etc/discovery-api/discovery.env"
   sudo test -f "$env_file" || return 0
 
-  DISCOVERY_SITE_NATS_URL="${DISCOVERY_SITE_NATS_URL:-$(sudo awk -F= '/^DISCOVERY_SITE_NATS_URL=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS="${DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS:-$(sudo awk -F= '/^DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  NATS_WS_PORT="${NATS_WS_PORT:-$(sudo awk -F= '/^NATS_WS_PORT=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  NATS_WS_HOST="${NATS_WS_HOST:-$(sudo awk -F= '/^NATS_WS_HOST=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-$(sudo awk -F= '/^NATS_WS_TLS_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  Authentication__Fido2__ServerDomain="${Authentication__Fido2__ServerDomain:-$(sudo awk -F= '/^Authentication__Fido2__ServerDomain=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  load_env_keys_if_unset "$env_file" \
+    DISCOVERY_SITE_NATS_URL DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS \
+    NATS_WS_PORT NATS_WS_HOST NATS_WS_TLS_ENABLED \
+    Authentication__Fido2__ServerDomain
 }
 
 detect_nats_service_user() {

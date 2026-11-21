@@ -111,6 +111,25 @@ map_arch_to_dotnet_runtime() {
   esac
 }
 
+BOOTSTRAP_BACK_RC=10
+
+is_bootstrap_back_input() {
+  local raw="${1:-}"
+  local normalized
+  normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  case "$normalized" in
+    voltar|back|\<) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_valid_branch_syntax() {
+  local raw="${1:-}"
+  [[ "$raw" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 1
+  [[ "$raw" != *..* ]] || return 1
+  return 0
+}
+
 normalize_branch() {
   local raw="$1"
   local normalized
@@ -124,8 +143,7 @@ normalize_branch() {
   esac
 
   # Sem '-' inicial (injecao de flag em `git clone -b`) e sem '..' (traversal).
-  [[ "$raw" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail "Branch invalida: $raw"
-  [[ "$raw" != *..* ]] || fail "Branch invalida (sequencia '..' nao permitida): $raw"
+  is_valid_branch_syntax "$raw" || fail "Branch invalida: $raw"
   printf '%s' "$raw"
 }
 
@@ -222,48 +240,62 @@ choose_branch_interactive() {
     else
       echo "Dica: digite o numero ou o nome (ex: release)." >&2
     fi
+    echo "Dica: digite 'voltar' (ou '<') para retornar ao modo de operacao." >&2
     echo "Padrao: [${default_idx}] (pressione Enter)." >&2
 
     local selected_option
     read -r -p "Opcao [${default_idx}]: " selected_option
+    if is_bootstrap_back_input "$selected_option"; then
+      return "$BOOTSTRAP_BACK_RC"
+    fi
     selected_option="${selected_option:-$default_idx}"
     selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
     case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
       1|lts)
         printf 'lts'
-        return
+        return 0
         ;;
       2|release)
         printf 'release'
-        return
+        return 0
         ;;
       3|beta)
         printf 'beta'
-        return
+        return 0
         ;;
       4|dev)
         printf 'dev'
-        return
+        return 0
         ;;
       5|custom)
         local custom_branch
         if [[ -n "$detected_branch" && "$default_idx" == "5" ]]; then
           read -r -p "Informe a branch custom [${detected_branch}]: " custom_branch
+          if is_bootstrap_back_input "$custom_branch"; then
+            return "$BOOTSTRAP_BACK_RC"
+          fi
           custom_branch="$(printf '%s' "${custom_branch:-$detected_branch}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
         else
           read -r -p "Informe a branch custom: " custom_branch
+          if is_bootstrap_back_input "$custom_branch"; then
+            return "$BOOTSTRAP_BACK_RC"
+          fi
           custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
         fi
         [[ -n "$custom_branch" ]] || {
           echo "Branch custom nao informada. Tente novamente." >&2
           continue
         }
+        if ! is_valid_branch_syntax "$custom_branch"; then
+          echo "Branch invalida: '$custom_branch'. Use letras, digitos, '.', '_', '/' ou '-' (sem '..' e sem iniciar com '-')." >&2
+          continue
+        fi
         printf '%s' "$(normalize_branch "$custom_branch")"
-        return
+        return 0
         ;;
       *)
-        echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2
+        echo "Opcao invalida: $selected_option. Use 1-5, o nome da branch (lts/release/beta/dev) ou 'voltar'." >&2
         ;;
     esac
   done
@@ -404,15 +436,33 @@ if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}
   done
 
   if [[ "$non_interactive" -eq 0 ]]; then
-    if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
-      BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
-    fi
-    if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE"; then
-      BOOTSTRAP_BRANCH="dev"
-      log "Modo maintenance: usando branch 'dev' (unica com suporte a manutencao)"
-    else
-      BOOTSTRAP_BRANCH="$(choose_branch_interactive "$BOOTSTRAP_INSTALL_MODE")"
-    fi
+    initial_mode_explicit=0
+    [[ -n "$BOOTSTRAP_INSTALL_MODE" ]] && initial_mode_explicit=1
+    while true; do
+      if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
+        BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
+      fi
+      if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE"; then
+        BOOTSTRAP_BRANCH="dev"
+        log "Modo maintenance: usando branch 'dev' (unica com suporte a manutencao)"
+        break
+      fi
+      branch_rc=0
+      chosen_branch="$(choose_branch_interactive "$BOOTSTRAP_INSTALL_MODE")" || branch_rc=$?
+      if [[ "$branch_rc" -eq "$BOOTSTRAP_BACK_RC" ]]; then
+        if [[ "$initial_mode_explicit" -eq 0 ]]; then
+          BOOTSTRAP_INSTALL_MODE=""
+          continue
+        fi
+        echo "Modo de operacao fixado via --mode; nao e possivel voltar ao menu anterior." >&2
+        continue
+      fi
+      if [[ "$branch_rc" -ne 0 ]]; then
+        exit "$branch_rc"
+      fi
+      BOOTSTRAP_BRANCH="$chosen_branch"
+      break
+    done
   fi
 fi
 

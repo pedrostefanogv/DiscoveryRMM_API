@@ -2,6 +2,20 @@
 # Requires: common.sh (log, warn, fail)
 
 # ── Update de pacotes do sistema (antes de qualquer update da stack) ──────
+DISCOVERY_APT_UPDATED=0
+
+apt_update_once() {
+  local force=0
+  [[ "${1:-}" == "--force" ]] && force=1
+  if [[ "$force" -eq 0 && "${DISCOVERY_APT_UPDATED:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  if sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
+    DISCOVERY_APT_UPDATED=1
+    return 0
+  fi
+  return 1
+}
 
 # Resolve o valor efetivo de DISCOVERY_APPLY_SYSTEM_UPDATES, na prioridade:
 #   1) ambiente do instalador (--config/export);
@@ -50,7 +64,7 @@ apply_system_updates() {
   fi
 
   log "Atualizando sistema operacional (apt-get update + upgrade)..."
-  if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get update -y; then
+  if ! apt_update_once; then
     warn "apt-get update falhou; seguindo com upgrade (pode falhar se os indices nao atualizarem)"
   fi
   if ! sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
@@ -113,7 +127,7 @@ install_apt_package_batch() {
 }
 
 install_apt_dependencies() {
-  sudo apt-get update -y
+  apt_update_once || sudo apt-get update -y
 
   # Obrigatorias primeiro: se faltar uma, falha aqui com mensagem clara.
   install_apt_package_batch "obrigatorias" "${INSTALL_APT_PACKAGES_REQUIRED[@]}"
@@ -186,8 +200,8 @@ install_nsis_nsjson_plugin() {
 }
 
 ensure_dotnet_sdk() {
-  if command -v dotnet >/dev/null 2>&1; then
-    log "dotnet ja instalado"; return
+  if command -v dotnet >/dev/null 2>&1 && dotnet --list-sdks 2>/dev/null | grep -q '^10\.'; then
+    log "dotnet SDK 10.0 ja instalado"; return
   fi
 
   log "Instalando dotnet SDK 10.0"
@@ -201,27 +215,58 @@ ensure_dotnet_sdk() {
   local ms_deb="$work_dir/packages-microsoft-prod.deb"
   local dotnet_installer="$work_dir/dotnet-install.sh"
 
-  local ubuntu_version
-  # VERSION_ID esta ausente em Debian testing/sid — nunca expandir sem default
-  # (set -u abortaria o instalador).
-  ubuntu_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
-  if [[ -z "$ubuntu_version" ]]; then
-    log "VERSION_ID ausente em /etc/os-release; usando fallback dotnet-install.sh"
-  elif curl -fsSL --connect-timeout 10 --retry 2 "https://packages.microsoft.com/config/ubuntu/${ubuntu_version}/packages-microsoft-prod.deb" -o "$ms_deb"; then
-    sudo dpkg -i "$ms_deb"
-    rm -f "$ms_deb"
-    sudo apt-get update -y
-    if sudo apt-get install -y dotnet-sdk-10.0; then rm -rf "$work_dir"; return; fi
-    log "Falha no apt para dotnet-sdk-10.0, aplicando fallback com dotnet-install.sh"
-  else
-    log "Repositorio apt da Microsoft indisponivel para Ubuntu ${ubuntu_version}, aplicando fallback com dotnet-install.sh"
+  # 1) Repositorios nativos da distro (Ubuntu 24.04+/26.04 publicam dotnet-sdk-10.0
+  # em amd64 e arm64 sem precisar adicionar o repositorio da Microsoft).
+  if apt-cache show dotnet-sdk-10.0 >/dev/null 2>&1; then
+    if sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y dotnet-sdk-10.0; then
+      rm -rf "$work_dir"
+      return
+    fi
+    log "Falha ao instalar dotnet-sdk-10.0 pelo repositorio nativo; tentando repositorio Microsoft/dotnet-install.sh"
   fi
 
+  # 2) Repositorio oficial da Microsoft (Ubuntu ou Debian).
+  local os_id="" os_version=""
+  if [[ -r /etc/os-release ]]; then
+    os_id="$(. /etc/os-release && printf '%s' "${ID:-}" | tr '[:upper:]' '[:lower:]')"
+    os_version="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
+  fi
+  if [[ -z "$os_version" || ( "$os_id" != "ubuntu" && "$os_id" != "debian" ) ]]; then
+    log "OS/VERSION_ID nao elegivel para packages-microsoft-prod (${os_id:-desconhecido} ${os_version:-}); usando fallback dotnet-install.sh"
+  elif curl -fsSL --connect-timeout 10 --retry 2 "https://packages.microsoft.com/config/${os_id}/${os_version}/packages-microsoft-prod.deb" -o "$ms_deb"; then
+    local had_ms_list=0
+    sudo test -f /etc/apt/sources.list.d/microsoft-prod.list && had_ms_list=1
+    sudo dpkg -i "$ms_deb"
+    rm -f "$ms_deb"
+    apt_update_once --force || true
+    if sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y dotnet-sdk-10.0; then
+      rm -rf "$work_dir"
+      return
+    fi
+    if [[ "$had_ms_list" -eq 0 && -f /etc/apt/sources.list.d/microsoft-prod.list ]]; then
+      sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+      apt_update_once --force || true
+    fi
+    log "Falha no apt para dotnet-sdk-10.0, aplicando fallback com dotnet-install.sh"
+  else
+    log "Repositorio apt da Microsoft indisponivel para ${os_id} ${os_version}, aplicando fallback com dotnet-install.sh"
+  fi
+
+  # 3) Fallback oficial dotnet-install.sh (funciona em amd64, arm64 e arm).
   curl -fsSL --connect-timeout 10 --retry 2 https://dot.net/v1/dotnet-install.sh -o "$dotnet_installer"
   chmod +x "$dotnet_installer"
   sudo mkdir -p /usr/share/dotnet
-  sudo "$dotnet_installer" --channel 10.0 --install-dir /usr/share/dotnet
+  local -a install_args=(--channel 10.0 --install-dir /usr/share/dotnet)
+  local dotnet_arch=""
+  if dotnet_arch="$(map_arch_to_dotnet_install_arch "$(detect_system_architecture)" 2>/dev/null)" && [[ -n "$dotnet_arch" ]]; then
+    install_args+=(--architecture "$dotnet_arch")
+  fi
+  sudo "$dotnet_installer" "${install_args[@]}"
   sudo ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
+  if ! sudo test -f /etc/dotnet/install_location; then
+    sudo mkdir -p /etc/dotnet
+    printf '/usr/share/dotnet\n' | sudo tee /etc/dotnet/install_location >/dev/null
+  fi
   rm -rf "$work_dir"
 
   command -v dotnet >/dev/null 2>&1 || fail "dotnet nao foi instalado com sucesso"
@@ -262,8 +307,14 @@ install_nodejs_from_nodesource() {
 # Falha aqui NAO derruba a instalacao: o build segue com o npm disponivel.
 ensure_npm_cli() {
   local desired="${DISCOVERY_NPM_VERSION:-latest}"
-  local before after
+  local before after before_major
   before="$(npm --version 2>/dev/null || true)"
+  before_major="${before%%.*}"
+
+  if [[ -z "${DISCOVERY_NPM_VERSION:-}" && "$before_major" =~ ^[0-9]+$ ]] && (( before_major >= 11 )); then
+    log "npm ${before} ja atende (major >= 11); pulando atualizacao global."
+    return 0
+  fi
 
   log "Instalando/atualizando npm para '$desired' (atual: ${before:-desconhecido})"
   if ! sudo npm install -g "npm@$desired" >/dev/null 2>&1; then
@@ -331,7 +382,7 @@ ensure_wails3_apt_deps() {
   fi
 
   log "Instalando dependencias de build do wails via apt: ${missing[*]}"
-  sudo apt-get update -y
+  apt_update_once || sudo apt-get update -y
   sudo apt-get install -y "${missing[@]}" || \
     warn "Falha ao instalar deps de build do wails; o go install do wails pode falhar"
 }
@@ -396,20 +447,21 @@ resolve_wails_version() {
 # Usa sentinela /opt/discovery-ops/wails-cli.version para saber o que esta
 # instalado e permitir UPGRADE E DOWNGRADE automaticos (v2<->v3, beta<->stable).
 ensure_wails_toolchain() {
-  if ! command -v go >/dev/null 2>&1; then
-    warn "go nao encontrado; pulando instalacao do cli wails (instale golang-go antes de buildar)"
-    return
-  fi
-
   # O `go install` do wails3 falha se o Go do repositorio for mais antigo que o
-  # exigido pelo modulo (noble entrega 1.22; o wails v3 exige 1.26). Checa e, se
-  # preciso, instala a toolchain oficial ANTES de tentar compilar o CLI.
+  # exigido pelo modulo (noble entrega 1.22; o wails v3 exige 1.26) ou se o
+  # `golang-go` nao tiver sido instalado. Garante a toolchain oficial ANTES de
+  # checar `command -v go`.
   if ! ensure_go_toolchain_for_agent; then
     warn "Go insuficiente para compilar o ${WAILS_BIN:-wails3}; o build do agente pode nao funcionar."
   fi
   # Reavalia o PATH: a toolchain oficial vive em /usr/local/go/bin.
   export PATH="/usr/local/go/bin:/usr/local/bin:$PATH"
   hash -r 2>/dev/null || true
+
+  if ! command -v go >/dev/null 2>&1; then
+    warn "go nao encontrado; pulando instalacao do cli wails (instale Go >= ${MIN_GO_VERSION_FOR_AGENT} antes de buildar)"
+    return
+  fi
 
   resolve_wails_version
 
@@ -428,7 +480,7 @@ ensure_wails_toolchain() {
   ensure_wails3_apt_deps
 
   log "Instalando ${WAILS_CLI_LABEL} ${WAILS_VERSION} (requerido pelo build do agent)..."
-  if ! sudo env GOBIN=/usr/local/bin GOPATH=/root/go go install "${WAILS_PKG}@${WAILS_VERSION}"; then
+  if ! sudo env PATH="/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin" GOBIN=/usr/local/bin GOPATH=/root/go go install "${WAILS_PKG}@${WAILS_VERSION}"; then
     warn "Falha ao instalar ${WAILS_BIN}; o build do agent dependera do auto-install (pode nao regerar bindings)."
     return
   fi
@@ -705,6 +757,14 @@ cleanup_git_askpass() {
 clone_or_update_repo() {
   local repo_url="$1"; local repo_dir="$2"
   local -a git_env=( env "GIT_TERMINAL_PROMPT=0" )
+  local shallow="${DISCOVERY_GIT_SHALLOW:-1}"
+  local -a clone_args=(--branch "$DISCOVERY_GIT_BRANCH")
+  local -a fetch_args=()
+
+  if [[ "$shallow" == "1" ]]; then
+    clone_args+=(--depth 1 --single-branch)
+    fetch_args+=(--depth 1)
+  fi
 
   if [[ -n "${GITHUB_PAT:-}" ]]; then
     git_env+=("GIT_ASKPASS=$GIT_ASKPASS" "GITHUB_PAT=$GITHUB_PAT")
@@ -718,7 +778,7 @@ clone_or_update_repo() {
     fi
     sudo install -d -m 750 -o discovery-api -g discovery-api "$repo_dir"
     log "Clonando repositorio: $repo_url"
-    sudo -u discovery-api "${git_env[@]}" git clone --branch "$DISCOVERY_GIT_BRANCH" "$repo_url" "$repo_dir"
+    sudo -u discovery-api "${git_env[@]}" git clone "${clone_args[@]}" "$repo_url" "$repo_dir"
   else
     ensure_repo_tree_ownership "$repo_dir"
     ensure_repo_git_ownership "$repo_dir"
@@ -739,9 +799,8 @@ clone_or_update_repo() {
       fi
     fi
     log "Atualizando repositorio existente: $repo_dir"
-    sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" fetch origin "$DISCOVERY_GIT_BRANCH"
-    sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" checkout "$DISCOVERY_GIT_BRANCH"
-    sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" reset --hard "origin/$DISCOVERY_GIT_BRANCH"
+    sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" fetch "${fetch_args[@]}" origin "+refs/heads/${DISCOVERY_GIT_BRANCH}:refs/remotes/origin/${DISCOVERY_GIT_BRANCH}"
+    sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" checkout -B "$DISCOVERY_GIT_BRANCH" "origin/${DISCOVERY_GIT_BRANCH}"
     # Limpa arquivos residuais (untracked) que podem causar conflitos de compilacao
     # Ex: command_handler.go que foi deletado do repo mas sobreviveu como untracked
     sudo -u discovery-api "${git_env[@]}" git -C "$repo_dir" clean -fd 2>/dev/null || true

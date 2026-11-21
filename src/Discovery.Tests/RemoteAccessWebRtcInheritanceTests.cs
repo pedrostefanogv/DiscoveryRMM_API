@@ -574,6 +574,31 @@ public class RemoteAccessWebRtcInheritanceTests
         return siteId;
     }
 
+    [Test]
+    public async Task Lock_no_servidor_ignora_override_de_cliente_e_site()
+    {
+        await using var db = CreateDb();
+        var siteId = await SeedAsync(db,
+            server: EnabledWithTurn, client: EnabledScreenAndRdp, site: EnabledScreenAndRdp,
+            serverEnabled: true, clientEnabled: true, siteEnabled: true);
+
+        var server = await db.ServerConfigurations.FirstAsync();
+        server.LockedFieldsJson = """["RemoteAccessWebRtcPolicyJson"]""";
+        await db.SaveChangesAsync();
+
+        var resolved = await BuildResolver(db).ResolveForSiteAsync(siteId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved.Inheritance["RemoteAccessWebRtcPolicyJson"],
+                Is.EqualTo((int)ConfigurationPriorityType.Block));
+            Assert.That(resolved.RemoteAccessWebRtc.EffectiveKinds,
+                Is.EqualTo(new[] { "screen" }), "override de cliente/site deve ser ignorado quando bloqueado no servidor");
+            Assert.That(resolved.RemoteAccessWebRtc.Ice.TurnUrls,
+                Is.EqualTo(new[] { "turn:turn.example.net:3478" }));
+        });
+    }
+
     private static DiscoveryDbContext CreateDb()
     {
         var options = new DbContextOptionsBuilder<DiscoveryDbContext>()

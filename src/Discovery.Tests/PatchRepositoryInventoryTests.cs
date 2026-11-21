@@ -966,4 +966,69 @@ public class PatchRepositoryInventoryTests
         var snapshot = await db.AgentWindowsUpdateSnapshots.SingleAsync(item => item.AgentId == agentId);
         Assert.That(snapshot.PendingReboot, Is.True);
     }
+
+    [Test]
+    public async Task GetAgentUpdatesPageFiltersByUpdateTypeAndIsOptional()
+    {
+        var (db, agentId) = Seed();
+        var repo = new PatchRepository(db);
+
+        var featureEntry = Entry("guid:feat-1:1", installed: false);
+        featureEntry.UpdateType = "feature";
+        featureEntry.IsOptional = true;
+
+        var optSoftware = Entry("guid:opt-1:1", installed: false);
+        optSoftware.UpdateType = "software";
+        optSoftware.IsOptional = true;
+
+        var reqSoftware = Entry("guid:req-1:1", installed: false);
+        reqSoftware.UpdateType = "software";
+        reqSoftware.IsOptional = false;
+
+        await repo.ReplaceInventoryAsync(
+            agentId, DateTime.UtcNow, Scan(), null,
+            [featureEntry, optSoftware, reqSoftware]);
+
+        var features = await repo.GetAgentUpdatesPageAsync(
+            agentId, 1, 25, null, null, null, true, updateType: "feature");
+        Assert.That(features.Items.Select(x => x.UpdateKey), Is.EquivalentTo(new[] { "guid:feat-1:1" }));
+
+        var optionals = await repo.GetAgentUpdatesPageAsync(
+            agentId, 1, 25, null, null, null, true, isOptional: true);
+        Assert.That(optionals.Items.Select(x => x.UpdateKey), Is.EquivalentTo(new[] { "guid:feat-1:1", "guid:opt-1:1" }));
+
+        var required = await repo.GetAgentUpdatesPageAsync(
+            agentId, 1, 25, null, null, null, true, isOptional: false);
+        Assert.That(required.Items.Select(x => x.UpdateKey), Is.EquivalentTo(new[] { "guid:req-1:1" }));
+    }
+
+    [Test]
+    public async Task GetInventoryGroupsProjectsDescriptionSupportUrlAndFlags()
+    {
+        var (db, agentId) = Seed();
+        var repo = new PatchRepository(db);
+
+        var entry = Entry("guid:feat-info-1:1", installed: false, kb: "KB5044284");
+        entry.Description = "Instala correções cumulativas e recursos novos.";
+        entry.SupportUrl = "https://support.microsoft.com/help/5044284";
+        entry.UpdateType = "feature";
+        entry.IsOptional = true;
+        entry.RequiresReboot = true;
+        entry.Source = "wua";
+
+        await repo.ReplaceInventoryAsync(agentId, DateTime.UtcNow, Scan(), null, [entry]);
+
+        var groups = await repo.GetInventoryGroupsAsync(
+            null, null, null, 25, null, null, null, false, true, Array.Empty<Guid>());
+
+        Assert.That(groups, Has.Count.EqualTo(1));
+        var group = groups[0];
+        Assert.That(group.Description, Is.EqualTo("Instala correções cumulativas e recursos novos."));
+        Assert.That(group.SupportUrl, Is.EqualTo("https://support.microsoft.com/help/5044284"));
+        Assert.That(group.UpdateType, Is.EqualTo("feature"));
+        Assert.That(group.IsOptional, Is.True);
+        Assert.That(group.RequiresReboot, Is.True);
+        Assert.That(group.Source, Is.EqualTo("wua"));
+        Assert.That(group.KbIds, Does.Contain("KB5044284"));
+    }
 }

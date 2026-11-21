@@ -151,7 +151,24 @@ public sealed record RemoteSessionResponseDto(
     // Credenciais do viewer embutidas no start (aditivo, 2026-10-27): evita um
     // RTT HTTP extra (start + /nats-credentials) no caminho crítico do terminal.
     // Ausente quando a sessão exige consentimento pendente (screen).
-    SessionCredentialsDto? ViewerCredentials = null
+    SessionCredentialsDto? ViewerCredentials = null,
+    // Configuração WebRTC efetiva da sessão (iceServers com credencial TURN
+    // efêmera compartilhada com o agente, relayOnly e fallbackToNats). Presente
+    // apenas quando o WebRTC foi autorizado para este kind/transporte.
+    RemoteSessionWebRtcDto? WebRtc = null
+);
+
+public sealed record RemoteSessionIceServerDto(
+    string[] Urls,
+    string? Username = null,
+    string? Credential = null
+);
+
+public sealed record RemoteSessionWebRtcDto(
+    bool Enabled,
+    IReadOnlyList<RemoteSessionIceServerDto> IceServers,
+    bool RelayOnly,
+    bool FallbackToNats
 );
 
 /// <summary>Estado do consentimento de uma sessão de desktop.</summary>

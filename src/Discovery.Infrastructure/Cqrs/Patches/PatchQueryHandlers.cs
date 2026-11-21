@@ -79,7 +79,8 @@ public sealed class GetAgentWindowsUpdatesPageQueryHandler(IPatchRepository repo
         var status = PatchScopeResolver.ParseStatus(query.Status);
 
         var result = await repo.GetAgentUpdatesPageAsync(
-            query.AgentId, page, pageSize, query.Search, status, query.Severity, query.Descending, query.Source, ct);
+            query.AgentId, page, pageSize, query.Search, status, query.Severity, query.Descending, query.Source,
+            query.UpdateType, query.IsOptional, ct);
 
         var dto = new AgentWindowsUpdatePageDto(
             result.Items.Select(PatchDtoMapper.ToDto).ToList(),
@@ -150,19 +151,34 @@ public sealed class GetPatchInventoryQueryHandler(IPatchRepository repo)
         if (hasMore && items.Count > 0)
             nextCursor = PatchScopeResolver.EncodeKeyCursor(items[^1].GroupKey);
 
-        var dtos = items.Select(item => new PatchInventoryGroupDto(
-            item.GroupKey,
-            PatchJson.ParseStringArray(item.KbIds),
-            item.Title,
-            item.Classification,
-            item.Severity,
-            item.PublishedAt,
-            item.PendingAgents,
-            item.InstalledAgents,
-            item.DeniedAgents,
-            item.ReportingAgents,
-            item.FirstSeenAt,
-            item.LastSeenAt)).ToList();
+        var dtos = items.Select(item =>
+        {
+            var kbIds = PatchJson.ParseStringArray(item.KbIds);
+            if (kbIds.Count == 0 && item.GroupKey.StartsWith("kb:", StringComparison.OrdinalIgnoreCase))
+                kbIds = [item.GroupKey[3..]];
+
+            return new PatchInventoryGroupDto(
+                item.GroupKey,
+                kbIds,
+                item.Title,
+                item.Classification,
+                item.Severity,
+                item.PublishedAt,
+                item.PendingAgents,
+                item.InstalledAgents,
+                item.DeniedAgents,
+                item.ReportingAgents,
+                item.FirstSeenAt,
+                item.LastSeenAt)
+            {
+                Description = item.Description,
+                SupportUrl = item.SupportUrl,
+                UpdateType = item.UpdateType,
+                IsOptional = item.IsOptional,
+                RequiresReboot = item.RequiresReboot,
+                Source = item.Source
+            };
+        }).ToList();
 
         return Result<PatchInventoryListDto>.Success(new PatchInventoryListDto(dtos, nextCursor, hasMore));
     }

@@ -47,6 +47,9 @@ public sealed record AgentWindowsUpdateDto(
     /// <summary>Marcada como obrigatória pela busca WUA (is_mandatory).</summary>
     public bool IsMandatory { get; init; }
 
+    /// <summary>Marcada como opcional ou prévia pela busca WUA/WaaS (is_optional).</summary>
+    public bool IsOptional { get; init; }
+
     /// <summary>
     /// Proveniência da severidade: vendor | derived | unknown (decisão D10).
     /// Null em linhas antigas (antes da coluna existir) e em linhas de QFE.
@@ -232,7 +235,15 @@ public sealed record PatchInventoryGroupDto(
     int DeniedAgents,
     int ReportingAgents,
     DateTime? FirstSeenAt,
-    DateTime? LastSeenAt);
+    DateTime? LastSeenAt)
+{
+    public string? Description { get; init; }
+    public string? SupportUrl { get; init; }
+    public string? UpdateType { get; init; }
+    public bool IsOptional { get; init; }
+    public bool RequiresReboot { get; init; }
+    public string? Source { get; init; }
+}
 
 public sealed record PatchInventoryListDto(
     IReadOnlyList<PatchInventoryGroupDto> Items,
@@ -441,6 +452,7 @@ public static class PatchDtoMapper
         {
             IsDownloaded = update.IsDownloaded,
             IsMandatory = update.IsMandatory,
+            IsOptional = update.IsOptional,
             SeveritySource = update.SeveritySource,
             UpdateType = update.UpdateType,
             FailureClass = update.FailureClass,

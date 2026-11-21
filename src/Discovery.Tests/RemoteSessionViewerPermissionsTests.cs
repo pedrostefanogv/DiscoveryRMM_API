@@ -133,6 +133,31 @@ public sealed class RemoteSessionViewerPermissionsTests
     }
 
     [Test]
+    public void Build_ConcedeSubjectsWebRtcApenasParaKindsElegiveis()
+    {
+        foreach (var kind in new[]
+                 {
+                     RemoteSessionKind.Screen,
+                     RemoteSessionKind.Rdp,
+                     RemoteSessionKind.Files,
+                     RemoteSessionKind.Proxy,
+                     RemoteSessionKind.All
+                 })
+        {
+            var (pub, sub) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, kind);
+            Assert.That(pub, Does.Contain(Subject + ".webrtc.in"), $"pub faltando .webrtc.in para {kind}");
+            Assert.That(sub, Does.Contain(Subject + ".webrtc.out"), $"sub faltando .webrtc.out para {kind}");
+        }
+
+        foreach (var kind in new[] { RemoteSessionKind.Terminal, RemoteSessionKind.Registry })
+        {
+            var (pub, sub) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, kind);
+            Assert.That(pub, Does.Not.Contain(Subject + ".webrtc.in"), $"pub não deveria ter .webrtc.in para {kind}");
+            Assert.That(sub, Does.Not.Contain(Subject + ".webrtc.out"), $"sub não deveria ter .webrtc.out para {kind}");
+        }
+    }
+
+    [Test]
     public void Ttl_Expirada_Fallback30()
     {
         var ttl = RemoteSessionViewerPermissions.TtlMinutes(DateTime.UtcNow.AddMinutes(-5));

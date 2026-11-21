@@ -147,6 +147,44 @@ public class RemoteAccessWebRtcTurnCredentialRedactionTests
     }
 
     [Test]
+    public void MergeWebRtcSecrets_Preserva_credencial_quando_reenviada_vazia_com_turn()
+    {
+        var existing = """
+            {"enabled":true,"kinds":["screen"],
+             "ice":{"turnUrls":["turn:t:3478"],"turnUsername":"u","turnCredential":"segredo-antigo"}}
+            """;
+        var incoming = """
+            {"enabled":true,"kinds":["screen","proxy"],
+             "ice":{"turnUrls":["turn:t:3478"],"turnUsername":"u","turnCredential":""}}
+            """;
+
+        var merged = Discovery.Infrastructure.Services.ConfigurationService.MergeWebRtcSecrets(incoming, existing);
+        var parsed = Discovery.Core.Configuration.RemoteAccessWebRtcPolicy.Parse(merged);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Ice.TurnCredential, Is.EqualTo("segredo-antigo"));
+            Assert.That(parsed.EffectiveKinds, Is.EqualTo(new[] { "screen", "proxy" }));
+        });
+    }
+
+    [Test]
+    public void MergeWebRtcSecrets_Substitui_quando_nova_credencial_informada()
+    {
+        var existing = """
+            {"enabled":true,"ice":{"turnUrls":["turn:t:3478"],"turnUsername":"u","turnCredential":"segredo-antigo"}}
+            """;
+        var incoming = """
+            {"enabled":true,"ice":{"turnUrls":["turn:t:3478"],"turnUsername":"u","turnCredential":"segredo-novo"}}
+            """;
+
+        var merged = Discovery.Infrastructure.Services.ConfigurationService.MergeWebRtcSecrets(incoming, existing);
+        var parsed = Discovery.Core.Configuration.RemoteAccessWebRtcPolicy.Parse(merged);
+
+        Assert.That(parsed.Ice.TurnCredential, Is.EqualTo("segredo-novo"));
+    }
+
+    [Test]
     public void Json_corrompido_passa_intacto_sem_apagar_configuracao()
     {
         // Fail-open CONTROLADO: devolver o original não vaza nada novo (o valor

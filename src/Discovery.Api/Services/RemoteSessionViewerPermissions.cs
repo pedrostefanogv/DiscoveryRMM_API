@@ -77,6 +77,10 @@ public static class RemoteSessionViewerPermissions
         // negar, porque acesso ao registro não era parte do contrato anterior e
         // concedê-lo ampliaria silenciosamente o que uma sessão de tela pode ver.
         var registryAllowed = !noRegistry && kind is RemoteSessionKind.Registry;
+        // WEBRTC: subjects dedicados de sinalização (.webrtc.in/.webrtc.out)
+        // apenas para kinds elegíveis (screen, rdp, files, proxy, all).
+        var webRtcAllowed = kind is null or RemoteSessionKind.Screen or RemoteSessionKind.Rdp
+            or RemoteSessionKind.Files or RemoteSessionKind.Proxy or RemoteSessionKind.All;
 
         var pub = new List<string>
         {
@@ -118,6 +122,9 @@ public static class RemoteSessionViewerPermissions
 
         if (!viewOnly)
             pub.Add($"{natsSubject}.clipboard.req");
+
+        if (webRtcAllowed)
+            pub.Add($"{natsSubject}.webrtc.in");
 
         var sub = new List<string>
         {
@@ -173,6 +180,9 @@ public static class RemoteSessionViewerPermissions
             sub.Add($"{natsSubject}.registry.resp");
             sub.Add($"{natsSubject}.registry.ready");
         }
+
+        if (webRtcAllowed)
+            sub.Add($"{natsSubject}.webrtc.out");
 
         return (pub.ToArray(), sub.ToArray());
     }

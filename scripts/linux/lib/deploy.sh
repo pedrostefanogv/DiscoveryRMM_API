@@ -7,7 +7,7 @@ cleanup_old_releases() {
   local releases_dir="$1"
   local keep="${DISCOVERY_KEEP_RELEASES:-5}"
 
-  mapfile -t release_dirs < <(ls -1dt "$releases_dir"/* 2>/dev/null || true)
+  mapfile -t release_dirs < <(sudo -u discovery-api ls -1dt "$releases_dir"/* 2>/dev/null || true)
   if (( ${#release_dirs[@]} <= keep )); then
     return
   fi
@@ -15,13 +15,13 @@ cleanup_old_releases() {
   # Nunca apagar a release apontada pelo symlink `current` (alvo de rollback).
   local current_link current_target=""
   current_link="$(dirname "$releases_dir")/current"
-  if [[ -L "$current_link" ]]; then
-    current_target="$(readlink -f "$current_link" 2>/dev/null || true)"
+  if sudo -u discovery-api test -L "$current_link" 2>/dev/null; then
+    current_target="$(sudo -u discovery-api readlink -f "$current_link" 2>/dev/null || true)"
   fi
 
   log "Removendo $(( ${#release_dirs[@]} - keep )) release(s) antiga(s) em $releases_dir"
   for old_release in "${release_dirs[@]:$keep}"; do
-    if [[ -n "$current_target" && "$(readlink -f "$old_release" 2>/dev/null || true)" == "$current_target" ]]; then
+    if [[ -n "$current_target" && "$(sudo -u discovery-api readlink -f "$old_release" 2>/dev/null || true)" == "$current_target" ]]; then
       warn "Pulando release atual em uso (rollback): $(basename "$old_release")"
       continue
     fi
@@ -85,8 +85,9 @@ publish_api() {
     log "Limpando cache de build da API (obj/ bin/)"
     sudo -u discovery-api find "$DISCOVERY_API_SOURCE" -maxdepth 4 \( -name obj -o -name bin \) -type d -exec rm -rf {} +
   fi
-  sudo -u discovery-api dotnet publish "$DISCOVERY_API_SOURCE/src/Discovery.Api/Discovery.Api.csproj" \
-    -c Release -r "$DISCOVERY_DOTNET_RUNTIME" --self-contained false -o "$release_dir" /p:UseAppHost=true
+  sudo -u discovery-api env DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+    dotnet publish "$DISCOVERY_API_SOURCE/src/Discovery.Api/Discovery.Api.csproj" \
+    -c Release -r "$DISCOVERY_DOTNET_RUNTIME" --self-contained false --nologo -o "$release_dir" /p:UseAppHost=true
 
   # O appsettings*.json pubicado e removido de proposito (config vem do
   # discovery.env). Consequencia: o publisher do generate_discovery_env precisa
@@ -147,7 +148,7 @@ site_needs_npm_ci() {
   if [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "1" ]]; then
     return 0
   fi
-  if [[ ! -d "$site_source/node_modules" ]]; then
+  if ! sudo -u discovery-api test -d "$site_source/node_modules" 2>/dev/null; then
     return 0
   fi
   # node_modules de outra ARQUITETURA/plataforma: o Vite 8 usa o binario nativo
@@ -158,7 +159,7 @@ site_needs_npm_ci() {
   # instalacao e forcamos npm ci quando ela muda.
   local arch_marker="$site_source/node_modules/.discovery-arch"
   local host_arch; host_arch="$(uname -m)"
-  if [[ ! -f "$arch_marker" ]]; then
+  if ! sudo -u discovery-api test -f "$arch_marker" 2>/dev/null; then
     return 0
   fi
   local built_arch
@@ -167,10 +168,10 @@ site_needs_npm_ci() {
     warn "node_modules do portal foi instalado para '${built_arch:-desconhecida}' e o host e '$host_arch'; reinstalando do zero."
     return 0
   fi
-  if [[ ! -f "$site_source/node_modules/.package-lock.json" ]]; then
+  if ! sudo -u discovery-api test -f "$site_source/node_modules/.package-lock.json" 2>/dev/null; then
     return 0
   fi
-  if [[ ! -f "$site_source/package-lock.json" ]]; then
+  if ! sudo -u discovery-api test -f "$site_source/package-lock.json" 2>/dev/null; then
     return 0
   fi
   # OWNERSHIP: o .package-lock.json pertence ao discovery-api; um `test -nt`
@@ -213,7 +214,7 @@ install_site_dependencies() {
   # Marca a arquitetura deste node_modules: o Vite 8 carrega um binario nativo
   # por plataforma (@rolldown/binding-linux-<arch>), entao reaproveitar um
   # node_modules de outra arquitetura quebra o build. Ver site_needs_npm_ci.
-  if [[ -d "$site_source/node_modules" ]]; then
+  if sudo -u discovery-api test -d "$site_source/node_modules" 2>/dev/null; then
     printf "%s\n" "$(uname -m)" | sudo -u discovery-api tee "$site_source/node_modules/.discovery-arch" >/dev/null 2>&1 || true
   fi
 }
@@ -841,6 +842,14 @@ write_systemd_service() {
   log "Criando/verificando servico systemd discovery-api"
   local service_file="/etc/systemd/system/discovery-api.service"
   local tmp_service; tmp_service="$(mktemp)"
+  local dotnet_root_line=""
+  local dotnet_bin_path=""
+  if command -v dotnet >/dev/null 2>&1; then
+    dotnet_bin_path="$(readlink -f "$(command -v dotnet)" 2>/dev/null || true)"
+    if [[ -n "$dotnet_bin_path" ]]; then
+      dotnet_root_line="Environment=DOTNET_ROOT=$(dirname "$dotnet_bin_path")"$'\n'
+    fi
+  fi
 
   cat > "$tmp_service" <<EOF
 [Unit]
@@ -859,7 +868,7 @@ EnvironmentFile=/etc/discovery-api/discovery.env
 # /var/lib/discovery-api/go/bin cobre o caso do build auto-instalar o wails3
 # no GOPATH do usuario de servico (fallback quando o /usr/local/bin nao existe).
 Environment=HOME=/var/lib/discovery-api
-Environment=PATH=/usr/local/bin:/usr/local/go/bin:/var/lib/discovery-api/go/bin:/usr/bin:/bin:/usr/sbin:/sbin
+${dotnet_root_line}Environment=PATH=/usr/local/bin:/usr/local/go/bin:/var/lib/discovery-api/go/bin:/usr/bin:/bin:/usr/sbin:/sbin
 ExecStart=${DISCOVERY_API_CURRENT}/Discovery.Api
 Restart=always
 RestartSec=5
@@ -1271,8 +1280,8 @@ restart_api_with_rollback() {
   # re-apontar para a propria release quebrada. O alvo correto e a release mais
   # recente do diretorio de releases que nao seja a atual.
   local current_release=""
-  if [[ -L "${DISCOVERY_API_CURRENT:-}" ]]; then
-    current_release="$(readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
+  if sudo -u discovery-api test -L "${DISCOVERY_API_CURRENT:-}" 2>/dev/null; then
+    current_release="$(sudo -u discovery-api readlink -f "$DISCOVERY_API_CURRENT" 2>/dev/null || true)"
   fi
 
   # Hardening (incidente 2026-10-31 16:28): a deteccao anterior dependia de
@@ -1290,10 +1299,10 @@ restart_api_with_rollback() {
   local previous_release=""
   local releases_root
   releases_root="$(dirname "${DISCOVERY_API_CURRENT:-/opt/discovery-api/current}")/releases"
-  if [[ -d "$releases_root" ]]; then
+  if sudo -u discovery-api test -d "$releases_root" 2>/dev/null; then
     local candidate resolved skipped_newest=0
     while IFS= read -r candidate; do
-      resolved="$(readlink -f "$candidate" 2>/dev/null || true)"
+      resolved="$(sudo -u discovery-api readlink -f "$candidate" 2>/dev/null || true)"
       [[ -z "$resolved" ]] && continue
       if [[ -z "$current_release" && "$skipped_newest" -eq 0 ]]; then
         skipped_newest=1
@@ -1302,7 +1311,7 @@ restart_api_with_rollback() {
       [[ -n "$current_release" && "$resolved" == "$current_release" ]] && continue
       previous_release="$resolved"
       break
-    done < <(ls -1dt "$releases_root"/*/ 2>/dev/null || true)
+    done < <(sudo -u discovery-api ls -1dt "$releases_root"/*/ 2>/dev/null || true)
   fi
 
   if ! sudo systemctl restart discovery-api; then
@@ -1327,7 +1336,7 @@ restart_api_with_rollback() {
   done
 
   warn "API nao ficou saudavel apos o update; executando rollback para a release anterior."
-  if [[ -n "$previous_release" && -d "$previous_release" ]]; then
+  if [[ -n "$previous_release" ]] && sudo -u discovery-api test -d "$previous_release" 2>/dev/null; then
     sudo -u discovery-api ln -sfn "$previous_release" "$DISCOVERY_API_CURRENT"
     sudo systemctl restart discovery-api || true
     for attempt in $(seq 1 60); do

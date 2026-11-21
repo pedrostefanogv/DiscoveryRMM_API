@@ -13,7 +13,9 @@ public sealed record GetAgentWindowsUpdatesPageQuery(
     string? Status,
     string? Severity,
     bool Descending,
-    string? Source = null
+    string? Source = null,
+    string? UpdateType = null,
+    bool? IsOptional = null
 ) : IQuery<Result<AgentWindowsUpdatePageDto>>;
 
 public sealed record GetAgentWindowsUpdatesSnapshotQuery(Guid AgentId, string? Source = null)

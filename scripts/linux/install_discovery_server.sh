@@ -89,15 +89,8 @@ trap cleanup_sudo_keepalive EXIT
 
 # â”€â”€ Full installation wizard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-main() {
-  initialize_log_context_from_requested_mode
-  select_operation_mode
-
-  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then apply_nats_reconfiguration_only; return; fi
-  if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then apply_stack_update_only; return; fi
-  if [[ "$MAINTENANCE_MODE" -eq 1 ]]; then apply_maintenance_mode; return; fi
-
-  wizard_header "Repositorios" "$(wizard_step_label "3/8" "2/7")"
+wizard_step_repos() {
+  wizard_header "Repositorios" "$(wizard_step_label "1/10" "1/10")"
   echo "Informe os repositorios Git que serao clonados."
   echo "API: backend principal (DiscoveryRMM_API)."
   echo "Agent: codigo do agente para build."
@@ -106,39 +99,60 @@ main() {
   echo "- https://github.com/OWNER/DiscoveryRMM_API.git"
   echo "- git@github.com:OWNER/DiscoveryRMM_API.git"
   echo "----------------------------------------"
-  prompt_repo_url DISCOVERY_GIT_REPO "URL do repositorio da API" "https://github.com/pedrostefanogv/DiscoveryRMM_API"
-  prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)" "https://github.com/pedrostefanogv/DiscoveryRMM_Agent"
-  prompt_repo_url DISCOVERY_SITE_GIT_REPO "URL do repositorio do portal web" "https://github.com/pedrostefanogv/DiscoveryRMM_Site"
-  select_install_branch
+  prompt_repo_url DISCOVERY_GIT_REPO "URL do repositorio da API" "https://github.com/pedrostefanogv/DiscoveryRMM_API" || return $?
+  prompt_repo_url DISCOVERY_AGENT_GIT_REPO "URL do repositorio do Agent (build)" "https://github.com/pedrostefanogv/DiscoveryRMM_Agent" || return $?
+  prompt_repo_url DISCOVERY_SITE_GIT_REPO "URL do repositorio do portal web" "https://github.com/pedrostefanogv/DiscoveryRMM_Site" || return $?
+}
 
-  wizard_header "Acesso do portal/API" "$(wizard_step_label "5/8" "4/7")"
+wizard_step_access() {
+  wizard_header "Acesso do portal/API" "$(wizard_step_label "3/10" "3/10")"
   echo "1) internal - acesso somente na rede interna."
   echo "2) external - acesso somente via Cloudflare Tunnel."
   echo "3) hybrid   - interno e externo ao mesmo tempo."
   echo "----------------------------------------"
-  prompt_if_empty ACCESS_MODE "Modo de acesso (1/2/3 ou internal/external/hybrid)" 0 "internal"
-  normalize_access_mode
+  while true; do
+    prompt_if_empty ACCESS_MODE "Modo de acesso (1/2/3 ou internal/external/hybrid)" 0 "internal" || return $?
+    local normalized_mode
+    normalized_mode="$(printf '%s' "$ACCESS_MODE" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$normalized_mode" in
+      1|internal) ACCESS_MODE="internal"; break ;;
+      2|external) ACCESS_MODE="external"; break ;;
+      3|hybrid)   ACCESS_MODE="hybrid"; break ;;
+      *)
+        if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+          fail "ACCESS_MODE invalido: $ACCESS_MODE (use 1/2/3 ou internal/external/hybrid)"
+        fi
+        echo "Opcao invalida: '$ACCESS_MODE'. Use 1 (internal), 2 (external) ou 3 (hybrid)." >&2
+        ACCESS_MODE=""
+        ;;
+    esac
+  done
+
+  if [[ "$ACCESS_MODE" == "internal" ]]; then
+    EXTERNAL_API_HOST=""
+    CLOUDFLARE_TUNNEL_TOKEN=""
+  elif [[ "$ACCESS_MODE" == "external" ]]; then
+    INTERNAL_API_HOST=""
+  fi
 
   if [[ "$ACCESS_MODE" == "internal" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo; echo "Endereco interno usado por agentes/UI na rede local."
     local internal_ip; internal_ip="$(detect_internal_ipv4)"
     if [[ -n "$internal_ip" ]]; then
-      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API" 0 "$internal_ip"
-    else prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API"; fi
+      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API" 0 "$internal_ip" || return $?
+    else
+      prompt_if_empty INTERNAL_API_HOST "IP ou hostname interno da API" || return $?
+    fi
   fi
   if [[ "$ACCESS_MODE" == "external" || "$ACCESS_MODE" == "hybrid" ]]; then
     echo; echo "Endereco externo publicado via Cloudflare (ex: api.suaempresa.com)."
-    prompt_if_empty EXTERNAL_API_HOST "Hostname externo da API (Cloudflare)"
-    prompt_cloudflare_tunnel_token
+    prompt_if_empty EXTERNAL_API_HOST "Hostname externo da API (Cloudflare)" || return $?
+    prompt_cloudflare_tunnel_token || return $?
   fi
+}
 
-  prompt_tls_certificate_configuration
-  # Storage de arquivos: decide RustFS local x provedor externo ANTES de
-  # escrever o env/gerar o nginx (o endpoint e o location do bucket dependem
-  # dessa escolha). Default = nao instalar nada.
-  prompt_object_storage_configuration
-
-  wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "7/9" "6/8")"
+wizard_step_openapi() {
+  wizard_header "Documentacao OpenAPI (Scalar)" "$(wizard_step_label "6/10" "6/10")"
   echo "OpenAPI publica o contrato da API em /openapi/{versao}.json (rota anonima)."
   echo "Scalar e a UI interativa em /scalar que consome esse contrato e inclui o"
   echo "console 'Try it out' para chamar a API pelo navegador (tambem anonima)."
@@ -146,23 +160,83 @@ main() {
   echo "se precisar mesmo publicar a documentacao/console externamente."
   echo "Se OpenAPI estiver desativado, /openapi e /scalar ficam indisponiveis."
   echo "----------------------------------------"
-  prompt_if_empty OPENAPI_ENABLED "Habilitar OpenAPI (contrato)? (y/N)" 0 "n"
+  prompt_yes_no OPENAPI_ENABLED "Habilitar OpenAPI (contrato)? (y/N)" "n" || return $?
   normalize_openapi_enabled
   # A UI do Scalar e exposicao extra em producao: padrao seguro = N, mesmo com
   # o contrato OpenAPI habilitado (digite y para habilitar).
-  prompt_if_empty OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (y/N)" 0 "n"
+  prompt_yes_no OPENAPI_SCALAR_ENABLED "Habilitar UI do Scalar em producao? (y/N)" "n" || return $?
   normalize_openapi_scalar_enabled
+}
 
-  wizard_header "Banco de dados (PostgreSQL)" "$(wizard_step_label "8/9" "7/8")"
-  echo "O instalador cria o usuario e o database se nao existirem."
-  echo "----------------------------------------"
-  prompt_if_empty POSTGRES_DB "Nome do database PostgreSQL" 0 "discovery"
-  prompt_if_empty POSTGRES_USER "Usuario PostgreSQL" 0 "discovery_app"
-  prompt_postgres_password
+wizard_step_session_and_update() {
+  prompt_remote_session_duration || return $?
+  prompt_selfupdate_settings || return $?
+}
 
-  prompt_nats_configuration
-  prompt_remote_session_duration
-  prompt_selfupdate_settings
+run_full_install_wizard() {
+  local step_idx=1
+  local max_step=10
+  local rc=0
+  local prev_back_hint="${WIZARD_SHOW_BACK_HINT:-0}"
+
+  if [[ "${NON_INTERACTIVE:-0}" -eq 0 ]]; then
+    WIZARD_SHOW_BACK_HINT=1
+  else
+    WIZARD_SHOW_BACK_HINT=0
+  fi
+  WIZARD_REPROMPT=0
+
+  while (( step_idx <= max_step )); do
+    rc=0
+    case "$step_idx" in
+      1)  wizard_step_repos || rc=$? ;;
+      2)  select_install_branch || rc=$? ;;
+      3)  wizard_step_access || rc=$? ;;
+      4)  prompt_tls_certificate_configuration || rc=$? ;;
+      5)  prompt_object_storage_configuration || rc=$? ;;
+      6)  wizard_step_openapi || rc=$? ;;
+      7)  prompt_postgres_configuration || rc=$? ;;
+      8)  prompt_nats_configuration || rc=$? ;;
+      9)  wizard_step_session_and_update || rc=$? ;;
+      10) confirm_installation || rc=$? ;;
+    esac
+
+    if (( rc == ${WIZARD_BACK_RC:-10} )); then
+      if (( step_idx > 1 )); then
+        step_idx=$((step_idx - 1))
+        WIZARD_REPROMPT=1
+      else
+        echo "Voce ja esta na primeira etapa." >&2
+        WIZARD_REPROMPT=1
+      fi
+      continue
+    elif (( rc == 20 )); then
+      step_idx="${WIZARD_JUMP_STEP:-1}"
+      WIZARD_REPROMPT=1
+      continue
+    elif (( rc != 0 )); then
+      WIZARD_SHOW_BACK_HINT="$prev_back_hint"
+      WIZARD_REPROMPT=0
+      return "$rc"
+    fi
+
+    WIZARD_REPROMPT=0
+    step_idx=$((step_idx + 1))
+  done
+
+  WIZARD_SHOW_BACK_HINT="$prev_back_hint"
+  WIZARD_REPROMPT=0
+}
+
+main() {
+  initialize_log_context_from_requested_mode
+  select_operation_mode
+
+  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then apply_nats_reconfiguration_only; return; fi
+  if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then apply_stack_update_only; return; fi
+  if [[ "$MAINTENANCE_MODE" -eq 1 ]]; then apply_maintenance_mode; return; fi
+
+  run_full_install_wizard
 
   validate_security_inputs
   normalize_nats_settings
@@ -199,8 +273,6 @@ main() {
   DISCOVERY_SITE_RELEASES="${DISCOVERY_SITE_BASE}/releases"
   DISCOVERY_SITE_SOURCE="${DISCOVERY_SITE_BASE}/source"
   DISCOVERY_SITE_CURRENT="${DISCOVERY_SITE_BASE}/current"
-
-  confirm_installation
 
   check_disk_space "${DISCOVERY_API_BASE:-/opt/discovery-api}" 2048
   check_disk_space "${DISCOVERY_SITE_BASE:-/opt/discovery-site}" 1024

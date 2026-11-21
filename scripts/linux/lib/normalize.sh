@@ -279,19 +279,13 @@ normalize_site_realtime_settings() {
 # /etc/default/rustfs para reutilizar as credenciais do RustFS ja instalado.
 load_existing_object_storage_defaults() {
   local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
-  if sudo test -f "$env_file"; then
-    local key value
-    for key in DISCOVERY_OBJECT_STORAGE_MODE DISCOVERY_OBJECT_STORAGE_BUCKET \
-               DISCOVERY_OBJECT_STORAGE_ENDPOINT DISCOVERY_OBJECT_STORAGE_REGION \
-               DISCOVERY_OBJECT_STORAGE_ACCESS_KEY DISCOVERY_OBJECT_STORAGE_SECRET_KEY \
-               DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE DISCOVERY_OBJECT_STORAGE_SSL_VERIFY \
-               DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED \
-               DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD RUSTFS_VERSION; do
-      [[ -n "${!key:-}" ]] && continue
-      value="$(sudo awk -F= -v k="$key" '$1==k{sub("^[^=]*=","");print;exit}' "$env_file" 2>/dev/null || true)"
-      [[ -n "$value" ]] && printf -v "$key" '%s' "$value"
-    done
-  fi
+  load_env_keys_if_unset "$env_file" \
+    DISCOVERY_OBJECT_STORAGE_MODE DISCOVERY_OBJECT_STORAGE_BUCKET \
+    DISCOVERY_OBJECT_STORAGE_ENDPOINT DISCOVERY_OBJECT_STORAGE_REGION \
+    DISCOVERY_OBJECT_STORAGE_ACCESS_KEY DISCOVERY_OBJECT_STORAGE_SECRET_KEY \
+    DISCOVERY_OBJECT_STORAGE_USE_PATH_STYLE DISCOVERY_OBJECT_STORAGE_SSL_VERIFY \
+    DISCOVERY_OBJECT_STORAGE_URL_TTL_HOURS DISCOVERY_OBJECT_STORAGE_NGINX_ENABLED \
+    DISCOVERY_OBJECT_STORAGE_MAX_UPLOAD RUSTFS_VERSION
 
   if sudo test -f /etc/default/rustfs; then
     local rust_access rust_secret
@@ -427,6 +421,13 @@ normalize_object_storage_settings() {
     [[ -n "${DISCOVERY_OBJECT_STORAGE_SECRET_KEY:-}" ]] || fail "Informe DISCOVERY_OBJECT_STORAGE_SECRET_KEY para o provedor externo."
   fi
 }
+is_valid_install_branch_syntax() {
+  local raw_branch="${1:-}"
+  [[ "$raw_branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 1
+  [[ "$raw_branch" != *..* ]] || return 1
+  return 0
+}
+
 normalize_install_branch_input() {
   local raw_branch="$1"
   local normalized_branch
@@ -435,8 +436,7 @@ normalize_install_branch_input() {
     lts|release|beta|dev) printf '%s' "$normalized_branch"; return ;;
   esac
   # Sem '-' inicial (injecao de flag em `git clone -b`) e sem '..' (traversal).
-  [[ "$raw_branch" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || fail "Branch invalida: $raw_branch"
-  [[ "$raw_branch" != *..* ]] || fail "Branch invalida (sequencia '..' nao permitida): $raw_branch"
+  is_valid_install_branch_syntax "$raw_branch" || fail "Branch invalida: $raw_branch"
   printf '%s' "$raw_branch"
 }
 
@@ -446,18 +446,33 @@ select_install_branch() {
     requested_branch="$DISCOVERY_RELEASE_CHANNEL"
   fi
 
-  if [[ -n "$requested_branch" ]]; then
+  if [[ -n "$requested_branch" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
     DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$requested_branch")"
     return
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-    DISCOVERY_GIT_BRANCH="release"
+    if [[ -n "$requested_branch" ]]; then
+      DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$requested_branch")"
+    else
+      DISCOVERY_GIT_BRANCH="release"
+    fi
     return
   fi
 
+  local default_idx="2" default_label="release"
+  if [[ -n "$requested_branch" ]]; then
+    case "$(printf '%s' "$requested_branch" | tr '[:upper:]' '[:lower:]')" in
+      lts)     default_idx="1"; default_label="lts" ;;
+      release) default_idx="2"; default_label="release" ;;
+      beta)    default_idx="3"; default_label="beta" ;;
+      dev)     default_idx="4"; default_label="dev" ;;
+      *)       default_idx="5"; default_label="$requested_branch" ;;
+    esac
+  fi
+
   while true; do
-    wizard_header "Canal/branch de instalacao" "$(wizard_step_label "4/8" "3/7")"
+    wizard_header "Canal/branch de instalacao" "$(wizard_step_label "2/10" "2/10")"
     echo "Selecione o canal/branch que sera clonado."
     echo "Isso define a versao da API instalada."
     echo " 1) lts     - suporte longo prazo"
@@ -467,26 +482,49 @@ select_install_branch() {
     echo " 5) custom  - informar branch manualmente"
     echo "----------------------------------------"
     echo "Dica: digite o numero ou o nome (ex: release)."
-    echo "Padrao: [2] release (pressione Enter)."
+    echo "Padrao: [${default_idx}] ${default_label} (pressione Enter)."
 
     local selected_option
-    read -r -p "Opcao [2]: " selected_option
-    selected_option="${selected_option:-2}"
+    read -r -p "Opcao [${default_idx}]: " selected_option
+    selected_option="${selected_option:-$default_idx}"
     selected_option="$(printf '%s' "$selected_option" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
+    if is_wizard_back_input "$selected_option"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
+
     case "$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]')" in
-      1|lts)             DISCOVERY_GIT_BRANCH="lts";     return ;;
-      2|release)         DISCOVERY_GIT_BRANCH="release"; return ;;
-      3|beta)            DISCOVERY_GIT_BRANCH="beta";    return ;;
-      4|dev)             DISCOVERY_GIT_BRANCH="dev";     return ;;
+      1|lts)             DISCOVERY_GIT_BRANCH="lts";     return 0 ;;
+      2|release)         DISCOVERY_GIT_BRANCH="release"; return 0 ;;
+      3|beta)            DISCOVERY_GIT_BRANCH="beta";    return 0 ;;
+      4|dev)             DISCOVERY_GIT_BRANCH="dev";     return 0 ;;
       5|custom)
         local custom_branch
-        read -r -p "Informe a branch custom: " custom_branch
+        local custom_default=""
+        [[ "$default_idx" == "5" ]] && custom_default="$requested_branch"
+        if [[ -n "$custom_default" ]]; then
+          read -r -p "Informe a branch custom [$custom_default]: " custom_branch
+          custom_branch="${custom_branch:-$custom_default}"
+        else
+          read -r -p "Informe a branch custom: " custom_branch
+        fi
         custom_branch="$(printf '%s' "$custom_branch" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if is_wizard_back_input "$custom_branch"; then
+          return "${WIZARD_BACK_RC:-10}"
+        fi
         [[ -n "$custom_branch" ]] || { echo "Branch custom nao informada. Tente novamente." >&2; continue; }
+        if ! is_valid_install_branch_syntax "$custom_branch"; then
+          echo "Branch invalida: '$custom_branch'. Use letras, digitos, '.', '_', '/' ou '-' (sem '..' e sem iniciar com '-')." >&2
+          continue
+        fi
         DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$custom_branch")"
-        return ;;
-      *) echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2 ;;
+        return 0 ;;
+      *)
+        if is_valid_install_branch_syntax "$selected_option"; then
+          DISCOVERY_GIT_BRANCH="$(normalize_install_branch_input "$selected_option")"
+          return 0
+        fi
+        echo "Opcao invalida: $selected_option. Use 1-5 ou o nome da branch (lts/release/beta/dev)." >&2 ;;
     esac
   done
 }

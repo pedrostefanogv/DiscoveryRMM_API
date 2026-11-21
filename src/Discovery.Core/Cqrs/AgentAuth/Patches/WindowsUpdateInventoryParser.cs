@@ -334,6 +334,7 @@ public static class WindowsUpdateInventoryParser
             IsHidden = GetBool(item, "isHidden"),
             IsDownloaded = GetBool(item, "isDownloaded"),
             IsMandatory = GetBool(item, "isMandatory"),
+            IsOptional = GetBool(item, "isOptional"),
             RequiresReboot = GetBool(item, "requiresReboot"),
             MaxDownloadSize = maxDownloadSize,
             MinDownloadSize = minDownloadSize,

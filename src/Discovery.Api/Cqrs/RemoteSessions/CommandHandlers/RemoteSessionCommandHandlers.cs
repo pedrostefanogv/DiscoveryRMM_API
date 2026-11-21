@@ -253,6 +253,20 @@ public sealed class StartRemoteSessionCommandHandler(
             && cmd.Transport == RemoteTransport.Webrtc
             && webRtcPolicy.EffectiveKinds.Contains(cmd.Kind.ToString().ToLowerInvariant());
 
+        // Gera os iceServers UMA única vez quando o WebRTC está autorizado:
+        // agente e viewer precisam receber exatamente a mesma credencial TURN
+        // efêmera para a sessão.
+        var webRtcIceServers = webRtcEnabledForThisSession
+            ? BuildWebRtcIceServers(webRtcPolicy, session.Id)
+            : null;
+        var webRtcDto = webRtcEnabledForThisSession
+            ? new RemoteSessionWebRtcDto(
+                Enabled: true,
+                IceServers: webRtcIceServers!,
+                RelayOnly: webRtcPolicy.Ice.RelayOnly,
+                FallbackToNats: webRtcPolicy.FallbackToNats)
+            : null;
+
         var payload = JsonSerializer.Serialize(new
         {
             action = "start",
@@ -349,7 +363,7 @@ public sealed class StartRemoteSessionCommandHandler(
             // usuário/credencial fixos; sem eles o servidor emite credencial
             // efêmera no formato coturn (username = "{expiry}:{sessionId}").
             webrtc = webRtcEnabledForThisSession
-                ? BuildWebRtcPayload(webRtcPolicy, session.Id)
+                ? BuildWebRtcPayload(webRtcPolicy, webRtcIceServers!)
                 : null
         });
 
@@ -442,7 +456,8 @@ public sealed class StartRemoteSessionCommandHandler(
             ConsentDecisionGraceSeconds: consentRequired
                 ? Math.Max(0, options.Value.Consent.LateDecisionGraceSeconds)
                 : null,
-            ViewerCredentials: viewerCredentials));
+            ViewerCredentials: viewerCredentials,
+            WebRtc: webRtcDto));
     }
 
     private static bool AgentSupportsConsent(string? agentVersion, string minimumVersion)
@@ -671,9 +686,9 @@ public sealed class StartRemoteSessionCommandHandler(
     /// credencial: assim cada sessão recebe uma credencial distinta e expirável,
     /// em vez de uma senha de longa duração compartilhada por toda a frota.
     /// </summary>
-    private object BuildWebRtcPayload(RemoteAccessWebRtcPolicy policy, Guid sessionId)
+    private IReadOnlyList<RemoteSessionIceServerDto> BuildWebRtcIceServers(RemoteAccessWebRtcPolicy policy, Guid sessionId)
     {
-        var iceServers = new List<object>();
+        var iceServers = new List<RemoteSessionIceServerDto>();
 
         var stun = policy.Ice.StunUrls
             .Where(u => !string.IsNullOrWhiteSpace(u) && u.Trim().StartsWith("stun:", StringComparison.OrdinalIgnoreCase))
@@ -682,7 +697,7 @@ public sealed class StartRemoteSessionCommandHandler(
             .ToArray();
 
         if (stun.Length > 0)
-            iceServers.Add(new { urls = stun });
+            iceServers.Add(new RemoteSessionIceServerDto(stun));
 
         var turn = policy.Ice.TurnUrls
             .Where(u => !string.IsNullOrWhiteSpace(u)
@@ -695,19 +710,24 @@ public sealed class StartRemoteSessionCommandHandler(
         if (turn.Length > 0)
         {
             var (username, credential) = ResolveTurnCredential(policy.Ice, sessionId);
-            iceServers.Add(new
-            {
-                urls = turn,
-                username,
-                credential
-            });
+            iceServers.Add(new RemoteSessionIceServerDto(turn, username, credential));
         }
+
+        return iceServers;
+    }
+
+    private static object BuildWebRtcPayload(RemoteAccessWebRtcPolicy policy, IReadOnlyList<RemoteSessionIceServerDto> iceServers)
+    {
+        var wireServers = iceServers.Select(s =>
+            s.Username is not null
+                ? (object)new { urls = s.Urls, username = s.Username, credential = s.Credential ?? string.Empty }
+                : new { urls = s.Urls }).ToList();
 
         return new
         {
             enabled = true,
             kinds = policy.EffectiveKinds.ToArray(),
-            iceServers,
+            iceServers = wireServers,
             relayOnly = policy.Ice.RelayOnly,
             fallbackToNats = policy.FallbackToNats,
             disconnectedTimeoutSeconds = policy.Ice.DisconnectedTimeoutSeconds,

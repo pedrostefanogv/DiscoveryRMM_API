@@ -264,27 +264,17 @@ load_existing_tls_defaults() {
   local env_file="/etc/discovery-api/discovery.env"
   sudo test -f "$env_file" || return 0
 
-  TLS_CERT_PROVIDER="${TLS_CERT_PROVIDER:-$(sudo awk -F= '/^TLS_CERT_PROVIDER=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_CERT_DOMAIN="${ZEROSSL_CERT_DOMAIN:-$(sudo awk -F= '/^ZEROSSL_CERT_DOMAIN=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_CERT_ALT_DOMAINS="${ZEROSSL_CERT_ALT_DOMAINS:-$(sudo awk -F= '/^ZEROSSL_CERT_ALT_DOMAINS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_ACME_EMAIL="${ZEROSSL_ACME_EMAIL:-$(sudo awk -F= '/^ZEROSSL_ACME_EMAIL=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_ACME_EAB_KID="${ZEROSSL_ACME_EAB_KID:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_KID=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_ACME_EAB_HMAC_KEY="${ZEROSSL_ACME_EAB_HMAC_KEY:-$(sudo awk -F= '/^ZEROSSL_ACME_EAB_HMAC_KEY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_RESOLVERS="${ZEROSSL_DNS_RESOLVERS:-$(sudo awk -F= '/^ZEROSSL_DNS_RESOLVERS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS="${ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_POLL_INTERVAL_SECONDS="${ZEROSSL_DNS_POLL_INTERVAL_SECONDS:-$(sudo awk -F= '/^ZEROSSL_DNS_POLL_INTERVAL_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY="${ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_AUTO_RENEW_ENABLED="${ZEROSSL_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^ZEROSSL_AUTO_RENEW_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  ZEROSSL_DNS_AUTOMATION_HOOK="${ZEROSSL_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^ZEROSSL_DNS_AUTOMATION_HOOK=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_CERT_DOMAIN="${LETSENCRYPT_CERT_DOMAIN:-$(sudo awk -F= '/^LETSENCRYPT_CERT_DOMAIN=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_CERT_ALT_DOMAINS="${LETSENCRYPT_CERT_ALT_DOMAINS:-$(sudo awk -F= '/^LETSENCRYPT_CERT_ALT_DOMAINS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_ACME_EMAIL="${LETSENCRYPT_ACME_EMAIL:-$(sudo awk -F= '/^LETSENCRYPT_ACME_EMAIL=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_DNS_RESOLVERS="${LETSENCRYPT_DNS_RESOLVERS:-$(sudo awk -F= '/^LETSENCRYPT_DNS_RESOLVERS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS="${LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS:-$(sudo awk -F= '/^LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS="${LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS:-$(sudo awk -F= '/^LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY="${LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY:-$(sudo awk -F= '/^LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_AUTO_RENEW_ENABLED="${LETSENCRYPT_AUTO_RENEW_ENABLED:-$(sudo awk -F= '/^LETSENCRYPT_AUTO_RENEW_ENABLED=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
-  LETSENCRYPT_DNS_AUTOMATION_HOOK="${LETSENCRYPT_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^LETSENCRYPT_DNS_AUTOMATION_HOOK=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
+  load_env_keys_if_unset "$env_file" \
+    TLS_CERT_PROVIDER \
+    ZEROSSL_CERT_DOMAIN ZEROSSL_CERT_ALT_DOMAINS ZEROSSL_ACME_EMAIL \
+    ZEROSSL_ACME_EAB_KID ZEROSSL_ACME_EAB_HMAC_KEY \
+    ZEROSSL_DNS_RESOLVERS ZEROSSL_DNS_PROPAGATION_TIMEOUT_SECONDS \
+    ZEROSSL_DNS_POLL_INTERVAL_SECONDS ZEROSSL_RENEW_DAYS_BEFORE_EXPIRY \
+    ZEROSSL_AUTO_RENEW_ENABLED ZEROSSL_DNS_AUTOMATION_HOOK \
+    LETSENCRYPT_CERT_DOMAIN LETSENCRYPT_CERT_ALT_DOMAINS LETSENCRYPT_ACME_EMAIL \
+    LETSENCRYPT_DNS_RESOLVERS LETSENCRYPT_DNS_PROPAGATION_TIMEOUT_SECONDS \
+    LETSENCRYPT_DNS_POLL_INTERVAL_SECONDS LETSENCRYPT_RENEW_DAYS_BEFORE_EXPIRY \
+    LETSENCRYPT_AUTO_RENEW_ENABLED LETSENCRYPT_DNS_AUTOMATION_HOOK
 }
 
 # ── Cloudflare Tunnel (cloudflared) ────────────────────────────────────────

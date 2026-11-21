@@ -265,7 +265,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var webRtcEnabledFlag = ResolveValue(
             "RemoteAccessWebRtcEnabled", blocked, site?.RemoteAccessWebRtcEnabled, client?.RemoteAccessWebRtcEnabled, server.RemoteAccessWebRtcEnabled);
         var webRtcPolicy = ResolveWebRtcPolicy(
-            site?.RemoteAccessWebRtcPolicyJson, client?.RemoteAccessWebRtcPolicyJson, server.RemoteAccessWebRtcPolicyJson);
+            site?.RemoteAccessWebRtcPolicyJson, client?.RemoteAccessWebRtcPolicyJson, server.RemoteAccessWebRtcPolicyJson, blocked);
         var webRtcSource = ResolveObjectSource("RemoteAccessWebRtcPolicyJson", blocked, site?.RemoteAccessWebRtcPolicyJson, client?.RemoteAccessWebRtcPolicyJson);
         var webRtcEffective = webRtcPolicy.Enabled && webRtcEnabledFlag.Value;
 
@@ -458,8 +458,11 @@ public class ConfigurationResolver : IConfigurationResolver
     /// nunca em ligado. O default é o caminho NATS já validado em produção.
     /// </summary>
     private static RemoteAccessWebRtcPolicy ResolveWebRtcPolicy(
-        string? siteJson, string? clientJson, string serverJson)
+        string? siteJson, string? clientJson, string serverJson, HashSet<string> blockedFields)
     {
+        if (blockedFields.Contains("RemoteAccessWebRtcPolicyJson"))
+            return RemoteAccessWebRtcPolicy.Parse(serverJson);
+
         if (!string.IsNullOrWhiteSpace(siteJson))
             return RemoteAccessWebRtcPolicy.Parse(siteJson);
 

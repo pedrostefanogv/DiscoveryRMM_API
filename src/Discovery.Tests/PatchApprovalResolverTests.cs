@@ -401,4 +401,40 @@ public class PatchApprovalResolverTests
         var row = await db.AgentWindowsUpdates.SingleAsync();
         Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
     }
+
+    [Test]
+    public async Task OptionalUpdateIsNotAutoApprovedBySeverityAlone()
+    {
+        var (db, agentId, _, _) = Seed();
+        var opt = Update(agentId, "guid:opt-1:1", "Important");
+        opt.IsOptional = true;
+        opt.Classification = "Updates";
+        db.AgentWindowsUpdates.Add(opt);
+        db.PatchPolicies.Add(DeferralPolicy(0));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
+    }
+
+    [Test]
+    public async Task WaaSFeatureUpdateIsNeverAutoApproved()
+    {
+        var (db, agentId, _, _) = Seed();
+        var waas = Update(agentId, "guid:11111111-2222-3333-4444-555555555555:1", "Critical");
+        waas.Source = "waas";
+        waas.UpdateType = "feature";
+        db.AgentWindowsUpdates.Add(waas);
+        db.PatchPolicies.Add(DeferralPolicy(0));
+        await db.SaveChangesAsync();
+
+        var resolver = new PatchApprovalResolver(db);
+        await resolver.RecomputeForAgentAsync(agentId);
+
+        var row = await db.AgentWindowsUpdates.SingleAsync();
+        Assert.That(row.ApprovalState, Is.EqualTo(PatchApprovalState.Unknown));
+    }
 }
