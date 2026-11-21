@@ -46,8 +46,16 @@ public static class QualityProfileMapping
     };
 
     /// <summary>
-    /// Valida se codec é compatível com o transporte. O transporte WebRTC foi
-    /// removido, então H264 (que só era suportado por ele) nunca é válido.
+    /// Valida se codec é compatível com o transporte.
+    ///
+    /// H264 NUNCA é válido, em nenhum transporte — inclusive WebRTC. O motivo
+    /// não é o transporte: o encoder AVC está desativado por licença/patente, e o
+    /// WebRTC entra com VP8/VP9 (livres de royalties), que são negociados pelo
+    /// próprio stack de mídia e não passam por este enum.
+    ///
+    /// Rejeitar aqui transforma um pedido inválido em erro EXPLÍCITO em vez de
+    /// cair silenciosamente em outro codec — o operador veria "h264" na UI e
+    /// receberia JPEG sem entender por quê.
     /// </summary>
     public static bool IsCodecValidForTransport(RemoteCodec codec, RemoteTransport transport) => codec switch
     {
@@ -57,6 +65,9 @@ public static class QualityProfileMapping
 #pragma warning disable CS0618
         RemoteCodec.H264 => false,
 #pragma warning restore CS0618
-        _ => true // JPEG e WebP funcionam no transporte NATS
+        // JPEG e WebP funcionam tanto no NATS (frames comprimidos pelo agente)
+        // quanto no WebRTC, onde são usados para o primeiro frame/keyframe
+        // enquanto o encoder de vídeo aquece.
+        _ => true
     };
 }

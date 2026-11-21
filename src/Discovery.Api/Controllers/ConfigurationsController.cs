@@ -115,7 +115,75 @@ public class ConfigurationsController(
             clone.AIIntegrationSettingsJson = JsonSerializer.Serialize(ai, JsonOptions);
         }
 
+        clone.RemoteAccessWebRtcPolicyJson = RedactWebRtcTurnCredential(clone.RemoteAccessWebRtcPolicyJson);
+
         return clone;
+    }
+
+    /// <summary>
+    /// Remove a credencial do TURN do JSON de configuração devolvido ao console.
+    ///
+    /// A credencial é um SEGREDO: com ela, qualquer um que a leia pode usar o
+    /// relay do operador (consumindo banda e mascarando a origem do tráfego).
+    /// Devolvê-la em claro no GET exporia o segredo a qualquer usuário com
+    /// permissão de LEITURA de configuração — inclusive escopos que apenas
+    /// herdam a política e nunca a editaram.
+    ///
+    /// O campo `turnCredentialConfigured` entra no lugar: o console mostra
+    /// "credencial definida" e, ao salvar sem tocar no campo, reenvia a
+    /// credencial existente (o backend faz merge do valor guardado). Sem esse
+    /// sinalizador o operador não teria como saber que há uma credencial, e
+    /// salvar qualquer outro campo a apagaria em silêncio.
+    ///
+    /// Fail-open CONTROLADO: se o JSON não desserializa, devolvemos o original.
+    /// Isso não vaza nada novo (o valor já estava lá) e evita que um JSON
+    /// corrompido apague a configuração na tela.
+    /// </summary>
+    private static string RedactWebRtcTurnCredential(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}")
+            return json ?? "{}";
+
+        try
+        {
+            var policy = JsonSerializer.Deserialize<RemoteAccessWebRtcPolicy>(json, JsonOptions);
+            if (policy?.Ice is null || string.IsNullOrWhiteSpace(policy.Ice.TurnCredential))
+                return json;
+
+            var configured = !string.IsNullOrWhiteSpace(policy.Ice.TurnCredential);
+            policy.Ice.TurnCredential = string.Empty;
+
+            // Serializa e acrescenta o sinalizador: o value object não o carrega
+            // (é campo de APRESENTAÇÃO, não de política), então é injetado aqui
+            // para não poluir o contrato persistido.
+            using var doc = JsonDocument.Parse(policy.ToJson());
+            var buffer = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(buffer))
+            {
+                writer.WriteStartObject();
+                foreach (var property in doc.RootElement.EnumerateObject())
+                {
+                    if (property.NameEquals("ice") && property.Value.ValueKind == JsonValueKind.Object)
+                    {
+                        writer.WritePropertyName("ice");
+                        writer.WriteStartObject();
+                        foreach (var iceProp in property.Value.EnumerateObject())
+                            iceProp.WriteTo(writer);
+                        writer.WriteBoolean("turnCredentialConfigured", configured);
+                        writer.WriteEndObject();
+                        continue;
+                    }
+                    property.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+
+            return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+        }
+        catch (JsonException)
+        {
+            return json;
+        }
     }
 
     private static AIIntegrationSettings? DeserializeAiSettings(string? json)

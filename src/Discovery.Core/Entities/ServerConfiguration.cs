@@ -271,6 +271,25 @@ public class ServerConfiguration
     public bool RemoteProxyGlobalEntriesEnabled { get; set; } = false;
 
     /// <summary>
+    /// Política de WebRTC do acesso remoto (STUN/TURN, kinds, fallback).
+    /// Formato: <see cref="Discovery.Core.Configuration.RemoteAccessWebRtcPolicy"/>.
+    ///
+    /// Default "{}" = WebRTC DESLIGADO, isto é, o comportamento anterior (todo o
+    /// tráfego pelo NATS). A ativação é explícita e herdável: o escopo que define
+    /// o campo SUBSTITUI o de cima por inteiro (não há merge de listas STUN).
+    /// </summary>
+    public string RemoteAccessWebRtcPolicyJson { get; set; } = "{}";
+
+    /// <summary>
+    /// Kill switch booleano do WebRTC, herdável. Existe SEPARADO do blob por
+    /// dois motivos: (1) permite desligar o WebRTC em um site sem apagar a
+    /// configuração de STUN/TURN que ele já tinha; (2) é o mesmo formato de
+    /// <see cref="RemoteAccessEnabled"/>, então a UI de locks/herança já sabe
+    /// exibi-lo. Default false = comportamento atual.
+    /// </summary>
+    public bool RemoteAccessWebRtcEnabled { get; set; } = false;
+
+    /// <summary>
     /// Configurações globais de anexos de tickets (JSON).
     /// Exemplo: {"enabled":true,"maxFileSizeBytes":10485760,"allowedContentTypes":["image/jpeg","image/png","application/pdf"]}
     /// </summary>

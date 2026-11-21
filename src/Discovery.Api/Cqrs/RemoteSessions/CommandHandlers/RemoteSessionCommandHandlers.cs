@@ -234,6 +234,25 @@ public sealed class StartRemoteSessionCommandHandler(
             ? await ResolveProxyPolicyAsync(agent, ct)
             : RemoteProxyPolicy.BlockAll();
 
+        // Política de WebRTC herdável (servidor → cliente → site do agente alvo),
+        // resolvida NO MESMO ESCOPO do gate acima. O bloco "webrtc" só vai no
+        // payload quando: (1) o blob está habilitado, (2) o kill switch está
+        // ligado, (3) o kind desta sessão está na lista, e (4) o transporte
+        // efetivo pedido é webrtc. Fora disso o agent nem vê o bloco e segue no
+        // NATS — que é o comportamento anterior, sem surpresa.
+        var webRtcPolicy = await ResolveWebRtcPolicyAsync(agent, ct);
+
+        // Condição ÚNICA que decide se o bloco "webrtc" entra no payload. Exige
+        // as quatro coisas: política efetiva (blob + kill switch), o TRANSPORTE
+        // pedido ser webrtc, e o KIND desta sessão estar na lista.
+        //
+        // O kind é checado porque a política pode habilitar só tela/arquivos: sem
+        // isto, uma sessão de terminal receberia o bloco e o agent abriria um peer
+        // connection para um caso em que o WebRTC não traz ganho algum.
+        var webRtcEnabledForThisSession = webRtcPolicy.IsEffective
+            && cmd.Transport == RemoteTransport.Webrtc
+            && webRtcPolicy.EffectiveKinds.Contains(cmd.Kind.ToString().ToLowerInvariant());
+
         var payload = JsonSerializer.Serialize(new
         {
             action = "start",
@@ -320,6 +339,17 @@ public sealed class StartRemoteSessionCommandHandler(
                     @operator = operatorName,
                     allowDisconnect = true
                 }
+                : null,
+            // Bloco de WebRTC: presente APENAS quando a política herdável está
+            // efetiva para este kind E o transporte pedido é webrtc. Ausente, o
+            // agent mantém o caminho NATS — a decisão é do SERVIDOR, e o agent
+            // revalida (defesa em profundidade: o viewer é não confiável).
+            //
+            // O TURN recebe credencial por sessão quando o operador configurou
+            // usuário/credencial fixos; sem eles o servidor emite credencial
+            // efêmera no formato coturn (username = "{expiry}:{sessionId}").
+            webrtc = webRtcEnabledForThisSession
+                ? BuildWebRtcPayload(webRtcPolicy, session.Id)
                 : null
         });
 
@@ -572,6 +602,165 @@ public sealed class StartRemoteSessionCommandHandler(
 
     /// <summary>Espelha RemoteAccessProxyOptions.MaxResponseBytes (10 MiB).</summary>
     private const long DefaultProxyMaxResponseBytes = 10 * 1024 * 1024;
+
+    /// <summary>
+    /// Resolve a política de WebRTC no escopo do AGENTE alvo (servidor → cliente
+    /// → site). Fail-closed DUPLO: qualquer falha de leitura — e também o kill
+    /// switch desligado — devolve WebRTC DESLIGADO, nunca ligado. O default é o
+    /// caminho NATS já validado em produção.
+    ///
+    /// Cai no appsettings (RemoteAccess:WebRtc) apenas quando a configuração
+    /// herdável não devolve valor algum, preservando instalações que ainda não
+    /// passaram pela UI.
+    /// </summary>
+    private async Task<RemoteAccessWebRtcPolicy> ResolveWebRtcPolicyAsync(Agent agent, CancellationToken ct)
+    {
+        try
+        {
+            var json = await configurationResolver.GetEffectiveValueAsync<string>(
+                "Site", nameof(ServerConfiguration.RemoteAccessWebRtcPolicyJson), agent.SiteId);
+
+            // Kill switch SEPARADO do blob: desligar num site não apaga a
+            // configuração de STUN/TURN que ele já tinha, e o efetivo exige os
+            // dois ligados.
+            var enabledFlag = await configurationResolver.GetEffectiveValueAsync<bool>(
+                "Site", nameof(ServerConfiguration.RemoteAccessWebRtcEnabled), agent.SiteId);
+
+            // Presente mas com kill switch explicitamente desligado ⇒ desligado,
+            // independentemente do que o blob diz.
+            if (enabledFlag is false && !RemoteAccessWebRtcPolicy.IsUnconfigured(json))
+            {
+                var disabled = RemoteAccessWebRtcPolicy.Parse(json);
+                return new RemoteAccessWebRtcPolicy
+                {
+                    Enabled = false,
+                    Kinds = disabled.Kinds,
+                    Ice = disabled.Ice,
+                    FallbackToNats = disabled.FallbackToNats
+                };
+            }
+
+            // "Não configurado" NÃO é o mesmo que "configurado como vazio": a
+            // coluna do servidor é NOT NULL DEFAULT '{}' e nunca volta null.
+            if (!RemoteAccessWebRtcPolicy.IsUnconfigured(json))
+                return RemoteAccessWebRtcPolicy.Parse(json);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "[RemoteSession] Falha ao resolver RemoteAccessWebRtcPolicyJson do site {SiteId}; mantendo WebRTC desligado.",
+                agent.SiteId);
+            return RemoteAccessWebRtcPolicy.Disabled();
+        }
+
+        // Bootstrap: appsettings (comportamento anterior à UI). Só chega aqui
+        // quando nenhum escopo definiu política. Os defaults de STUN são os
+        // públicos gratuitos, já preenchidos no próprio value object.
+        return RemoteAccessWebRtcPolicy.Disabled();
+    }
+
+    /// <summary>
+    /// Monta o bloco "webrtc" do payload de start.
+    ///
+    /// As CHAVES são as que o agent lê em ParseWebRtcPolicy, e as URLs saem no
+    /// mesmo formato do wire que o navegador consome em
+    /// <c>new RTCPeerConnection({ iceServers })</c> — sempre array, que é a forma
+    /// aceita pelos dois lados (o agente também tolera string).
+    ///
+    /// A credencial TURN sai por sessão quando o operador não fixou usuário e
+    /// credencial: assim cada sessão recebe uma credencial distinta e expirável,
+    /// em vez de uma senha de longa duração compartilhada por toda a frota.
+    /// </summary>
+    private object BuildWebRtcPayload(RemoteAccessWebRtcPolicy policy, Guid sessionId)
+    {
+        var iceServers = new List<object>();
+
+        var stun = policy.Ice.StunUrls
+            .Where(u => !string.IsNullOrWhiteSpace(u) && u.Trim().StartsWith("stun:", StringComparison.OrdinalIgnoreCase))
+            .Select(u => u.Trim())
+            .Distinct()
+            .ToArray();
+
+        if (stun.Length > 0)
+            iceServers.Add(new { urls = stun });
+
+        var turn = policy.Ice.TurnUrls
+            .Where(u => !string.IsNullOrWhiteSpace(u)
+                        && (u.Trim().StartsWith("turn:", StringComparison.OrdinalIgnoreCase)
+                            || u.Trim().StartsWith("turns:", StringComparison.OrdinalIgnoreCase)))
+            .Select(u => u.Trim())
+            .Distinct()
+            .ToArray();
+
+        if (turn.Length > 0)
+        {
+            var (username, credential) = ResolveTurnCredential(policy.Ice, sessionId);
+            iceServers.Add(new
+            {
+                urls = turn,
+                username,
+                credential
+            });
+        }
+
+        return new
+        {
+            enabled = true,
+            kinds = policy.EffectiveKinds.ToArray(),
+            iceServers,
+            relayOnly = policy.Ice.RelayOnly,
+            fallbackToNats = policy.FallbackToNats,
+            disconnectedTimeoutSeconds = policy.Ice.DisconnectedTimeoutSeconds,
+            failedTimeoutSeconds = policy.Ice.FailedTimeoutSeconds,
+            keepAliveIntervalSeconds = policy.Ice.KeepAliveIntervalSeconds,
+            // Sempre false: H.264 é decisão travada (patente AVC).
+            h264Enabled = false
+        };
+    }
+
+    /// <summary>
+    /// Credencial TURN da sessão.
+    ///
+    /// Com usuário e credencial fixos na política, usa-os. Sem eles, emite uma
+    /// credencial EFÊMERA no formato de longo prazo do coturn
+    /// (<c>username = "{expiry}:{sessionId}"</c>), válida pelo TTL configurado.
+    ///
+    /// O segredo do HMAC vem da configuração (RemoteAccess:Nats:JwtSigningKey já
+    /// existe como segredo de servidor); NÃO há segredo hardcoded — o código
+    /// antigo (WebrtcTurnCredentialIssuer, removido em b8bcc90) usava
+    /// "discovery-turn-secret" fixo no fonte, que é um defeito a não repetir.
+    /// </summary>
+    private (string Username, string Credential) ResolveTurnCredential(WebRtcIceOptions ice, Guid sessionId)
+    {
+        var configuredUser = ice.TurnUsername?.Trim();
+        var configuredCredential = ice.TurnCredential;
+
+        if (!string.IsNullOrWhiteSpace(configuredUser) && !string.IsNullOrWhiteSpace(configuredCredential))
+            return (configuredUser, configuredCredential);
+
+        var ttlMinutes = ice.TurnCredentialTtlMinutes > 0 ? ice.TurnCredentialTtlMinutes : 60;
+        var expiry = DateTimeOffset.UtcNow.AddMinutes(ttlMinutes).ToUnixTimeSeconds();
+        var username = $"{expiry}:{sessionId:N}";
+
+        var key = options.Value.Nats.JwtSigningKey;
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            // Sem segredo NÃO inventamos um: devolvemos só o usuário e deixamos a
+            // credencial vazia, o que faz o TURN recusar. Um segredo hardcoded
+            // aqui daria a falsa impressão de TURN funcionando.
+            logger.LogWarning(
+                "[RemoteSession] TURN configurado sem usuário/credencial fixos e sem segredo de servidor; "
+                + "a credencial efêmera não pôde ser emitida. Configure RemoteAccess:Nats:JwtSigningKey ou "
+                + "informe usuário e credencial do TURN na política.");
+            return (username, string.Empty);
+        }
+
+        var hash = System.Security.Cryptography.HMACSHA1.HashData(
+            System.Text.Encoding.UTF8.GetBytes(key),
+            System.Text.Encoding.UTF8.GetBytes(username));
+
+        return (username, Convert.ToBase64String(hash));
+    }
 }
 
 public sealed class StopRemoteSessionCommandHandler(
@@ -805,7 +994,7 @@ public sealed class ChangeRemoteSessionQualityCommandHandler(
         if (!QualityProfileMapping.IsCodecValidForTransport(effectiveCodec, session.Transport))
         {
             return Result<RemoteSessionResponseDto>.Failure(
-                Error.Validation("Codec", $"Codec {effectiveCodec} is not supported with transport {session.Transport}. Use JPEG or WebP (WebRTC/H.264 were removed and are no longer selectable)."));
+                Error.Validation("Codec", $"Codec {effectiveCodec} is not supported with transport {session.Transport}. Use JPEG or WebP (H.264/AVC is disabled by patent; WebRTC negotiates VP8/VP9 internally)."));
         }
 
         // Gerencia modo Auto no metrics store

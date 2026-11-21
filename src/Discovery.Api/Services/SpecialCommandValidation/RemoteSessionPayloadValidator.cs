@@ -31,6 +31,15 @@ internal static class RemoteSessionPayloadValidator
         "ceilingKbps", "autoMinKbps", "autoMaxKbps", "autoStepKbps", "serverMaxKbps"
     ];
 
+    /// <summary>Esquemas aceitos em URLs de servidor ICE.</summary>
+    private static readonly string[] IceUrlPrefixes = ["stun:", "turn:", "turns:"];
+
+    /// <summary>Timeouts (segundos) do bloco webrtc.</summary>
+    private static readonly string[] WebRtcTimeoutFields =
+    [
+        "disconnectedTimeoutSeconds", "failedTimeoutSeconds", "keepAliveIntervalSeconds"
+    ];
+
     internal static bool TryNormalizeRemoteSession(
         JsonElement payload,
         out string normalizedPayload,
@@ -186,8 +195,134 @@ internal static class RemoteSessionPayloadValidator
             }
         }
 
+        // Bloco de WebRTC (opcional, aditivo): { enabled, kinds, iceServers,
+        // fallbackToNats, timeouts }. Só é enviado quando a política herdável
+        // está ligada E o kind está na lista — e o agent valida de novo (defesa
+        // em profundidade, porque o viewer é não confiável).
+        //
+        // Validamos aqui para o operador receber erro CLARO em vez de a sessão
+        // subir com ICE inválido e falhar 15 s depois, na frente do cliente.
+        if (payload.TryGetProperty("webrtc", out var webrtc) && webrtc.ValueKind != JsonValueKind.Null)
+        {
+            if (webrtc.ValueKind != JsonValueKind.Object)
+            {
+                validationError = "field 'webrtc' must be an object or null.";
+                return false;
+            }
+
+            if (webrtc.TryGetProperty("enabled", out var wrEnabled)
+                && wrEnabled.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                validationError = "field 'webrtc.enabled' must be boolean.";
+                return false;
+            }
+
+            // iceServers: array de { urls: string OU string[], username?, credential? }.
+            // Aceitar as duas formas é deliberado: é o mesmo contrato tolerante que
+            // o agente usa ao ler (o Breeze faz igual) e evita que uma mudança de
+            // serialização no console quebre a negociação em silêncio.
+            if (webrtc.TryGetProperty("iceServers", out var iceServers) && iceServers.ValueKind != JsonValueKind.Null)
+            {
+                if (iceServers.ValueKind != JsonValueKind.Array)
+                {
+                    validationError = "field 'webrtc.iceServers' must be an array or null.";
+                    return false;
+                }
+
+                foreach (var server in iceServers.EnumerateArray())
+                {
+                    if (server.ValueKind != JsonValueKind.Object)
+                    {
+                        validationError = "each item in 'webrtc.iceServers' must be an object.";
+                        return false;
+                    }
+
+                    if (!server.TryGetProperty("urls", out var urls) || urls.ValueKind == JsonValueKind.Null)
+                    {
+                        validationError = "each item in 'webrtc.iceServers' must have 'urls'.";
+                        return false;
+                    }
+
+                    if (urls.ValueKind == JsonValueKind.String)
+                    {
+                        if (!IsValidIceUrl(urls.GetString()))
+                        {
+                            validationError = "field 'webrtc.iceServers[].urls' must be a stun:, turn: or turns: URL.";
+                            return false;
+                        }
+                    }
+                    else if (urls.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var url in urls.EnumerateArray())
+                        {
+                            if (url.ValueKind != JsonValueKind.String || !IsValidIceUrl(url.GetString()))
+                            {
+                                validationError = "field 'webrtc.iceServers[].urls' must contain only stun:, turn: or turns: URLs.";
+                                return false;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        validationError = "field 'webrtc.iceServers[].urls' must be a string or an array of strings.";
+                        return false;
+                    }
+                }
+            }
+
+            if (webrtc.TryGetProperty("fallbackToNats", out var fallback)
+                && fallback.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                validationError = "field 'webrtc.fallbackToNats' must be boolean.";
+                return false;
+            }
+
+            // Timeouts em segundos: positivos e dentro da faixa usada pelo agente.
+            foreach (var field in WebRtcTimeoutFields)
+            {
+                if (!webrtc.TryGetProperty(field, out var value) || value.ValueKind == JsonValueKind.Null)
+                {
+                    continue;
+                }
+                if (value.ValueKind != JsonValueKind.Number
+                    || !value.TryGetInt32(out var seconds)
+                    || seconds is < 1 or > 120)
+                {
+                    validationError = $"field 'webrtc.{field}' must be an integer between 1 and 120 seconds.";
+                    return false;
+                }
+            }
+
+            // H.264 nunca é ligado (patente AVC). Recusar explicitamente é melhor
+            // que aceitar e desligar em silêncio: o operador acharia que ligou.
+            if (webrtc.TryGetProperty("h264Enabled", out var h264) && h264.ValueKind == JsonValueKind.True)
+            {
+                validationError = "field 'webrtc.h264Enabled' is not supported (H.264/AVC is disabled). Use VP8/VP9.";
+                return false;
+            }
+        }
+
         normalizedPayload = payload.GetRawText();
         return true;
+    }
+
+    /// <summary>
+    /// URL de servidor ICE aceita: stun:, turn: ou turns:, com host após o
+    /// esquema. Um endereço sem esquema (ou com esquema errado) é recusado aqui
+    /// para não virar uma falha de ICE silenciosa no cliente.
+    /// </summary>
+    private static bool IsValidIceUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+
+        var trimmed = url.Trim();
+        foreach (var prefix in IceUrlPrefixes)
+        {
+            if (trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return trimmed.Length > prefix.Length;
+        }
+
+        return false;
     }
 
     internal static bool TryNormalizeP2pPreload(

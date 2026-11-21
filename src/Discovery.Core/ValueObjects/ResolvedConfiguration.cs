@@ -84,6 +84,21 @@ public class ResolvedConfiguration
     /// </summary>
     public bool RemoteProxyGlobalEntriesEnabled { get; set; }
 
+    /// <summary>
+    /// Política de WebRTC do acesso remoto já resolvida (servidor → cliente →
+    /// site). O escopo mais específico que definir o campo SUBSTITUI o de cima
+    /// por inteiro. Fail-closed: JSON ausente/inválido cai em WebRTC DESLIGADO,
+    /// nunca em ligado — o default é o caminho NATS já validado em produção.
+    /// </summary>
+    public RemoteAccessWebRtcPolicy RemoteAccessWebRtc { get; set; } = RemoteAccessWebRtcPolicy.Disabled();
+
+    /// <summary>
+    /// Kill switch herdável do WebRTC, já combinado com
+    /// <see cref="RemoteAccessWebRtc"/>.Enabled. Efetivo = os dois ligados.
+    /// Existe para a UI e o gate lerem um booleano só.
+    /// </summary>
+    public bool RemoteAccessWebRtcEnabled { get; set; }
+
     /// <summary>Log automático habilitado.</summary>
     public bool AutomaticLoggingEnabled { get; set; }
 

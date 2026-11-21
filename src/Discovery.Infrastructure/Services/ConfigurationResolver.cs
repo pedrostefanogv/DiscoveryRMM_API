@@ -257,6 +257,18 @@ public class ConfigurationResolver : IConfigurationResolver
             proxyGlobalEntriesEnabled.Value);
         var proxySource = ResolveObjectSource("RemoteProxyPolicyJson", blocked, site?.RemoteProxyPolicyJson, client?.RemoteProxyPolicyJson);
 
+        // WebRTC do acesso remoto (servidor → cliente → site). Kill switch
+        // resolvido SEPARADAMENTE do blob: desligar o WebRTC num site não apaga
+        // a configuração de STUN/TURN que ele já tinha, e o booleano reusa o
+        // formato de RemoteAccessEnabled (a UI de locks/herança já o exibe).
+        // Efetivo = os DOIS ligados (blob.Enabled && flag) — fail-closed duplo.
+        var webRtcEnabledFlag = ResolveValue(
+            "RemoteAccessWebRtcEnabled", blocked, site?.RemoteAccessWebRtcEnabled, client?.RemoteAccessWebRtcEnabled, server.RemoteAccessWebRtcEnabled);
+        var webRtcPolicy = ResolveWebRtcPolicy(
+            site?.RemoteAccessWebRtcPolicyJson, client?.RemoteAccessWebRtcPolicyJson, server.RemoteAccessWebRtcPolicyJson);
+        var webRtcSource = ResolveObjectSource("RemoteAccessWebRtcPolicyJson", blocked, site?.RemoteAccessWebRtcPolicyJson, client?.RemoteAccessWebRtcPolicyJson);
+        var webRtcEffective = webRtcPolicy.Enabled && webRtcEnabledFlag.Value;
+
         var agentUpdate = ResolveAgentUpdate(site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson, server.AgentUpdatePolicyJson);
         var agentUpdateSource = ResolveObjectSource("AgentUpdatePolicyJson", blocked, site?.AgentUpdatePolicyJson, client?.AgentUpdatePolicyJson);
 
@@ -292,6 +304,8 @@ public class ConfigurationResolver : IConfigurationResolver
             RemoteAccessRecordingAutoDeleteExpired = remoteAccessRecordingAutoDelete.Value,
             RemoteProxy = proxy,
             RemoteProxyGlobalEntriesEnabled = proxyGlobalEntriesEnabled.Value,
+            RemoteAccessWebRtc = webRtcPolicy,
+            RemoteAccessWebRtcEnabled = webRtcEffective,
             AutomaticLoggingEnabled = automaticLogging.Value,
             McpToolCallsPerMinute = ResolveMcpToolCallsPerMinute(site?.McpToolCallsPerMinute, client?.McpToolCallsPerMinute, server.McpToolCallsPerMinute),
             OpenTelemetryEnabled = openTelemetry.Value,
@@ -332,6 +346,8 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["RemoteAccessRecordingAutoDeleteExpired"] = (int)remoteAccessRecordingAutoDelete.Source;
         resolved.Inheritance["RemoteProxyPolicyJson"] = (int)proxySource;
         resolved.Inheritance["RemoteProxyGlobalEntriesEnabled"] = (int)proxyGlobalEntriesEnabled.Source;
+        resolved.Inheritance["RemoteAccessWebRtcPolicyJson"] = (int)webRtcSource;
+        resolved.Inheritance["RemoteAccessWebRtcEnabled"] = (int)webRtcEnabledFlag.Source;
         resolved.Inheritance["AutomaticLoggingEnabled"] = (int)automaticLogging.Source;
         resolved.Inheritance["McpToolCallsPerMinute"] = (int)mcpToolCalls.Source;
         resolved.Inheritance["OpenTelemetryEnabled"] = (int)openTelemetry.Source;
@@ -428,6 +444,29 @@ public class ConfigurationResolver : IConfigurationResolver
             return RemoteProxyPolicy.BlockAll();
 
         return RemoteProxyPolicy.Parse(serverJson);
+    }
+
+    /// <summary>
+    /// Resolve a política de WebRTC (site ?? cliente ?? servidor), substituindo
+    /// por INTEIRO — não há merge campo-a-campo nem união de listas de STUN: a
+    /// política é uma unidade, como a allowlist de proxy. Um site que queira
+    /// "herdar mas trocar só o TURN" precisa declarar a política completa; é
+    /// deliberado, porque merge implícito de servidores ICE é impossível de
+    /// auditar ("de onde veio este STUN?").
+    ///
+    /// Sempre fail-closed: JSON ausente/corrompido cai em WebRTC DESLIGADO —
+    /// nunca em ligado. O default é o caminho NATS já validado em produção.
+    /// </summary>
+    private static RemoteAccessWebRtcPolicy ResolveWebRtcPolicy(
+        string? siteJson, string? clientJson, string serverJson)
+    {
+        if (!string.IsNullOrWhiteSpace(siteJson))
+            return RemoteAccessWebRtcPolicy.Parse(siteJson);
+
+        if (!string.IsNullOrWhiteSpace(clientJson))
+            return RemoteAccessWebRtcPolicy.Parse(clientJson);
+
+        return RemoteAccessWebRtcPolicy.Parse(serverJson);
     }
 
     private static AgentUpdatePolicy ResolveAgentUpdate(string? siteJson, string? clientJson, string serverJson)

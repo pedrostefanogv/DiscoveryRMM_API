@@ -165,6 +165,16 @@ public class ClientConfiguration
     public string? RemoteProxyPolicyJson { get; set; }
 
     /// <summary>
+    /// Política de WebRTC do acesso remoto deste cliente. null = herda do
+    /// servidor; quando definida, SUBSTITUI a do servidor por inteiro.
+    /// Ver Discovery.Core.Configuration.RemoteAccessWebRtcPolicy.
+    /// </summary>
+    public string? RemoteAccessWebRtcPolicyJson { get; set; }
+
+    /// <summary>WebRTC habilitado (null = herda servidor).</summary>
+    public bool? RemoteAccessWebRtcEnabled { get; set; }
+
+    /// <summary>
     /// Lista de campos bloqueados no nível de cliente (JSON array de nomes de propriedade).
     /// Bloqueia sobrescrita nos sites e agents deste cliente.
     /// </summary>

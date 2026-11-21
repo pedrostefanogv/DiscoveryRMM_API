@@ -70,7 +70,14 @@ public static class ConfigurationFieldCatalog
         // DESLIGADO: o cadastro global fica pré-pronto, mas inerte, até o
         // operador liberar explicitamente. Entradas de Cliente/Site não são
         // afetadas por esta flag.
-        "RemoteProxyGlobalEntriesEnabled"
+        "RemoteProxyGlobalEntriesEnabled",
+        // WebRTC do acesso remoto: política (STUN/TURN/kinds/fallback) + kill
+        // switch, ambos herdáveis servidor → cliente → site. Sem entrar aqui os
+        // campos não aparecem na UI nem são reconhecidos em locks/herança —
+        // exatamente como os kill switches acima. Default DESLIGADO: o caminho
+        // NATS continua sendo o caminho, e o WebRTC é ativado explicitamente.
+        "RemoteAccessWebRtcPolicyJson",
+        "RemoteAccessWebRtcEnabled"
     ];
 
     /// <summary>

@@ -124,6 +124,7 @@ public class ConfigurationService : IConfigurationService
         // política, veria "sucesso" e o proxy continuaria mudo, sem pista do
         // motivo. Recusa o salvamento, como já se faz com IA e sensores.
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
+            EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
@@ -200,6 +201,7 @@ public class ConfigurationService : IConfigurationService
         config.UpdatedBy = updatedBy;
         ProtectSensitiveData(config);
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
+            EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
         await ValidateOrThrowAsync(config, [nameof(ClientConfiguration.AgentHomeTab)]);
         await _clientRepo.UpdateAsync(config);
 
@@ -242,6 +244,7 @@ public class ConfigurationService : IConfigurationService
         ProtectSensitiveData(config);
 
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
+            EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
@@ -335,6 +338,7 @@ public class ConfigurationService : IConfigurationService
         config.UpdatedBy = updatedBy;
         ProtectSensitiveData(config);
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
+            EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
         await ValidateOrThrowAsync(config, [nameof(SiteConfiguration.AgentHomeTab)]);
         await _siteRepo.UpdateAsync(config);
         _resolver.ClearCache();
@@ -387,6 +391,7 @@ public class ConfigurationService : IConfigurationService
         ProtectSensitiveData(config);
 
         EnsureRemoteProxyPolicyJsonValid(config.RemoteProxyPolicyJson);
+            EnsureRemoteAccessWebRtcPolicyJsonValid(config.RemoteAccessWebRtcPolicyJson);
 
         await ValidateOrThrowAsync(config, [.. updates.Keys]);
         config.Version++;
@@ -570,6 +575,23 @@ public class ConfigurationService : IConfigurationService
     private static void EnsureRemoteProxyPolicyJsonValid(string? json)
     {
         if (!RemoteProxyPolicy.TryParseStrict(json, out _, out var error))
+        {
+            throw new ArgumentException(error);
+        }
+    }
+
+    /// <summary>
+    /// Recusa o salvamento de uma política de WebRTC que não valida.
+    ///
+    /// Sem esta guarda o parser tolerante (RemoteAccessWebRtcPolicy.Parse) cairia
+    /// em WebRTC DESLIGADO em runtime: o operador veria "salvo com sucesso" e o
+    /// transporte continuaria em NATS sem pista do motivo. Pior ainda no caso do
+    /// relayOnly sem TURN, que produziria uma sessão que nunca conecta.
+    /// Mesmo tratamento já dado a RemoteProxyPolicyJson e AIIntegrationSettingsJson.
+    /// </summary>
+    private static void EnsureRemoteAccessWebRtcPolicyJsonValid(string? json)
+    {
+        if (!RemoteAccessWebRtcPolicy.TryParseStrict(json, out _, out var error))
         {
             throw new ArgumentException(error);
         }
