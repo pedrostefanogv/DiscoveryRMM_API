@@ -305,7 +305,7 @@ load_existing_site_realtime_defaults() {
   sudo test -f "$env_file" || return 0
 
   load_env_keys_if_unset "$env_file" \
-    DISCOVERY_SITE_NATS_URL DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS \
+    DISCOVERY_SITE_NATS_URL DISCOVERY_SITE_NATS_AUTH_MODE DISCOVERY_SITE_AGENT_OFFLINE_FALLBACK_MS \
     NATS_WS_PORT NATS_WS_HOST NATS_WS_TLS_ENABLED \
     Authentication__Fido2__ServerDomain
 }

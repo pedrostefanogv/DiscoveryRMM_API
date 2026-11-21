@@ -249,6 +249,13 @@ validate_security_inputs() {
 normalize_site_realtime_settings() {
   DISCOVERY_SITE_REALTIME_PROVIDER="${DISCOVERY_SITE_REALTIME_PROVIDER:-both}"
   DISCOVERY_SITE_NATS_ENABLED="${DISCOVERY_SITE_NATS_ENABLED:-true}"
+  # Modo de autenticacao do WebSocket NATS usado pelo portal.
+  # O broker deste produto SEMPRE autentica via auth_callout (JWT): o usuario
+  # estatico "discovery_nats" serve so para a propria API. O modo "auth_token"
+  # legado nao existe aqui — sem jwt_credentials o navegador nao envia JWT, o
+  # nats-server nao roteia para o callout e a conexao morre no timeout de 30s
+  # do bloco authorization (bug observado em tupa.pstefano.com.br).
+  DISCOVERY_SITE_NATS_AUTH_MODE="${DISCOVERY_SITE_NATS_AUTH_MODE:-jwt_credentials}"
   NATS_WS_PORT="${NATS_WS_PORT:-8081}"
   NATS_WS_HOST="${NATS_WS_HOST:-127.0.0.1}"
   NATS_WS_TLS_ENABLED="${NATS_WS_TLS_ENABLED:-false}"
