@@ -155,7 +155,7 @@ public sealed record RemoteSessionResponseDto(
     // Configuração WebRTC efetiva da sessão (iceServers com credencial TURN
     // efêmera compartilhada com o agente, relayOnly e fallbackToNats). Presente
     // apenas quando o WebRTC foi autorizado para este kind/transporte.
-    RemoteSessionWebRtcDto? WebRtc = null
+    [property: JsonPropertyName("webrtc")] RemoteSessionWebRtcDto? WebRtc = null
 );
 
 public sealed record RemoteSessionIceServerDto(
