@@ -185,7 +185,10 @@ main() {
 
   log "Arquitetura detectada: ${detected_arch:-desconhecida}"
   log "Runtime .NET da API: ${DISCOVERY_DOTNET_RUNTIME}"
-  log "Build do Agent permanece Windows x86/x64 nesta fase"
+  # O agente e SEMPRE Windows x86_64, independente da arquitetura do servidor:
+  # o servidor ARM64 cross-compila via MinGW (gcc-mingw-w64-x86-64 existe para
+  # arm64 nos repositorios Ubuntu/Debian). Os PCs dos clientes nao mudam.
+  log "Build do Agent permanece Windows x86/x64 nesta fase (os PCs dos clientes nao mudam)"
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
   normalize_site_realtime_settings
 

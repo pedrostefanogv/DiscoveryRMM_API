@@ -771,13 +771,34 @@ install_rustfs_binary() {
 # esperando teclado (0% de CPU, sem output).
 MINIO_MC_BIN="/usr/local/bin/discovery-mc"
 
+# Sufixo de arquitetura do client do MinIO. BUG 2026-11-20 (host ARM64): a lista
+# de URLs era fixa em linux-amd64, entao em ARM64 o instalador baixava um binario
+# x86_64 — que "instala" com sucesso (curl 200) e so falha depois, na criacao do
+# bucket, com erro opaco (exec format error) longe da causa. Ambas as arquiteturas
+# existem no path atual (aistor) e foram verificadas.
+mc_arch_suffix() {
+  case "$(uname -m)" in
+    x86_64|amd64)  printf 'amd64' ;;
+    aarch64|arm64) printf 'arm64' ;;
+    armv7l|armhf)  printf 'armv6' ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_mc_cli() {
   if sudo test -x "$MINIO_MC_BIN"; then return 0; fi
   local url tmp
+  local mc_arch
+  if ! mc_arch="$(mc_arch_suffix)"; then
+    warn "Arquitetura $(uname -m) sem client do MinIO (mc); o bucket sera criado pela propria API no primeiro uso."
+    return 1
+  fi
+
   # Ordem: o path antigo (dl.min.io/client/mc) passou a responder 410 Gone
   # (verificado em 2026-10); o atual (aistor) responde 200. O antigo fica como
   # fallback caso o path volte a existir.
-  for url in "https://dl.min.io/aistor/mc/release/linux-amd64/mc" "https://dl.min.io/client/mc/release/linux-amd64/mc"; do
+  for url in "https://dl.min.io/aistor/mc/release/linux-${mc_arch}/mc" \
+             "https://dl.min.io/client/mc/release/linux-${mc_arch}/mc"; do
     tmp="$(mktemp)"
     if curl -fsSL --connect-timeout 15 --retry 2 -o "$tmp" "$url"; then
       sudo install -m 0755 -o root -g root "$tmp" "$MINIO_MC_BIN"
@@ -786,7 +807,7 @@ ensure_mc_cli() {
     fi
     rm -f "$tmp"
   done
-  warn "Nao foi possivel baixar o client do MinIO (mc); o bucket sera criado pela propria API no primeiro uso."
+  warn "Nao foi possivel baixar o client do MinIO (mc, linux-${mc_arch}); o bucket sera criado pela propria API no primeiro uso."
   return 1
 }
 

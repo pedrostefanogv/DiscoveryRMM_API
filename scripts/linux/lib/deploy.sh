@@ -150,6 +150,23 @@ site_needs_npm_ci() {
   if [[ ! -d "$site_source/node_modules" ]]; then
     return 0
   fi
+  # node_modules de outra ARQUITETURA/plataforma: o Vite 8 usa o binario nativo
+  # @rolldown/binding-linux-<arch> (e o tailwind oxide). Um node_modules populado
+  # em x86_64 e reaproveitado num host arm64 mantem o binding ERRADO e o build
+  # quebra com "Cannot find module @rolldown/binding-linux-arm64-gnu" — erro que
+  # nao aponta para o cache. Marcamos a arquitetura no node_modules na 1a
+  # instalacao e forcamos npm ci quando ela muda.
+  local arch_marker="$site_source/node_modules/.discovery-arch"
+  local host_arch; host_arch="$(uname -m)"
+  if [[ ! -f "$arch_marker" ]]; then
+    return 0
+  fi
+  local built_arch
+  built_arch="$(sudo -u discovery-api cat "$arch_marker" 2>/dev/null || true)"
+  if [[ "$built_arch" != "$host_arch" ]]; then
+    warn "node_modules do portal foi instalado para '${built_arch:-desconhecida}' e o host e '$host_arch'; reinstalando do zero."
+    return 0
+  fi
   if [[ ! -f "$site_source/node_modules/.package-lock.json" ]]; then
     return 0
   fi
@@ -191,6 +208,13 @@ install_site_dependencies() {
   else
     log "Instalando dependencias do portal web de forma incremental ('npm install --prefer-offline')"
     "${npm_env[@]}" npm --prefix "$site_source" install --prefer-offline --no-audit --no-fund
+  fi
+
+  # Marca a arquitetura deste node_modules: o Vite 8 carrega um binario nativo
+  # por plataforma (@rolldown/binding-linux-<arch>), entao reaproveitar um
+  # node_modules de outra arquitetura quebra o build. Ver site_needs_npm_ci.
+  if [[ -d "$site_source/node_modules" ]]; then
+    printf "%s\n" "$(uname -m)" | sudo -u discovery-api tee "$site_source/node_modules/.discovery-arch" >/dev/null 2>&1 || true
   fi
 }
 

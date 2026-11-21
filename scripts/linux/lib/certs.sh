@@ -287,54 +287,230 @@ load_existing_tls_defaults() {
   LETSENCRYPT_DNS_AUTOMATION_HOOK="${LETSENCRYPT_DNS_AUTOMATION_HOOK:-$(sudo awk -F= '/^LETSENCRYPT_DNS_AUTOMATION_HOOK=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)}"
 }
 
+# ── Cloudflare Tunnel (cloudflared) ────────────────────────────────────────
+#
+# Duas armadilhas conhecidas deste passo (BUG 2026-11-20, host ARM64/Ubuntu
+# 26.04 "resolute"):
+#
+#  1) O repositorio apt da Cloudflare nao publica toda suite que o Ubuntu
+#     publica. Em suites novas (resolute, questing, ...) o Release da suite
+#     nao existe e o apt responde 404:
+#       Err:7 https://pkg.cloudflare.com/cloudflared resolute Release
+#         404  Not Found
+#       E: The repository '... resolute Release' does not have a Release file.
+#     Gravar o .list com "$(lsb_release -cs)" cru nesse cenario envenena o apt
+#     do host inteiro (TODO apt-get update passa a falhar), inclusive o
+#     apt-get upgrade de apply_system_updates.
+#
+#  2) O repo quebrado derrubava a instalacao INTEIRA em ACCESS_MODE=external:
+#     o "if ! apt-get install cloudflared" capturava tambem o erro do
+#     "apt-get update" e chamava fail(), abortando a instalacao no meio (com
+#     postgres/redis/nats/chaves ja criados). O cloudflared e UM servico
+#     opcional: nenhuma falha dele deve abortar o instalador; o tunnel fica
+#     indisponivel e o operador e instruido a instalar/rodar a mao.
+#
+# Estrategia: so gravamos o .list depois de CONFIRMAR (curl no Release) que a
+# suite existe; se nao existir, caimos para a suite publicada mais proxima
+# (o binario do cloudflared e estatico, entao roda em qualquer suite); se
+# nenhuma servir, baixamos o binario oficial direto do GitHub (mesmo padrao
+# ja usado em install_rustfs_binary/ensure_mc_cli).
+
+# Suites publicadas hoje em https://pkg.cloudflare.com/cloudflared/dists/
+# (ordem: da mais nova para a mais antiga). Usado como fallback quando a suite
+# local nao tem Release. Manter ordenado do mais novo para o mais antigo.
+CLOUDFLARED_APT_SUITES_FALLBACK=(noble jammy focal bookworm bullseye)
+
+# Mapeia VERSION_CODENAME -> suite do Cloudflare. Debian usa apelidos de
+# brinquedo (trixie/forky) que o Cloudflare nao publica; mapeamos para a suite
+# Debian LTS suportada.
+cloudflared_apt_suite_candidates() {
+  local codename="${1:-}"
+  local -a candidates=()
+
+  if [[ -n "$codename" ]]; then candidates+=("$codename"); fi
+
+  case "$codename" in
+    # Ubuntu ainda nao publicado pelo Cloudflare -> suite Ubuntu LTS conhecida.
+    resolute|questing|plucky|oracular) candidates+=(noble jammy) ;;
+    # Debian testing/forky: Cloudflare publica apenas as LTS.
+    trixie|forky|sid|testing) candidates+=(bookworm bullseye) ;;
+  esac
+
+  local suite
+  for suite in "${CLOUDFLARED_APT_SUITES_FALLBACK[@]}"; do candidates+=("$suite"); done
+
+  # Remove vazios/duplicados preservando a ordem (a primeira suite valida vence).
+  local -A seen=()
+  for suite in "${candidates[@]}"; do
+    [[ -n "$suite" ]] || continue
+    if [[ -z "${seen[$suite]:-}" ]]; then seen[$suite]=1; printf '%s\n' "$suite"; fi
+  done
+}
+
+# Retorna a primeira suite com Release publicado, ou 1 se nenhuma servir.
+# A checagem e FAIL-SAFE: sem rede/curl, retorna 1 e o caller decide (nao
+# gravamos um .list que nao conseguimos validar).
+resolve_cloudflared_apt_suite() {
+  local suite
+  while IFS= read -r suite; do
+    [[ -n "$suite" ]] || continue
+    if curl -fsI --connect-timeout 10 --retry 2 --retry-delay 2 \
+        "https://pkg.cloudflare.com/cloudflared/dists/${suite}/Release" >/dev/null 2>&1; then
+      printf '%s' "$suite"
+      return 0
+    fi
+  done < <(cloudflared_apt_suite_candidates "${1:-}")
+  return 1
+}
+
+# Instala o binario oficial direto do GitHub (arm64/amd64). Usado quando o repo
+# apt nao serve para a suite do host. Instalacao manual/idempotente: nunca
+# sobrescreve um binario ja presente.
+install_cloudflared_from_github() {
+  local arch asset base url tmp
+  case "$(uname -m)" in
+    x86_64|amd64)   asset="cloudflared-linux-amd64" ;;
+    aarch64|arm64)  asset="cloudflared-linux-arm64" ;;
+    armv7l|armhf)   asset="cloudflared-linux-arm"   ;;
+    *) return 1 ;;
+  esac
+
+  base="${CLOUDFLARED_DOWNLOAD_BASE:-https://github.com/cloudflare/cloudflared/releases/latest/download}"
+  url="${base}/${asset}"
+  tmp="$(mktemp)"
+
+  if ! curl -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 -o "$tmp" "$url"; then
+    rm -f "$tmp"; return 1
+  fi
+  if ! sudo install -m 0755 -o root -g root "$tmp" /usr/local/bin/cloudflared; then
+    rm -f "$tmp"; return 1
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
+# Codename do host (Ubuntu/Debian). Prefere VERSION_CODENAME de /etc/os-release
+# (nao depende do lsb_release estar instalado/consistente) e cai para
+# lsb_release -cs. Nao falha: codename vazio so reduz a lista de candidatas.
+cloudflared_host_codename() {
+  local codename=""
+  if [[ -r /etc/os-release ]]; then
+    codename="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+  fi
+  if [[ -z "$codename" ]] && command -v lsb_release >/dev/null 2>&1; then
+    codename="$(lsb_release -cs 2>/dev/null || true)"
+  fi
+  printf '%s' "$codename"
+}
+
+# Instala o cloudflared via apt (repo oficial) e valida. Retorna 0 em sucesso.
+# Uso: install_cloudflared_via_apt [codename-do-host]
+install_cloudflared_via_apt() {
+  local keyring="/usr/share/keyrings/cloudflare-main.gpg"
+  local list_file="/etc/apt/sources.list.d/cloudflared.list"
+  local key_tmp
+
+  key_tmp="$(mktemp)"
+  if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 \
+      https://pkg.cloudflare.com/cloudflare-main.gpg -o "$key_tmp"; then
+    rm -f "$key_tmp"
+    warn "Nao foi possivel baixar a chave do repositorio do cloudflared."
+    return 1
+  fi
+  if ! sudo gpg --yes --dearmor -o "$keyring" < "$key_tmp"; then
+    rm -f "$key_tmp"
+    warn "Nao foi possivel instalar a chave do repositorio do cloudflared."
+    return 1
+  fi
+  rm -f "$key_tmp"
+
+  local host_suite="${1:-}"
+  local suite
+  # resolve_cloudflared_apt_suite faz a checagem REAL (curl no Release): a suite
+  # local pode nao existir no repo do Cloudflare (Ubuntu 26.04/resolute), e
+  # nesse caso a primeira candidata valida vence. So gravamos o .list com uma
+  # suite confirmada — nunca com "$(lsb_release -cs)" as cegas, que envenena o
+  # apt do host inteiro com um 404.
+  if ! suite="$(resolve_cloudflared_apt_suite "$host_suite")"; then
+    warn "Repositorio apt do cloudflared nao publica suite compativel com este host (suite local: ${host_suite:-desconhecida}); usando download direto do binario."
+    return 1
+  fi
+
+  if [[ "$suite" != "$host_suite" ]]; then
+    log "Suite '${host_suite:-desconhecida}' sem Release no repo do cloudflared; usando a suite '${suite}' (binario estatico, compativel)."
+  fi
+
+  echo "deb [signed-by=${keyring}] https://pkg.cloudflare.com/cloudflared ${suite} main" | sudo tee "$list_file" >/dev/null
+
+  # apt-get update e NEEDED aqui para carregar o novo repo. Nao tratamos o
+  # exit code como fatal: outros repos do host podem falhar (inclusive um
+  # cloudflared.list antigo e quebrado, que removemos antes) sem que isso
+  # signifique que o pacote do cloudflared esta indisponivel.
+  if ! sudo apt-get update -y \
+      -o Dir::Etc::sourcelist="$list_file" \
+      -o Dir::Etc::sourceparts="-" \
+      -o APT::Get::List-Cleanup="0"; then
+    warn "apt-get update do repositorio do cloudflared falhou; tentando o pacote mesmo assim."
+  fi
+
+  if ! sudo apt-get install -y \
+      -o Dir::Etc::sourcelist="$list_file" \
+      -o Dir::Etc::sourceparts="-" \
+      -o APT::Get::List-Cleanup="0" \
+      cloudflared; then
+    warn "Pacote cloudflared indisponivel no repositorio apt para a suite '${suite}'."
+    return 1
+  fi
+
+  command -v cloudflared >/dev/null 2>&1
+}
+
 setup_cloudflare_tunnel() {
   [[ "${ACCESS_MODE:-}" == "external" || "${ACCESS_MODE:-}" == "hybrid" ]] || return 0
-
-  # Em modo external, falha de tunnel e critico; em modo hybrid, e aviso apenas.
-  local tunnel_critical=0
-  if [[ "${ACCESS_MODE:-}" == "external" ]]; then tunnel_critical=1; fi
 
   log "Instalando e configurando cloudflared"
 
   if ! command -v cloudflared >/dev/null 2>&1; then
-    if ! curl -fsSL --connect-timeout 10 --retry 2 --retry-delay 2 https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg; then
-      if [[ "$tunnel_critical" -eq 1 ]]; then
-        fail "Nao foi possivel configurar repositorio do cloudflared (critico em ACCESS_MODE=external)."
-      fi
-      warn "Nao foi possivel configurar repositorio do cloudflared; seguindo sem tunnel automatico."; return
-    fi
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
-    sudo apt-get update -y
-    if ! sudo apt-get install -y cloudflared; then
-      if [[ "$tunnel_critical" -eq 1 ]]; then
-        fail "cloudflared indisponivel (critico em ACCESS_MODE=external)."
-      fi
-      warn "cloudflared indisponivel para esta arquitetura/distribuicao; seguindo sem tunnel automatico."; return
-    fi
+    # Caminho 1: repositorio apt oficial (respeita o gerenciador de pacotes).
+    install_cloudflared_via_apt "$(cloudflared_host_codename)" || true
   fi
 
   if ! command -v cloudflared >/dev/null 2>&1; then
-    if [[ "$tunnel_critical" -eq 1 ]]; then
-      fail "cloudflared nao encontrado apos tentativa de instalacao (critico em ACCESS_MODE=external)."
+    # Caminho 2: binario oficial do GitHub (independente de suite/arquitetura).
+    log "cloudflared ausente apos o apt; baixando o binario oficial (independente de distribuicao)."
+    install_cloudflared_from_github || true
+  fi
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    if [[ -f /etc/apt/sources.list.d/cloudflared.list ]]; then
+      # O .list so existe aqui se foi gravado por uma execucao ANTIGA (a versao
+      # nova valida o Release antes de gravar). Deixar um repo 404 na maquina
+      # quebra todo 'apt-get update' seguinte, inclusive de terceiros.
+      sudo mv /etc/apt/sources.list.d/cloudflared.list /tmp/cloudflared.list.quebrado 2>/dev/null \
+        || warn "Remova manualmente /etc/apt/sources.list.d/cloudflared.list (repositorio invalido)."
+      warn "Repositorio apt invalido do cloudflared foi desativado (backup: /tmp/cloudflared.list.quebrado); rode 'sudo apt-get update'."
     fi
-    warn "cloudflared nao encontrado apos tentativa de instalacao; seguindo sem tunnel automatico."; return
+    warn "cloudflared indisponivel nesta arquitetura/distribuicao; seguindo SEM tunnel automatico."
+    warn "Instale manualmente e configure o tunnel (troque o asset pela sua arquitetura):"
+    warn "  asset=\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+    warn "  sudo curl -fsSL -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-\$asset"
+    warn "  sudo chmod 0755 /usr/local/bin/cloudflared"
+    warn "  sudo cloudflared service install <TOKEN_DO_TUNNEL>"
+    return 0
   fi
 
   # Token pode nao existir fora do wizard (prompts.sh/normalize.sh): sem a guarda
-  # ${VAR:-} o set -u aborta aqui em vez de emitir o warn/fail abaixo. Token vazio
-  # nao e um install valido, entao falha pelo mesmo ramo (crítico em external).
+  # ${VAR:-} o set -u aborta aqui em vez de emitir o warn abaixo. Token vazio
+  # nao configura um tunnel valido, entao segue pelo mesmo ramo de aviso.
   if [[ -z "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
-    if [[ "$tunnel_critical" -eq 1 ]]; then
-      fail "CLOUDFLARE_TUNNEL_TOKEN ausente: configure o token do tunnel (critico em ACCESS_MODE=external)."
-    fi
-    warn "CLOUDFLARE_TUNNEL_TOKEN ausente; seguindo sem tunnel automatico."; return
+    warn "CLOUDFLARE_TUNNEL_TOKEN ausente; cloudflared instalado mas o tunnel NAO foi configurado."
+    warn "Configure depois: sudo cloudflared service install <TOKEN_DO_TUNNEL>"
+    return 0
   fi
 
   if ! sudo cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN:-}"; then
-    if [[ "$tunnel_critical" -eq 1 ]]; then
-      fail "Falha ao configurar cloudflared service install (critico em ACCESS_MODE=external)."
-    fi
-    warn "Falha ao configurar cloudflared service install; siga com configuracao manual do tunnel."; return
+    warn "Falha ao configurar cloudflared service install; siga com configuracao manual do tunnel."
+    return 0
   fi
 
   # O unit gerado pelo cloudflared embute o token do tunnel; restringir a leitura.

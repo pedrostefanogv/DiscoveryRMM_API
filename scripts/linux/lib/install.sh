@@ -62,34 +62,66 @@ apply_system_updates() {
   log "Upgrade do sistema concluido."
 }
 
-install_apt_dependencies() {
-  local -a all_packages=(
-    apt-transport-https ca-certificates curl git gnupg jq lsb-release
-    dnsutils nginx openssl postgresql postgresql-contrib redis-server nats-server
-    golang-go gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis unzip
-    # Build toolchain para compilar o wails3 (pre-requisito oficial do Wails v3)
-    build-essential pkg-config
-    # GTK4 + WebKitGTK 6.0 (stack default do Wails v3). Necessario para o
-    # `go install` do wails3 (o release beta nao publica binario pre-compilado).
-    libgtk-4-dev libwebkitgtk-6.0-dev
-  )
+# Pacotes OBRIGATORIOS: sem eles a instalacao nao tem como funcionar (banco,
+# cache, NATS, proxy, o proprio runtime da API).
+INSTALL_APT_PACKAGES_REQUIRED=(
+  apt-transport-https ca-certificates curl git gnupg jq lsb-release
+  dnsutils nginx openssl postgresql postgresql-contrib redis-server nats-server
+  unzip
+)
 
+# Pacotes do BUILD (cross-compile do agente Windows + wails). Todos existem
+# tambem em arm64 (verificado em ports.ubuntu.com/noble), mas o build do agente
+# so roda quando o operador publica um pacote — a API e o portal sobem sem eles.
+# Nao podem, portanto, abortar a instalacao em nenhuma arquitetura.
+INSTALL_APT_PACKAGES_BUILD=(
+  golang-go gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 nsis
+  build-essential pkg-config
+  libgtk-4-dev libwebkitgtk-6.0-dev
+)
+
+# Instala um lote de pacotes; o que nao existir no repositorio vira AVISO, nao
+# erro. apt-get install falha o lote inteiro se UM nome for invalido, entao
+# filtramos antes por apt-cache (e nunca deixamos isso derrubar o instalador).
+install_apt_package_batch() {
+  local label="$1"; shift
   local -a missing_packages=()
   local pkg
-  for pkg in "${all_packages[@]}"; do
-    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
-      missing_packages+=("$pkg")
+
+  for pkg in "$@"; do
+    dpkg -s "$pkg" >/dev/null 2>&1 && continue
+    # apt-cache show confirma que o pacote existe para ESTA arquitetura/distro.
+    if ! apt-cache show "$pkg" >/dev/null 2>&1; then
+      warn "Pacote ${pkg} indisponivel neste repositorio/arquitetura; ignorando (${label})."
+      continue
     fi
+    missing_packages+=("$pkg")
   done
 
   if (( ${#missing_packages[@]} == 0 )); then
-    log "Todas as dependencias de sistema ja instaladas."
-    return
+    return 0
   fi
 
-  log "Instalando dependencias de sistema via apt: ${missing_packages[*]}"
+  log "Instalando dependencias de sistema (${label}) via apt: ${missing_packages[*]}"
+  if ! sudo apt-get install -y "${missing_packages[@]}"; then
+    if [[ "$label" == "obrigatorias" ]]; then
+      fail "Falha ao instalar dependencias obrigatorias: ${missing_packages[*]}"
+    fi
+    warn "Falha ao instalar dependencias de build: ${missing_packages[*]} (o build do agente pode falhar)."
+    return 0
+  fi
+}
+
+install_apt_dependencies() {
   sudo apt-get update -y
-  sudo apt-get install -y "${missing_packages[@]}"
+
+  # Obrigatorias primeiro: se faltar uma, falha aqui com mensagem clara.
+  install_apt_package_batch "obrigatorias" "${INSTALL_APT_PACKAGES_REQUIRED[@]}"
+
+  # Build: best-effort. Em ARM64 sem algum pacote de cross-compile o servidor
+  # instala normalmente e apenas o empacotamento do agente fica indisponivel
+  # (com aviso), em vez de abortar a instalacao inteira.
+  install_apt_package_batch "build" "${INSTALL_APT_PACKAGES_BUILD[@]}"
 }
 
 # Instala o plugin nsJSON no NSIS para merge de configuracao JSON sem PowerShell.
@@ -104,6 +136,14 @@ install_nsis_nsjson_plugin() {
   if [[ -f "$dll_path" ]]; then
     log "nsJSON plugin ja instalado em $dll_path"
     return
+  fi
+
+  # Sem NSIS instalado nao ha onde colocar o plugin (o pacote nsis existe tambem
+  # em arm64, mas pode ter sido ignorado pelo apt). Nao e erro: o plugin so e
+  # usado ao empacotar o instalador do agente Windows.
+  if ! command -v makensis >/dev/null 2>&1 && [[ ! -d /usr/share/nsis ]]; then
+    warn "NSIS nao instalado; pulando o plugin nsJSON (necessario apenas para empacotar o agente)."
+    return 0
   fi
 
   # Diretorio temporario proprio do usuario (mktemp): o instalador pode rodar
@@ -361,6 +401,16 @@ ensure_wails_toolchain() {
     return
   fi
 
+  # O `go install` do wails3 falha se o Go do repositorio for mais antigo que o
+  # exigido pelo modulo (noble entrega 1.22; o wails v3 exige 1.26). Checa e, se
+  # preciso, instala a toolchain oficial ANTES de tentar compilar o CLI.
+  if ! ensure_go_toolchain_for_agent; then
+    warn "Go insuficiente para compilar o ${WAILS_BIN:-wails3}; o build do agente pode nao funcionar."
+  fi
+  # Reavalia o PATH: a toolchain oficial vive em /usr/local/go/bin.
+  export PATH="/usr/local/go/bin:/usr/local/bin:$PATH"
+  hash -r 2>/dev/null || true
+
   resolve_wails_version
 
   local sentinel_file="/opt/discovery-ops/wails-cli.version"
@@ -397,6 +447,119 @@ ensure_wails_toolchain() {
 # Alias de compatibilidade (nome anterior mantido).
 ensure_wails3_toolchain() {
   ensure_wails_toolchain
+}
+
+# Go minimo exigido pelo go.mod do agente (src/go.mod: "go 1.26.0"). O wails v3
+# v3.1.0 tambem exige go 1.26. O `golang-go` do repositorio NAO acompanha isso:
+# noble (24.04) entrega 1.22, questing 1.24 e so resolute (26.04) entrega 1.26.
+# Sem esta checagem, o build do agente falha com "go.mod requires go >= 1.26"
+# — mensagem que nao aponta para o golang-go desatualizado.
+MIN_GO_VERSION_FOR_AGENT="1.26"
+
+# Compara duas versoes "X.Y[.Z]" numericamente. Retorna 0 se $1 >= $2.
+go_version_at_least() {
+  local have="$1" want="$2"
+  local IFS=.
+  local -a h w
+  read -r -a h <<< "$have"
+  read -r -a w <<< "$want"
+  local i
+  for i in 0 1 2; do
+    local hi="${h[$i]:-0}" wi="${w[$i]:-0}"
+    # Remove sufixos nao numericos (ex.: 1.26rc1) do campo.
+    hi="${hi%%[!0-9]*}"; wi="${wi%%[!0-9]*}"
+    hi="${hi:-0}"; wi="${wi:-0}"
+    if (( hi > wi )); then return 0; fi
+    if (( hi < wi )); then return 1; fi
+  done
+  return 0
+}
+
+# Versao major.minor do `go` no PATH (vazio se ausente).
+installed_go_version() {
+  command -v go >/dev/null 2>&1 || { printf %s ""; return; }
+  go version 2>/dev/null | sed -nE "s/^go version go([0-9]+\.[0-9]+).*/\1/p" | head -n1
+}
+
+# Garante um Go >= MIN_GO_VERSION_FOR_AGENT. O pacote do repositorio pode ser
+# insuficiente (noble: 1.22); nesse caso instala a versao oficial do go.dev em
+# /usr/local/go, que e a unica forma de obter 1.26 nessas distros. Best-effort:
+# sem isso o build do agente nao funciona, mas a API/portal sobem normalmente.
+ensure_go_toolchain_for_agent() {
+  local have
+  have="$(installed_go_version)"
+
+  if [[ -n "$have" ]] && go_version_at_least "$have" "$MIN_GO_VERSION_FOR_AGENT"; then
+    log "Go ${have} atende o minimo exigido pelo agente (${MIN_GO_VERSION_FOR_AGENT})."
+    return 0
+  fi
+
+  if [[ -n "$have" ]]; then
+    warn "Go ${have} e insuficiente para o build do agente (minimo ${MIN_GO_VERSION_FOR_AGENT} exigido pelo go.mod do agente)."
+  else
+    warn "Go nao encontrado; o build do agente nao funcionara."
+  fi
+
+  # Ja existe um Go oficial instalado fora do apt?
+  if [[ -x /usr/local/go/bin/go ]]; then
+    local official
+    official="$(/usr/local/go/bin/go version 2>/dev/null | sed -nE "s/^go version go([0-9]+\.[0-9]+).*/\1/p" | head -n1)"
+    if [[ -n "$official" ]] && go_version_at_least "$official" "$MIN_GO_VERSION_FOR_AGENT"; then
+      log "Usando o Go oficial ${official} em /usr/local/go (precede o do apt no PATH)."
+      return 0
+    fi
+  fi
+
+  local go_version="${DISCOVERY_GO_VERSION:-}"
+  if [[ -z "$go_version" ]]; then
+    # Descobre a ultima versao estavel estavel do go.dev sem depender de jq.
+    go_version="$(curl -fsSL --connect-timeout 10 --retry 2 "https://go.dev/VERSION?m=text" 2>/dev/null | head -n1 || true)"
+  fi
+  [[ -n "$go_version" ]] || go_version="go${MIN_GO_VERSION_FOR_AGENT}.0"
+
+  local tarball_arch
+  case "$(uname -m)" in
+    x86_64|amd64)  tarball_arch="amd64" ;;
+    aarch64|arm64) tarball_arch="arm64" ;;
+    armv7l|armhf)  tarball_arch="armv6l" ;;
+    *) warn "Arquitetura $(uname -m) sem tarball oficial do Go; o build do agente pode falhar."; return 1 ;;
+  esac
+
+  local url="https://go.dev/dl/${go_version}.linux-${tarball_arch}.tar.gz"
+  local tmp_tar; tmp_tar="$(mktemp --suffix=.tar.gz)"
+  log "Baixando Go ${go_version} (${tarball_arch}) de go.dev..."
+  if ! curl -fsSL --connect-timeout 20 --retry 3 --retry-delay 2 -o "$tmp_tar" "$url"; then
+    rm -f "$tmp_tar"
+    warn "Falha ao baixar ${url}; instale o Go ${MIN_GO_VERSION_FOR_AGENT}+ manualmente."
+    return 1
+  fi
+
+  # Substitui /usr/local/go de forma atomica: extrai ao lado e troca no fim
+  # (uma extracao interrompida nao deixa a toolchain pela metade).
+  local extract_dir; extract_dir="$(mktemp -d)"
+  if ! sudo tar -C "$extract_dir" -xzf "$tmp_tar"; then
+    rm -f "$tmp_tar"; sudo rm -rf "$extract_dir"
+    warn "Tarball do Go invalido; instale o Go ${MIN_GO_VERSION_FOR_AGENT}+ manualmente."
+    return 1
+  fi
+  rm -f "$tmp_tar"
+
+  sudo rm -rf /usr/local/go.old
+  [[ -d /usr/local/go ]] && sudo mv /usr/local/go /usr/local/go.old
+  if sudo mv "$extract_dir/go" /usr/local/go; then
+    sudo rm -rf "$extract_dir" /usr/local/go.old
+    # /usr/local/go/bin precede /usr/bin no PATH padrao; o link garante que
+    # tambem o `go` do PATH do sistema aponte para a versao nova.
+    sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+    log "Go instalado em /usr/local/go ($(/usr/local/go/bin/go version 2>/dev/null || echo versao desconhecida))."
+    return 0
+  fi
+
+  sudo rm -rf "$extract_dir"
+  [[ -d /usr/local/go.old ]] && sudo mv /usr/local/go.old /usr/local/go
+  warn "Falha ao instalar o Go oficial; o build do agente pode falhar."
+  return 1
 }
 
 ensure_service_user() {
