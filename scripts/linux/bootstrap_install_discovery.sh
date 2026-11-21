@@ -170,11 +170,23 @@ exec_installer() {
   log "Executando instalador"
   # `${VAR:-}` e obrigatorio: o fast-path de maintenance executa esta funcao
   # ANTES da deteccao de runtime (com set -u, referenciar var unset aborta).
-  exec env \
+  if [[ "${non_interactive:-0}" -eq 1 ]]; then
+    exec env \
+      DISCOVERY_FROM_BOOTSTRAP=1 \
+      DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}" \
+      DISCOVERY_GIT_BRANCH="$BOOTSTRAP_BRANCH" \
+      DISCOVERY_RELEASE_CHANNEL="$BOOTSTRAP_BRANCH" \
+      bash "$installer_path" "$@"
+  fi
+
+  local rc=0
+  env \
+    DISCOVERY_FROM_BOOTSTRAP=1 \
     DISCOVERY_DOTNET_RUNTIME="${DISCOVERY_DOTNET_RUNTIME:-}" \
     DISCOVERY_GIT_BRANCH="$BOOTSTRAP_BRANCH" \
     DISCOVERY_RELEASE_CHANNEL="$BOOTSTRAP_BRANCH" \
-    bash "$installer_path" "$@"
+    bash "$installer_path" "$@" || rc=$?
+  return "$rc"
 }
 
 bootstrap_header() {
@@ -426,92 +438,19 @@ done
 
 ensure_bootstrap_dependencies
 
-if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}" && -z "${DISCOVERY_GIT_BRANCH:-}" ]]; then
-  non_interactive=0
-  for arg in "${INSTALLER_ARGS[@]}"; do
-    if [[ "$arg" == "--non-interactive" ]]; then
-      non_interactive=1
-      break
-    fi
-  done
-
-  if [[ "$non_interactive" -eq 0 ]]; then
-    initial_mode_explicit=0
-    [[ -n "$BOOTSTRAP_INSTALL_MODE" ]] && initial_mode_explicit=1
-    while true; do
-      if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
-        BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
-      fi
-      if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE"; then
-        BOOTSTRAP_BRANCH="dev"
-        log "Modo maintenance: usando branch 'dev' (unica com suporte a manutencao)"
-        break
-      fi
-      branch_rc=0
-      chosen_branch="$(choose_branch_interactive "$BOOTSTRAP_INSTALL_MODE")" || branch_rc=$?
-      if [[ "$branch_rc" -eq "$BOOTSTRAP_BACK_RC" ]]; then
-        if [[ "$initial_mode_explicit" -eq 0 ]]; then
-          BOOTSTRAP_INSTALL_MODE=""
-          continue
-        fi
-        echo "Modo de operacao fixado via --mode; nao e possivel voltar ao menu anterior." >&2
-        continue
-      fi
-      if [[ "$branch_rc" -ne 0 ]]; then
-        exit "$branch_rc"
-      fi
-      BOOTSTRAP_BRANCH="$chosen_branch"
-      break
-    done
+non_interactive=0
+for arg in "${INSTALLER_ARGS[@]}"; do
+  if [[ "$arg" == "--non-interactive" ]]; then
+    non_interactive=1
+    break
   fi
-fi
+done
 
-if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ "$BOOTSTRAP_BRANCH" == "release" || "$BOOTSTRAP_BRANCH" == "lts" ]]; then
-  warn "BOOTSTRAP_BRANCH='$BOOTSTRAP_BRANCH' nao possui manutencao; alterando para 'dev'"
-  BOOTSTRAP_BRANCH="dev"
-fi
-
-if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ -n "${LOCAL_INSTALLER_PATH:-}" && -f "$LOCAL_INSTALLER_PATH" ]]; then
-  if installer_supports_maintenance "$LOCAL_INSTALLER_PATH"; then
-    log "Modo maintenance: usando instalador local em $LOCAL_INSTALLER_PATH"
-    exec_installer "$LOCAL_INSTALLER_PATH" --mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}"
-  fi
-  warn "Instalador local nao possui suporte ao modo maintenance; tentando clone remoto."
-fi
-
-if [[ -n "$BOOTSTRAP_INSTALL_MODE" ]]; then
-  INSTALLER_ARGS=(--mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}")
-fi
-
-BOOTSTRAP_BRANCH="$(normalize_branch "$BOOTSTRAP_BRANCH")"
-
-if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then
-  local_arch="$(detect_system_architecture)"
-  if DISCOVERY_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$local_arch")"; then
-    log "Runtime .NET detectado para o host: $DISCOVERY_DOTNET_RUNTIME ($local_arch)"
-  else
-    DISCOVERY_DOTNET_RUNTIME="linux-x64"
-    warn "Arquitetura nao mapeada (${local_arch:-desconhecida}); usando runtime padrao linux-x64"
-  fi
-fi
-
+BASE_INSTALLER_ARGS=("${INSTALLER_ARGS[@]}")
+INITIAL_MODE_EXPLICIT=0
+[[ -n "$BOOTSTRAP_INSTALL_MODE" ]] && INITIAL_MODE_EXPLICIT=1
+INITIAL_BOOTSTRAP_WORKDIR="$BOOTSTRAP_WORKDIR"
 BOOTSTRAP_WORKDIR_CREATED=0
-if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
-  BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
-  BOOTSTRAP_WORKDIR_CREATED=1
-fi
-# Cleanup do diretorio temporario em caso de saida anormal ou sucesso.
-trap 'rm -rf "$BOOTSTRAP_WORKDIR"' EXIT INT TERM
-
-clone_candidates=("$BOOTSTRAP_BRANCH")
-case "$BOOTSTRAP_BRANCH" in
-  lts|release|beta|dev)
-    for candidate in release dev beta lts; do
-      [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]] && continue
-      clone_candidates+=("$candidate")
-    done
-    ;;
-esac
 
 # A branch existe no remoto? Distingue "branch inexistente" de "falha de
 # rede ao clonar" — sem isso, um erro transitorio do GitHub derrubava o pedido
@@ -539,65 +478,165 @@ clone_branch_with_retry() {
   return 1
 }
 
-CLONED_BRANCH=""
-INSTALLER_PATH=""
-for candidate in "${clone_candidates[@]}"; do
-  log "Tentando bootstrap do canal/branch '$candidate'"
-
-  if ! branch_exists "$candidate"; then
-    log "Canal/branch '$candidate' nao existe no repositorio"
-    continue
+cleanup_bootstrap_workdir() {
+  if [[ "${BOOTSTRAP_WORKDIR_CREATED:-0}" -eq 1 && -n "${BOOTSTRAP_WORKDIR:-}" && -d "$BOOTSTRAP_WORKDIR" ]]; then
+    rm -rf "$BOOTSTRAP_WORKDIR"
   fi
+}
+trap cleanup_bootstrap_workdir EXIT INT TERM
 
-  if ! clone_branch_with_retry "$candidate"; then
-    warn "Falha ao clonar a branch '$candidate' apos 3 tentativas (rede/GitHub)."
-    if [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]]; then
-      fail "Nao foi possivel clonar a branch solicitada '$BOOTSTRAP_BRANCH' (verifique rede/GitHub e tente novamente). O fallback para outra branch foi bloqueado para nao executar um instalador diferente."
+while true; do
+  INSTALLER_ARGS=("${BASE_INSTALLER_ARGS[@]}")
+  BOOTSTRAP_WORKDIR="$INITIAL_BOOTSTRAP_WORKDIR"
+  BOOTSTRAP_WORKDIR_CREATED=0
+
+  if [[ -z "${DISCOVERY_BOOTSTRAP_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}" && -z "${DISCOVERY_GIT_BRANCH:-}" ]]; then
+    if [[ "$non_interactive" -eq 0 ]]; then
+      while true; do
+        if [[ -z "$BOOTSTRAP_INSTALL_MODE" ]]; then
+          BOOTSTRAP_INSTALL_MODE="$(choose_operation_mode_interactive)"
+        fi
+        if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE"; then
+          BOOTSTRAP_BRANCH="dev"
+          log "Modo maintenance: usando branch 'dev' (unica com suporte a manutencao)"
+          break
+        fi
+        branch_rc=0
+        chosen_branch="$(choose_branch_interactive "$BOOTSTRAP_INSTALL_MODE")" || branch_rc=$?
+        if [[ "$branch_rc" -eq "$BOOTSTRAP_BACK_RC" ]]; then
+          if [[ "$INITIAL_MODE_EXPLICIT" -eq 0 ]]; then
+            BOOTSTRAP_INSTALL_MODE=""
+            continue
+          fi
+          echo "Modo de operacao fixado via --mode; nao e possivel voltar ao menu anterior." >&2
+          continue
+        fi
+        if [[ "$branch_rc" -ne 0 ]]; then
+          exit "$branch_rc"
+        fi
+        BOOTSTRAP_BRANCH="$chosen_branch"
+        break
+      done
     fi
-    continue
   fi
 
-  INSTALLER_PATH="$BOOTSTRAP_WORKDIR/$INSTALLER_RELATIVE_PATH"
-  if [[ ! -f "$INSTALLER_PATH" ]]; then
-    log "Instalador ausente em '$candidate' ($INSTALLER_RELATIVE_PATH)"
-    continue
+  if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ "$BOOTSTRAP_BRANCH" == "release" || "$BOOTSTRAP_BRANCH" == "lts" ]]; then
+    warn "BOOTSTRAP_BRANCH='$BOOTSTRAP_BRANCH' nao possui manutencao; alterando para 'dev'"
+    BOOTSTRAP_BRANCH="dev"
   fi
 
-  CLONED_BRANCH="$candidate"
-  break
-done
-
-[[ -n "$CLONED_BRANCH" ]] || fail "Nenhum canal/branch valido encontrado. Tentativas: ${clone_candidates[*]}"
-
-if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
-  # Em modo nao interativo, falha se a branch solicitada nao existir.
-  if [[ "${non_interactive:-0}" -eq 1 ]]; then
-    fail "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel (fallback para '$CLONED_BRANCH' rejeitado em modo --non-interactive). Use a branch disponivel ou corrija o parametro."
+  if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && [[ -n "${LOCAL_INSTALLER_PATH:-}" && -f "$LOCAL_INSTALLER_PATH" ]]; then
+    if installer_supports_maintenance "$LOCAL_INSTALLER_PATH"; then
+      log "Modo maintenance: usando instalador local em $LOCAL_INSTALLER_PATH"
+      inst_rc=0
+      exec_installer "$LOCAL_INSTALLER_PATH" --mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}" || inst_rc=$?
+      if [[ "$inst_rc" -eq "$BOOTSTRAP_BACK_RC" && "$non_interactive" -eq 0 ]]; then
+        [[ "$INITIAL_MODE_EXPLICIT" -eq 0 ]] && BOOTSTRAP_INSTALL_MODE=""
+        continue
+      fi
+      exit "$inst_rc"
+    fi
+    warn "Instalador local nao possui suporte ao modo maintenance; tentando clone remoto."
   fi
-  warn "Branch solicitada '$BOOTSTRAP_BRANCH' nao existe; fallback para '$CLONED_BRANCH'."
-  echo "Branch '$BOOTSTRAP_BRANCH' nao existe. Usar '$CLONED_BRANCH'? (s/N): " >&2
-  # SEM `local` aqui: este trecho roda no top-level do script e `local` fora de
-  # funcao falha fatalmente com set -e ("local: can only be used in a function").
-  confirm_fallback=""
-  read -r confirm_fallback
-  confirm_fallback="$(printf '%s' "${confirm_fallback:-n}" | tr '[:upper:]' '[:lower:]')"
-  case "$confirm_fallback" in
-    s|sim|y|yes) log "Fallback confirmado: usando '$CLONED_BRANCH'." ;;
-    *) fail "Instalacao cancelada pelo usuario. Branch '$BOOTSTRAP_BRANCH' nao disponivel." ;;
+
+  if [[ -n "$BOOTSTRAP_INSTALL_MODE" ]]; then
+    INSTALLER_ARGS=(--mode "$BOOTSTRAP_INSTALL_MODE" "${INSTALLER_ARGS[@]}")
+  fi
+
+  BOOTSTRAP_BRANCH="$(normalize_branch "$BOOTSTRAP_BRANCH")"
+
+  if [[ -z "${DISCOVERY_DOTNET_RUNTIME:-}" ]]; then
+    local_arch="$(detect_system_architecture)"
+    if DISCOVERY_DOTNET_RUNTIME="$(map_arch_to_dotnet_runtime "$local_arch")"; then
+      log "Runtime .NET detectado para o host: $DISCOVERY_DOTNET_RUNTIME ($local_arch)"
+    else
+      DISCOVERY_DOTNET_RUNTIME="linux-x64"
+      warn "Arquitetura nao mapeada (${local_arch:-desconhecida}); usando runtime padrao linux-x64"
+    fi
+  fi
+
+  if [[ -z "$BOOTSTRAP_WORKDIR" ]]; then
+    BOOTSTRAP_WORKDIR="$(mktemp -d /tmp/discovery-bootstrap.XXXXXX)"
+    BOOTSTRAP_WORKDIR_CREATED=1
+  fi
+
+  clone_candidates=("$BOOTSTRAP_BRANCH")
+  case "$BOOTSTRAP_BRANCH" in
+    lts|release|beta|dev)
+      for candidate in release dev beta lts; do
+        [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]] && continue
+        clone_candidates+=("$candidate")
+      done
+      ;;
   esac
-fi
 
-if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && ! installer_supports_maintenance "$INSTALLER_PATH"; then
-  fail "A branch '$CLONED_BRANCH' nao possui suporte ao modo maintenance. Informe --branch dev/beta (com suporte) ou execute scripts/linux/install_discovery_server.sh --mode maintenance em um checkout atualizado."
-fi
+  CLONED_BRANCH=""
+  INSTALLER_PATH=""
+  for candidate in "${clone_candidates[@]}"; do
+    log "Tentando bootstrap do canal/branch '$candidate'"
 
-# Quando executado como root, o instalador reexecuta como usuario instalador
-# (bootstrap_root_execution). O checkout temporario (mktemp -d) nasce 0700 do
-# root; sem liberar a leitura, o usuario instalador nao consegue carregar o
-# instalador nem os libs.
-if [[ "$EUID" -eq 0 && "${BOOTSTRAP_WORKDIR_CREATED:-0}" -eq 1 && -n "$BOOTSTRAP_WORKDIR" && -d "$BOOTSTRAP_WORKDIR" ]]; then
-  chmod a+rx "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
-  chmod -R a+rX "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
-fi
+    if ! branch_exists "$candidate"; then
+      log "Canal/branch '$candidate' nao existe no repositorio"
+      continue
+    fi
 
-exec_installer "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}"
+    if ! clone_branch_with_retry "$candidate"; then
+      warn "Falha ao clonar a branch '$candidate' apos 3 tentativas (rede/GitHub)."
+      if [[ "$candidate" == "$BOOTSTRAP_BRANCH" ]]; then
+        fail "Nao foi possivel clonar a branch solicitada '$BOOTSTRAP_BRANCH' (verifique rede/GitHub e tente novamente). O fallback para outra branch foi bloqueado para nao executar um instalador diferente."
+      fi
+      continue
+    fi
+
+    INSTALLER_PATH="$BOOTSTRAP_WORKDIR/$INSTALLER_RELATIVE_PATH"
+    if [[ ! -f "$INSTALLER_PATH" ]]; then
+      log "Instalador ausente em '$candidate' ($INSTALLER_RELATIVE_PATH)"
+      continue
+    fi
+
+    CLONED_BRANCH="$candidate"
+    break
+  done
+
+  [[ -n "$CLONED_BRANCH" ]] || fail "Nenhum canal/branch valido encontrado. Tentativas: ${clone_candidates[*]}"
+
+  if [[ "$CLONED_BRANCH" != "$BOOTSTRAP_BRANCH" ]]; then
+    # Em modo nao interativo, falha se a branch solicitada nao existir.
+    if [[ "${non_interactive:-0}" -eq 1 ]]; then
+      fail "Branch solicitada '$BOOTSTRAP_BRANCH' nao disponivel (fallback para '$CLONED_BRANCH' rejeitado em modo --non-interactive). Use a branch disponivel ou corrija o parametro."
+    fi
+    warn "Branch solicitada '$BOOTSTRAP_BRANCH' nao existe; fallback para '$CLONED_BRANCH'."
+    echo "Branch '$BOOTSTRAP_BRANCH' nao existe. Usar '$CLONED_BRANCH'? (s/N): " >&2
+    # SEM `local` aqui: este trecho roda no top-level do script e `local` fora de
+    # funcao falha fatalmente com set -e ("local: can only be used in a function").
+    confirm_fallback=""
+    read -r confirm_fallback
+    confirm_fallback="$(printf '%s' "${confirm_fallback:-n}" | tr '[:upper:]' '[:lower:]')"
+    case "$confirm_fallback" in
+      s|sim|y|yes) log "Fallback confirmado: usando '$CLONED_BRANCH'." ;;
+      *) fail "Instalacao cancelada pelo usuario. Branch '$BOOTSTRAP_BRANCH' nao disponivel." ;;
+    esac
+  fi
+
+  if is_maintenance_mode "$BOOTSTRAP_INSTALL_MODE" && ! installer_supports_maintenance "$INSTALLER_PATH"; then
+    fail "A branch '$CLONED_BRANCH' nao possui suporte ao modo maintenance. Informe --branch dev/beta (com suporte) ou execute scripts/linux/install_discovery_server.sh --mode maintenance em um checkout atualizado."
+  fi
+
+  # Quando executado como root, o instalador reexecuta como usuario instalador
+  # (bootstrap_root_execution). O checkout temporario (mktemp -d) nasce 0700 do
+  # root; sem liberar a leitura, o usuario instalador nao consegue carregar o
+  # instalador nem os libs.
+  if [[ "$EUID" -eq 0 && "${BOOTSTRAP_WORKDIR_CREATED:-0}" -eq 1 && -n "$BOOTSTRAP_WORKDIR" && -d "$BOOTSTRAP_WORKDIR" ]]; then
+    chmod a+rx "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
+    chmod -R a+rX "$BOOTSTRAP_WORKDIR" 2>/dev/null || true
+  fi
+
+  inst_rc=0
+  exec_installer "$INSTALLER_PATH" "${INSTALLER_ARGS[@]}" || inst_rc=$?
+  if [[ "$inst_rc" -eq "$BOOTSTRAP_BACK_RC" && "$non_interactive" -eq 0 ]]; then
+    cleanup_bootstrap_workdir
+    [[ "$INITIAL_MODE_EXPLICIT" -eq 0 ]] && BOOTSTRAP_INSTALL_MODE=""
+    continue
+  fi
+  exit "$inst_rc"
+done

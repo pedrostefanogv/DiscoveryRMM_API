@@ -206,8 +206,9 @@ run_full_install_wizard() {
         step_idx=$((step_idx - 1))
         WIZARD_REPROMPT=1
       else
-        echo "Voce ja esta na primeira etapa." >&2
-        WIZARD_REPROMPT=1
+        WIZARD_SHOW_BACK_HINT="$prev_back_hint"
+        WIZARD_REPROMPT=0
+        return "${WIZARD_BACK_RC:-10}"
       fi
       continue
     elif (( rc == 20 )); then
@@ -229,14 +230,95 @@ run_full_install_wizard() {
 }
 
 main() {
-  initialize_log_context_from_requested_mode
-  select_operation_mode
+  local initial_mode_fixed=0
+  if [[ "${UPDATE_NATS_CONFIG_ONLY:-0}" -eq 1 || "${UPDATE_STACK_ONLY:-0}" -eq 1 || "${MAINTENANCE_MODE:-0}" -eq 1 || -n "${INSTALL_MODE:-${DISCOVERY_INSTALL_MODE:-}}" ]]; then
+    initial_mode_fixed=1
+  fi
 
-  if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then apply_nats_reconfiguration_only; return; fi
-  if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then apply_stack_update_only; return; fi
-  if [[ "$MAINTENANCE_MODE" -eq 1 ]]; then apply_maintenance_mode; return; fi
+  local mode_rc=0
+  while true; do
+    initialize_log_context_from_requested_mode
+    select_operation_mode
 
-  run_full_install_wizard
+    mode_rc=0
+    if [[ "$UPDATE_NATS_CONFIG_ONLY" -eq 1 ]]; then
+      apply_nats_reconfiguration_only || mode_rc=$?
+      if (( mode_rc == ${WIZARD_BACK_RC:-10} )); then
+        if [[ "${DISCOVERY_FROM_BOOTSTRAP:-0}" == "1" ]]; then
+          exit "${WIZARD_BACK_RC:-10}"
+        fi
+        if [[ "$initial_mode_fixed" -eq 1 ]]; then
+          echo "Modo fixado via parametro; nao e possivel voltar ao menu de operacao." >&2
+          continue
+        fi
+        INSTALL_MODE=""
+        DISCOVERY_INSTALL_MODE=""
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        continue
+      fi
+      return "$mode_rc"
+    fi
+    if [[ "$UPDATE_STACK_ONLY" -eq 1 ]]; then
+      apply_stack_update_only || mode_rc=$?
+      if (( mode_rc == ${WIZARD_BACK_RC:-10} )); then
+        if [[ "${DISCOVERY_FROM_BOOTSTRAP:-0}" == "1" ]]; then
+          exit "${WIZARD_BACK_RC:-10}"
+        fi
+        if [[ "$initial_mode_fixed" -eq 1 ]]; then
+          echo "Modo fixado via parametro; nao e possivel voltar ao menu de operacao." >&2
+          continue
+        fi
+        INSTALL_MODE=""
+        DISCOVERY_INSTALL_MODE=""
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        continue
+      fi
+      return "$mode_rc"
+    fi
+    if [[ "$MAINTENANCE_MODE" -eq 1 ]]; then
+      apply_maintenance_mode || mode_rc=$?
+      if (( mode_rc == ${WIZARD_BACK_RC:-10} )); then
+        if [[ "${DISCOVERY_FROM_BOOTSTRAP:-0}" == "1" ]]; then
+          exit "${WIZARD_BACK_RC:-10}"
+        fi
+        if [[ "$initial_mode_fixed" -eq 1 ]]; then
+          echo "Modo fixado via parametro; nao e possivel voltar ao menu de operacao." >&2
+          continue
+        fi
+        INSTALL_MODE=""
+        DISCOVERY_INSTALL_MODE=""
+        UPDATE_NATS_CONFIG_ONLY=0
+        UPDATE_STACK_ONLY=0
+        MAINTENANCE_MODE=0
+        continue
+      fi
+      return "$mode_rc"
+    fi
+
+    run_full_install_wizard || mode_rc=$?
+    if (( mode_rc == ${WIZARD_BACK_RC:-10} )); then
+      if [[ "${DISCOVERY_FROM_BOOTSTRAP:-0}" == "1" ]]; then
+        exit "${WIZARD_BACK_RC:-10}"
+      fi
+      if [[ "$initial_mode_fixed" -eq 1 ]]; then
+        echo "Voce ja esta na primeira etapa." >&2
+        continue
+      fi
+      INSTALL_MODE=""
+      DISCOVERY_INSTALL_MODE=""
+      UPDATE_NATS_CONFIG_ONLY=0
+      UPDATE_STACK_ONLY=0
+      MAINTENANCE_MODE=0
+      continue
+    elif (( mode_rc != 0 )); then
+      return "$mode_rc"
+    fi
+    break
+  done
 
   validate_security_inputs
   normalize_nats_settings

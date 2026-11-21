@@ -1122,7 +1122,7 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             .Select(group => new PatchInventoryGroup
             {
                 GroupKey = group.Key,
-                KbIds = group.Max(row => row.Update.KbIds),
+                KbIds = null,
                 Title = group.Max(row => row.Update.Title) ?? string.Empty,
                 Description = group.Max(row => row.Update.Description),
                 Classification = group.Max(row => row.Update.Classification),
@@ -1145,7 +1145,33 @@ public sealed class PatchRepository(DiscoveryDbContext db) : IPatchRepository
             ? grouped.OrderByDescending(group => group.GroupKey)
             : grouped.OrderBy(group => group.GroupKey);
 
-        return await grouped.Take(safeLimit).ToListAsync(ct);
+        var groups = await grouped.Take(safeLimit).ToListAsync(ct);
+        if (groups.Count > 0)
+        {
+            var groupKeys = groups.Select(g => g.GroupKey).ToList();
+            var kbRows = await query
+                .Where(row => groupKeys.Contains(row.Update.GroupKey) && row.Update.KbIds != null)
+                .Select(row => new { row.Update.GroupKey, row.Update.KbIds })
+                .Distinct()
+                .ToListAsync(ct);
+
+            var kbByGroup = kbRows
+                .GroupBy(r => r.GroupKey, StringComparer.Ordinal)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(x => x.KbIds)
+                          .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && x != "[]")
+                         ?? g.Select(x => x.KbIds).FirstOrDefault(),
+                    StringComparer.Ordinal);
+
+            foreach (var group in groups)
+            {
+                if (kbByGroup.TryGetValue(group.GroupKey, out var kbIds))
+                    group.KbIds = kbIds;
+            }
+        }
+
+        return groups;
     }
 
     public async Task<IReadOnlyList<PatchInventoryAgentRow>> GetInventoryAgentsAsync(

@@ -36,18 +36,21 @@ prompt_installer_user_name() {
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
     validate_installer_user_name "$DISCOVERY_INSTALL_USER"
-    return
+    return 0
   fi
 
   local input=""
   while true; do
     read -r -p "Nome do usuario instalador (com sudo) [$DISCOVERY_INSTALL_USER]: " input
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
     input="$(printf '%s' "${input:-$DISCOVERY_INSTALL_USER}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     if is_valid_installer_user_name "$input"; then
       DISCOVERY_INSTALL_USER="$input"
-      return
+      return 0
     fi
-    echo "Nome invalido: use minusculas, digitos, '_' e '-' (max 32, iniciando por letra) e nao use 'root'. Tente novamente." >&2
+    echo "Nome invalido: use minusculas, digitos, '_' e '-' (max 32, iniciando por letra) e nao use 'root'. Tente novamente (ou digite 'voltar')." >&2
   done
 }
 
@@ -55,13 +58,18 @@ prompt_installer_user_name() {
 #   - Enter em branco: gera uma senha forte e mostra uma unica vez (nunca aborta).
 #   - Senha informada: pede confirmacao e repete se estiver curta ou divergente.
 prompt_installer_user_password() {
-  if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
+  if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" && "${WIZARD_REPROMPT:-0}" -eq 0 ]]; then
     validate_installer_user_password "$DISCOVERY_INSTALL_USER_PASSWORD"
     DISCOVERY_INSTALL_USER_PASSWORD_AUTO="${DISCOVERY_INSTALL_USER_PASSWORD_AUTO:-0}"
-    return
+    return 0
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    if [[ -n "${DISCOVERY_INSTALL_USER_PASSWORD:-}" ]]; then
+      validate_installer_user_password "$DISCOVERY_INSTALL_USER_PASSWORD"
+      DISCOVERY_INSTALL_USER_PASSWORD_AUTO="${DISCOVERY_INSTALL_USER_PASSWORD_AUTO:-0}"
+      return 0
+    fi
     fail "Variavel obrigatoria ausente para modo nao interativo: DISCOVERY_INSTALL_USER_PASSWORD"
   fi
 
@@ -69,6 +77,9 @@ prompt_installer_user_password() {
   while true; do
     read -r -s -p "Senha do usuario instalador (obrigatoria; Enter = gerar senha forte): " input
     printf '\n'
+    if is_wizard_back_input "$input"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
 
     if [[ -z "$input" ]]; then
       local generated
@@ -80,7 +91,7 @@ prompt_installer_user_password() {
       echo "  ${generated}"
       echo "Anote agora: ela e a senha do sudo desse usuario e nao sera mostrada novamente."
       echo
-      return
+      return 0
     fi
 
     if (( ${#input} < 8 )); then
@@ -98,6 +109,9 @@ prompt_installer_user_password() {
 
     read -r -s -p "Confirme a senha do usuario instalador: " confirm
     printf '\n'
+    if is_wizard_back_input "$confirm"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
     if [[ "$input" != "$confirm" ]]; then
       echo "As senhas nao conferem. Tente novamente." >&2
       continue
@@ -105,7 +119,7 @@ prompt_installer_user_password() {
 
     DISCOVERY_INSTALL_USER_PASSWORD="$input"
     DISCOVERY_INSTALL_USER_PASSWORD_AUTO=0
-    return
+    return 0
   done
 }
 
@@ -163,21 +177,50 @@ bootstrap_root_execution() {
     return 0
   fi
 
-  prompt_installer_user_name
-
-  # O --config e lido de novo pelo processo reexecutado como usuario
-  # instalador; se nao for legivel, seguimos como root para nao perder a
-  # configuracao (ex.: arquivo 0600 pertencente ao root). Precisa vir depois de
-  # prompt_installer_user_name, que e quem define DISCOVERY_INSTALL_USER.
-  if [[ -n "${CONFIG_FILE:-}" ]]; then
-    if ! id -u "$DISCOVERY_INSTALL_USER" >/dev/null 2>&1 \
-       || ! sudo -u "$DISCOVERY_INSTALL_USER" test -r "$CONFIG_FILE"; then
-      warn "Arquivo --config '$CONFIG_FILE' nao sera legivel pelo usuario '$DISCOVERY_INSTALL_USER'; seguindo como root para preservar a configuracao."
-      return 0
-    fi
+  if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
+    echo "Dica: digite 'voltar' (ou '<') para retornar a etapa anterior."
+    echo
   fi
 
-  prompt_installer_user_password
+  local root_step=1 rc=0
+  while (( root_step <= 2 )); do
+    rc=0
+    if (( root_step == 1 )); then
+      prompt_installer_user_name || rc=$?
+      if (( rc == ${WIZARD_BACK_RC:-10} )); then
+        if [[ "${DISCOVERY_FROM_BOOTSTRAP:-0}" == "1" ]]; then
+          exit "${WIZARD_BACK_RC:-10}"
+        fi
+        echo "Voce ja esta na primeira etapa (pressione Ctrl+C para cancelar)." >&2
+        continue
+      elif (( rc != 0 )); then
+        return "$rc"
+      fi
+
+      # O --config e lido de novo pelo processo reexecutado como usuario
+      # instalador; se nao for legivel, seguimos como root para nao perder a
+      # configuracao (ex.: arquivo 0600 pertencente ao root). Precisa vir depois de
+      # prompt_installer_user_name, que e quem define DISCOVERY_INSTALL_USER.
+      if [[ -n "${CONFIG_FILE:-}" ]]; then
+        if ! id -u "$DISCOVERY_INSTALL_USER" >/dev/null 2>&1 \
+           || ! sudo -u "$DISCOVERY_INSTALL_USER" test -r "$CONFIG_FILE"; then
+          warn "Arquivo --config '$CONFIG_FILE' nao sera legivel pelo usuario '$DISCOVERY_INSTALL_USER'; seguindo como root para preservar a configuracao."
+          return 0
+        fi
+      fi
+      root_step=2
+    else
+      prompt_installer_user_password || rc=$?
+      if (( rc == ${WIZARD_BACK_RC:-10} )); then
+        DISCOVERY_INSTALL_USER_PASSWORD=""
+        root_step=1
+        continue
+      elif (( rc != 0 )); then
+        return "$rc"
+      fi
+      root_step=3
+    fi
+  done
 
   ensure_installer_user_from_root "$DISCOVERY_INSTALL_USER" "$DISCOVERY_INSTALL_USER_PASSWORD"
 

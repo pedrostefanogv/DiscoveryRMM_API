@@ -247,6 +247,45 @@ rc=0
 out_branch="$(choose_branch_interactive "full" <<< "voltar" 2>/dev/null)" || rc=$?
 expect_eq "$rc" "10" "bootstrap choose_branch_interactive 'voltar' retorna 10"
 
+echo "== 7. Usuario instalador e Escopo do update suportam voltar (< / voltar / 0) =="
+source "$LINUX_DIR/lib/installer_user.sh"
+source "$LINUX_DIR/lib/modes.sh"
+
+NON_INTERACTIVE=0
+rc=0
+prompt_installer_user_name <<< "<" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "prompt_installer_user_name '<' retorna 10"
+
+rc=0
+prompt_installer_user_name <<< "voltar" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "prompt_installer_user_name 'voltar' retorna 10"
+
+DISCOVERY_INSTALL_USER_PASSWORD=""
+rc=0
+prompt_installer_user_password <<< "<" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "prompt_installer_user_password '<' retorna 10"
+
+rc=0
+prompt_update_scope <<< "<" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "prompt_update_scope '<' retorna 10"
+
+rc=0
+prompt_update_scope <<< "voltar" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "prompt_update_scope 'voltar' retorna 10"
+
+rc=0
+prompt_update_scope <<< "0" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "prompt_update_scope '0' retorna 10"
+
+# apply_stack_update_only deve retornar 10 imediatamente antes de chamar apply_system_updates
+SYSTEM_UPDATES_CALLED=0
+apply_system_updates() { SYSTEM_UPDATES_CALLED=1; }
+ensure_nats_jetstream_store_access() { return 0; }
+rc=0
+apply_stack_update_only <<< "voltar" >/dev/null 2>&1 || rc=$?
+expect_eq "$rc" "10" "apply_stack_update_only 'voltar' retorna 10"
+expect_eq "$SYSTEM_UPDATES_CALLED" "0" "apply_stack_update_only nao executa apt-get upgrade ao voltar"
+
 echo
 if [[ "$FAILED" -eq 0 ]]; then
   echo "TODOS OS TESTES DE MELHORIAS PASSARAM"

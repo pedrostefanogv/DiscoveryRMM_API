@@ -185,6 +185,40 @@ public class PatchRepositoryRelationalInventoryTests
         Assert.That(rows[0].IsInstalled, Is.True);
     }
 
+    [Test]
+    public async Task GetInventoryGroupsReturnsKbIdsWithoutAggregatingJsonbColumn()
+    {
+        var (db, agentId) = Seed();
+        var repo = new PatchRepository(db);
+
+        await repo.ReplaceInventoryAsync(
+            agentId,
+            DateTime.UtcNow,
+            new PatchScanMeta { Status = "ok" },
+            null,
+            [
+                Entry("kb:KB5127003", installed: false, kb: "KB5127003"),
+                Entry("kb:KB5127004", installed: true, kb: "KB5127004"),
+            ]);
+
+        var groups = await repo.GetInventoryGroupsAsync(
+            clientId: null,
+            siteId: null,
+            cursor: null,
+            limit: 25,
+            search: null,
+            severity: null,
+            status: null,
+            descending: false,
+            hasGlobalAccess: true,
+            allowedClientIds: []);
+
+        Assert.That(groups, Has.Count.EqualTo(2));
+        Assert.That(groups.Select(g => g.GroupKey), Is.EquivalentTo(new[] { "kb:KB5127003", "kb:KB5127004" }));
+        Assert.That(groups.Single(g => g.GroupKey == "kb:KB5127003").KbIds, Does.Contain("KB5127003"));
+        Assert.That(groups.Single(g => g.GroupKey == "kb:KB5127004").KbIds, Does.Contain("KB5127004"));
+    }
+
     /// <summary>Modelo reduzido: só as entidades usadas, sem pgvector/jsonb do Postgres.</summary>
     private sealed class RelationalTestDbContext(DbContextOptions<DiscoveryDbContext> options)
         : DiscoveryDbContext(options)

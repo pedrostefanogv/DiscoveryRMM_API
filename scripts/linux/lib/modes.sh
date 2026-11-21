@@ -237,7 +237,7 @@ update_all_components() {
 prompt_update_scope() {
   if [[ "${NON_INTERACTIVE:-0}" -eq 1 ]]; then
     printf 'all'
-    return
+    return 0
   fi
 
   while true; do
@@ -250,19 +250,25 @@ prompt_update_scope() {
     echo "2) Somente API (backend .NET)" >&2
     echo "3) Somente portal web (frontend)" >&2
     echo "4) Somente agent (repositorio do instalador Windows + rebuild via API sem downtime)" >&2
+    echo "0) Voltar ao menu anterior" >&2
+    echo "Dica: digite '0', 'voltar' (ou '<') para retornar ao menu anterior." >&2
     echo "----------------------------------------" >&2
 
     local selected_option
     read -r -p "Opcao [1]: " selected_option
+    if is_wizard_back_input "$selected_option"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
     selected_option="${selected_option:-1}"
     selected_option="$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
     case "$selected_option" in
-      1|all|tudo)         printf 'all';   return ;;
-      2|api|backend)      printf 'api';   return ;;
-      3|site|portal|web)  printf 'site';  return ;;
-      4|agent)            printf 'agent'; return ;;
-      *) echo "Opcao invalida: $selected_option. Use 1-4." >&2 ;;
+      1|all|tudo)         printf 'all';   return 0 ;;
+      2|api|backend)      printf 'api';   return 0 ;;
+      3|site|portal|web)  printf 'site';  return 0 ;;
+      4|agent)            printf 'agent'; return 0 ;;
+      0)                  return "${WIZARD_BACK_RC:-10}" ;;
+      *) echo "Opcao invalida: $selected_option. Use 1-4 ou 0/voltar." >&2 ;;
     esac
   done
 }
@@ -272,6 +278,14 @@ prompt_update_scope() {
 apply_stack_update_only() {
   set_log_context "update"
   log "Modo de update da stack"
+
+  local update_scope="" scope_rc=0
+  update_scope="$(prompt_update_scope)" || scope_rc=$?
+  if (( scope_rc == ${WIZARD_BACK_RC:-10} )); then
+    return "${WIZARD_BACK_RC:-10}"
+  elif (( scope_rc != 0 )); then
+    return "$scope_rc"
+  fi
 
   # JetStream antes de tudo: o reparo de permissões é estado de filesystem e
   # precisa valer mesmo se o upgrade do SO reiniciar a máquina no meio do update.
@@ -287,9 +301,6 @@ apply_stack_update_only() {
   # update aborta sem rollback (ocorrido no .82 em 14/10).
   ensure_nats_jetstream_store_access --warn-only || true
   ensure_nats_service_running || true
-
-  local update_scope
-  update_scope="$(prompt_update_scope)"
 
   case "$update_scope" in
     all)
@@ -336,8 +347,9 @@ apply_nats_reconfiguration_only() {
         nats_step=$((nats_step - 1))
         WIZARD_REPROMPT=1
       else
-        echo "Voce ja esta na primeira etapa." >&2
-        WIZARD_REPROMPT=1
+        WIZARD_SHOW_BACK_HINT="$prev_back_hint"
+        WIZARD_REPROMPT=0
+        return "${WIZARD_BACK_RC:-10}"
       fi
       continue
     elif (( rc != 0 )); then
@@ -398,6 +410,9 @@ prompt_maintenance_login() {
   local input
 
   read -r -p "$prompt_text" input
+  if is_wizard_back_input "$input"; then
+    return "${WIZARD_BACK_RC:-10}"
+  fi
   input="$(printf '%s' "$input" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   if [[ -z "$input" ]]; then input="$default_login"; fi
   printf '%s' "$input"
@@ -407,6 +422,9 @@ prompt_maintenance_password_optional() {
   local password_input
   read -r -s -p "Nova senha (Enter = gerar automaticamente): " password_input
   echo >&2
+  if is_wizard_back_input "$password_input"; then
+    return "${WIZARD_BACK_RC:-10}"
+  fi
   printf '%s' "$password_input"
 }
 
@@ -582,32 +600,42 @@ apply_maintenance_mode() {
     echo "6) Trocar provedor de certificado TLS (self-signed/ZeroSSL/Let's Encrypt)"
     echo "7) Limpeza de dados (builds antigos, temp, journal, cache)"
     echo "8) Regravar/atualizar a configuracao do object storage (forcado)"
-    echo "0) Sair"
+    echo "0) Voltar / Sair"
+    echo "Dica: digite 'voltar' (ou '<') para retornar ao menu anterior."
     echo "----------------------------------------"
 
     local selected_option
     read -r -p "Opcao [1]: " selected_option
+    if is_wizard_back_input "$selected_option"; then
+      return "${WIZARD_BACK_RC:-10}"
+    fi
     selected_option="${selected_option:-1}"
     selected_option="$(printf '%s' "$selected_option" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
+    local m_rc=0
     case "$selected_option" in
       1)
-        local target_login target_password
-        target_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")"
-        target_password="$(prompt_maintenance_password_optional)"
+        local target_login="" target_password=""
+        m_rc=0; target_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")" || m_rc=$?
+        (( m_rc == ${WIZARD_BACK_RC:-10} )) && continue
+        m_rc=0; target_password="$(prompt_maintenance_password_optional)" || m_rc=$?
+        (( m_rc == ${WIZARD_BACK_RC:-10} )) && continue
         log "Executando recover-admin para '$target_login' com reset de MFA"
         run_recover_admin_maintenance "$target_login" "$target_password" "1" "1" "1"
         pause_maintenance_menu ;;
       2)
-        local keep_login keep_password
-        keep_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")"
-        keep_password="$(prompt_maintenance_password_optional)"
+        local keep_login="" keep_password=""
+        m_rc=0; keep_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")" || m_rc=$?
+        (( m_rc == ${WIZARD_BACK_RC:-10} )) && continue
+        m_rc=0; keep_password="$(prompt_maintenance_password_optional)" || m_rc=$?
+        (( m_rc == ${WIZARD_BACK_RC:-10} )) && continue
         log "Executando recover-admin para '$keep_login' mantendo MFA atual"
         run_recover_admin_maintenance "$keep_login" "$keep_password" "0" "1" "1"
         pause_maintenance_menu ;;
       3)
-        local mfa_login
-        mfa_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")"
+        local mfa_login=""
+        m_rc=0; mfa_login="$(prompt_maintenance_login "Login ou email alvo [admin]: " "admin")" || m_rc=$?
+        (( m_rc == ${WIZARD_BACK_RC:-10} )) && continue
         run_reset_mfa_only "$mfa_login" || true
         pause_maintenance_menu ;;
       4)
@@ -621,14 +649,13 @@ apply_maintenance_mode() {
         switch_tls_provider
         pause_maintenance_menu ;;
       7)
-        data_cleanup_menu
-        pause_maintenance_menu ;;
+        data_cleanup_menu ;;
       8)
         force_refresh_object_storage
         pause_maintenance_menu ;;
       0|sair|exit|q|quit)
         log "Saindo do modo de manutencao"
-        return ;;
+        return 0 ;;
       *)
         echo "Opcao invalida: $selected_option" >&2 ;;
     esac
@@ -728,6 +755,10 @@ switch_tls_provider() {
 
   local new_provider
   read -r -p "Novo provedor [0]: " new_provider
+  if is_wizard_back_input "$new_provider"; then
+    log "Troca de TLS cancelada."
+    return 0
+  fi
   new_provider="${new_provider:-0}"
   new_provider="$(printf '%s' "$new_provider" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 
@@ -735,20 +766,27 @@ switch_tls_provider() {
     1|self-signed) new_provider="self-signed" ;;
     2|zerossl|zerossl-acme) new_provider="zerossl-acme" ;;
     3|letsencrypt|lets-encrypt|letsencrypt-acme) new_provider="letsencrypt-acme" ;;
-    0|cancelar|sair|exit|q|quit) log "Troca de TLS cancelada."; return ;;
-    *) echo "Opcao invalida: $new_provider" >&2; return ;;
+    0|cancelar|sair|exit|q|quit) log "Troca de TLS cancelada."; return 0 ;;
+    *) echo "Opcao invalida: $new_provider" >&2; return 0 ;;
   esac
 
   if [[ "$new_provider" == "$current_provider" ]]; then
     log "O provedor ja e $new_provider; nada a fazer."
-    return
+    return 0
   fi
 
   # Coleta configuracao do novo provider (se ACME).
+  local tls_rc=0
   if [[ "$new_provider" == "zerossl-acme" ]]; then
-    prompt_zerossl_acme_configuration
+    prompt_zerossl_acme_configuration || tls_rc=$?
   elif [[ "$new_provider" == "letsencrypt-acme" ]]; then
-    prompt_letsencrypt_acme_configuration
+    prompt_letsencrypt_acme_configuration || tls_rc=$?
+  fi
+  if (( tls_rc == ${WIZARD_BACK_RC:-10} )); then
+    log "Troca de TLS cancelada."
+    return 0
+  elif (( tls_rc != 0 )); then
+    return "$tls_rc"
   fi
 
   TLS_CERT_PROVIDER="$new_provider"
@@ -821,6 +859,9 @@ data_cleanup_menu() {
 
   local selected_option
   read -r -p "Opcao [0]: " selected_option
+  if is_wizard_back_input "$selected_option"; then
+    return 0
+  fi
   selected_option="${selected_option:-0}"
 
   case "$selected_option" in
@@ -845,7 +886,7 @@ data_cleanup_menu() {
       echo "--- Limpeza completa concluída ---"
       pause_maintenance_menu ;;
     0)
-      return ;;
+      return 0 ;;
     *)
       echo "Opção inválida." >&2 ;;
   esac
