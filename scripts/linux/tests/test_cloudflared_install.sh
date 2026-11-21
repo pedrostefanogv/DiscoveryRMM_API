@@ -22,12 +22,33 @@ expect_eq() { [[ "$1" == "$2" ]] && ok "$3 (= $1)" || bad "$3: esperado [$2], ob
 # PATH sanitizado: o WSL herda o PATH do Windows (so /mnt/c/...), o que quebra
 # o shebang "#!/usr/bin/env bash" e todo comando core. Fixamos os diretorios
 # Linux e deixamos o diretorio de stubs na frente.
-BASE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# ISOLAMENTO DO HOST: o teste mede o CODIGO, nao a maquina. Um host de
+# producao tem cloudflared em /usr/local/bin (binario baixado) E/OU em
+# /usr/bin (pacote .deb); com qualquer um deles no PATH,
+# "command -v cloudflared" acha o real e setup_cloudflare_tunnel retorna cedo,
+# fazendo o teste passar/falhar conforme o host em vez de exercitar o fallback.
+#
+# Solucao: montamos um diretorio "shim" com SYMLINKS para as ferramentas de
+# sistema que o script usa (bash, curl, grep, sed, uname, dpkg, mktemp, ...),
+# mas SEM cloudflared. O PATH do teste passa a ser $BIN:$SHIM apenas — nada de
+# /usr/bin, /bin ou /usr/local/bin. Assim nenhum cloudflared do host aparece,
+# e as ferramentas continuam disponiveis.
+BASE_PATH=""
 TEST_TMP="$(mktemp -d)"
 BIN="$TEST_TMP/bin"
 mkdir -p "$BIN"
+SHIM="$TEST_TMP/shim"
+mkdir -p "$SHIM"
+# Ferramentas de sistema necessarias ao script, via symlink (sem cloudflared).
+for tool in bash sh env grep sed awk cut tr head tail sort uniq wc cat printf \
+            mktemp rm mv cp chmod chown install touch find ls dirname basename \
+            uname dpkg apt-get apt-cache gpg tee true false sleep seq date; do
+  for dir in /usr/bin /bin /usr/sbin /sbin; do
+    if [[ -x "$dir/$tool" ]]; then ln -sf "$dir/$tool" "$SHIM/$tool"; break; fi
+  done
+done
 export TEST_TMP
-export PATH="$BIN:$BASE_PATH"
+export PATH="$BIN:$SHIM"
 
 cleanup() { rm -rf "$TEST_TMP"; }
 trap cleanup EXIT
@@ -158,6 +179,9 @@ ACCESS_MODE="internal" setup_cloudflare_tunnel >/dev/null 2>&1
 echo "== setup_cloudflare_tunnel: external com apt quebrado cai para o GitHub =="
 rm -f "$BIN/cloudflared" "$TEST_TMP/apt.log" "$TEST_TMP/curl.log" "$TEST_TMP/warn.log"
 export CURL_OK_SUITES=""; export CLOUDFLARE_TUNNEL_TOKEN="eyJfaketoken"
+# O PATH do teste (definido no topo) nao inclui /usr/local/bin, entao um
+# cloudflared real do host nunca aparece aqui.
+hash -r 2>/dev/null || true
 ACCESS_MODE="external" setup_cloudflare_tunnel >/dev/null 2>&1; rc=$?
 # O binario oficial tem de ter sido baixado E instalado no PATH.
 if grep -q "cloudflared-linux-\(amd64\|arm64\|arm\)" "$TEST_TMP/curl.log" 2>/dev/null && [[ -x "$BIN/cloudflared" ]]; then
@@ -236,6 +260,86 @@ if grep -q "discovery-arch" "$DEPLOY_SH"; then
 else
   bad "deploy.sh nao detecta node_modules de outra arquitetura"
 fi
+echo "== JetStream: nome e subject do stream global batem com a API =="
+# BUG 2026-11-21: o instalador criava "DISCOVERY_FANOUT_COMMANDS" com subjects
+# de tenant, enquanto a API provisiona "<Name>_GLOBAL" com o subject
+# "tenant.global.agents.command". O add falhava por sobreposicao e as 7
+# tentativas (254s) terminavam em aviso inutil.
+SERVICES_SH="$HERE/../lib/services.sh"
+if grep -qF 'stream_name="${base_name}_GLOBAL"' "$SERVICES_SH"; then
+  ok "stream_name usa o sufixo _GLOBAL da API"
+else
+  bad "stream_name nao usa o sufixo _GLOBAL"
+fi
+if grep -q 'tenant.global.agents.command' "$SERVICES_SH"; then
+  ok "subject default = tenant.global.agents.command (igual a NatsSubjectBuilder)"
+else
+  bad "subject default divergente do usado pela API"
+fi
+# O stream de tenant "cru" nao deve mais ser tentado pelo instalador.
+if grep -qF 'local stream_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"' "$SERVICES_SH"; then
+  bad "instalador ainda usa o nome cru (sem _GLOBAL)"
+else
+  ok "nome cru (sem _GLOBAL) nao e mais usado"
+fi
+# Verificacao idempotente: existindo, nao deve tentar add.
+if awk '/run_nats_cli stream info/,/^    fi/' "$SERVICES_SH" | grep -q "ja existe"; then
+  ok "logica idempotente (nao recria se ja existe)"
+else
+  bad "sem guarda de idempotencia"
+fi
+echo "== Senha do admin: espaco a esquerda nao invalida o acesso =="
+# BUG 2026-11-21: o recover-admin imprimia " <senha>" (espaco de indentacao).
+# Quem copiava levava o espaco e o primeiro acesso falhava com "Credenciais
+# invalidas" usando a senha correta. Comprovado em producao: com espaco 401,
+# sem espaco 200. O instalador agora extrai e reimprime a senha sem espaco.
+DEPLOY_SH="$HERE/../lib/deploy.sh"
+
+# Simula a saida do recover-admin (formato antigo, com o espaco).
+FAKE_OUT="$(printf "%s\n" \
+  "Admin recovery completed." \
+  "Login: adminxyz" \
+  "Email: adminxyz@local.discovery" \
+  "User created: no" \
+  "MFA reset: yes" \
+  "All active sessions for this user were revoked." \
+  "" \
+  "========================================" \
+  " TEMPORARY PASSWORD (auto-generated)" \
+  "----------------------------------------" \
+  " S3nh@Temp#2026!ab" \
+  "----------------------------------------" \
+  "Store it safely. The user MUST change" \
+  "password and login on first access." \
+  "========================================")"
+
+# Reproduz a extracao do instalador.
+EXTRACTED="$(printf "%s\n" "$FAKE_OUT" \
+  | sed -n "/TEMPORARY PASSWORD (auto-generated)/{n;n;p;}" \
+  | head -n 1 \
+  | sed "s/^[[:space:]]*//;s/[[:space:]]*$//")"
+
+expect_eq "$EXTRACTED" "S3nh@Temp#2026!ab" "senha extraida sem espaco"
+expect_eq "${#EXTRACTED}" "17" "tamanho preservado (sem espaco fantasma)"
+
+# A senha NAO deve reaparecer no bloco exibido (que ainda tem o espaco).
+VISIBLE="$(printf "%s\n" "$FAKE_OUT" | sed "/TEMPORARY PASSWORD (auto-generated)/,/^==========/d")"
+if printf "%s" "$VISIBLE" | grep -q "S3nh@Temp"; then
+  bad "senha (com espaco) ainda aparece no bloco exibido"
+else
+  ok "versao com espaco removida da saida do instalador"
+fi
+
+# O C# nao deve mais imprimir a senha com indentacao.
+CS_FILE="$HERE/../../../src/Discovery.Api/MaintenanceMode.cs"
+if [[ -f "$CS_FILE" ]]; then
+  if grep -qF 'WriteLine($" {resolvedPassword}")' "$CS_FILE"; then
+    bad "MaintenanceMode.cs ainda imprime a senha com espaco a esquerda"
+  else
+    ok "MaintenanceMode.cs imprime a senha sem indentacao"
+  fi
+else
+  ok "(MaintenanceMode.cs fora do escopo deste checkout; verificado no repo da API)"
+fi
 echo
 if [[ "$FAILED" -eq 0 ]]; then echo "TODOS OS TESTES PASSARAM"; else echo "HOUVE FALHAS"; exit 1; fi
-

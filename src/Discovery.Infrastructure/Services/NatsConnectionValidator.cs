@@ -42,10 +42,16 @@ public class NatsConnectionValidator : INatsConnectionValidator
                 if (await TryConnectNatsAsync($"{scheme}://{host}:{port}", user, password, cancellationToken))
                     return (true, Array.Empty<string>());
 
+                // Mesmo bug do ramo de host puro: "wss://host:4222" nao existe em
+                // producao. O caminho real do navegador e wss://host/nats/ (nginx).
+                if (await TryConnectNatsAsync($"wss://{host}/nats/", user, password, cancellationToken))
+                    return (true, Array.Empty<string>());
+
                 if (await TryConnectNatsAsync($"wss://{host}:4222", user, password, cancellationToken))
                     return (true, Array.Empty<string>());
 
-                errors.Add($"Unable to connect to NATS via {scheme}://{host}:{port} or wss://{host}:4222.");
+                errors.Add(
+                    $"Unable to connect to NATS via {scheme}://{host}:{port}, wss://{host}/nats/ or wss://{host}:4222.");
                 return (false, errors.ToArray());
             }
 
@@ -53,6 +59,14 @@ public class NatsConnectionValidator : INatsConnectionValidator
             {
                 if (await TryConnectNatsAsync($"wss://{host}:{port}", user, password, cancellationToken))
                     return (true, Array.Empty<string>());
+
+                // URL wss://host (sem porta => 443) mas sem o path /nats/: tenta o
+                // caminho publicado pelo nginx, que e o que o portal usa.
+                if (uri.AbsolutePath is "" or "/")
+                {
+                    if (await TryConnectNatsAsync($"wss://{host}/nats/", user, password, cancellationToken))
+                        return (true, Array.Empty<string>());
+                }
 
                 errors.Add($"Unable to connect to NATS via wss://{host}:{port}.");
                 return (false, errors.ToArray());
@@ -62,7 +76,7 @@ public class NatsConnectionValidator : INatsConnectionValidator
             return (false, errors.ToArray());
         }
 
-        // Considera host ou hostname puro.
+        // Host ou hostname puro (sem esquema).
         var hostOnly = hostOrUrl.Trim();
         if (!IsValidHostName(hostOnly))
         {
@@ -70,13 +84,28 @@ public class NatsConnectionValidator : INatsConnectionValidator
             return (false, errors.ToArray());
         }
 
+        // BUG 2026-11-21 (tupa.pstefano.com.br): o validador testava
+        // "wss://<host>:4222" — porta que NUNCA e publicada. O WebSocket do
+        // NATS e servido pelo nginx em 443 no caminho /nats/ (a porta 4222 e o
+        // protocolo NATS nativo, que fica fechado para a internet de proposito).
+        // Resultado: "Testar Conexão" acusava falha mesmo com o realtime
+        // funcionando (o handshake wss://host/nats/ retorna 101).
+        //
+        // Ordem de sondagem:
+        //   1) nats://host:4222           (acesso nativo direto, quando existe)
+        //   2) wss://host/nats/           (caminho real do navegador via nginx)
+        //   3) wss://host:4222            (compatibilidade: proxy dedicado)
         if (await TryConnectNatsAsync($"nats://{hostOnly}:4222", user, password, cancellationToken))
+            return (true, Array.Empty<string>());
+
+        if (await TryConnectNatsAsync($"wss://{hostOnly}/nats/", user, password, cancellationToken))
             return (true, Array.Empty<string>());
 
         if (await TryConnectNatsAsync($"wss://{hostOnly}:4222", user, password, cancellationToken))
             return (true, Array.Empty<string>());
 
-        errors.Add($"Unable to connect to NATS at nats://{hostOnly}:4222 or wss://{hostOnly}:4222.");
+        errors.Add(
+            $"Unable to connect to NATS at nats://{hostOnly}:4222, wss://{hostOnly}/nats/ or wss://{hostOnly}:4222.");
         return (false, errors.ToArray());
     }
 

@@ -338,10 +338,26 @@ ensure_nats_fanout_stream() {
     return 0
   fi
 
-  local stream_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
-  local stream_subjects="${NATS_JS_FANOUT_STREAM_SUBJECTS:-tenant.*.site.*.agents.command,tenant.*.agents.command}"
+  # BUG 2026-11-21 (host ARM64, 1a instalacao real): o instalador tentava criar
+  # UM stream com o nome cru ("DISCOVERY_FANOUT_COMMANDS") e subjects globais.
+  # Desde a introducao do isolamento por tenant a API provisiona streams POR
+  # ESCOPO: "<Name>_GLOBAL" (subject dos comandos globais) e "<Name>_<clientId>"
+  # por cliente (NatsTenantStreamProvisioner). Dois efeitos:
+  #  1) o stream "_GLOBAL" criado pela API no startup faz o "stream add" do
+  #     instalador falhar com "subjects overlap with an existing stream";
+  #  2) o "stream info DISCOVERY_FANOUT_COMMANDS" nunca acha nada, entao as 7
+  #    tentativas (2+4+8+16+32+64+128 = 254s) falham e a instalacao termina com
+  #    um aviso inutil depois de ~4 minutos parada.
+  # O bootstrap aqui agora e apenas um PRE-AQUECIMENTO do stream global, com o
+  # MESMO nome e o MESMO subject que a API usa. Se ja existir, nao faz nada.
+  local base_name="${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS}"
+  local stream_name="${base_name}_GLOBAL"
+  # Subject EXATO do stream global da API (NatsSubjectBuilder
+  # .GlobalAgentsCommandStreamSubject). Nao e um wildcard: e a fila dos comandos
+  # globais (sem tenant). Divergir daqui recria o bug de sobreposicao.
+  local stream_subject="${NATS_JS_FANOUT_GLOBAL_SUBJECT:-tenant.global.agents.command}"
   local stream_max_age="${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}"
-  local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-33554432}"
+  local stream_max_bytes="${NATS_JS_FANOUT_STREAM_MAX_BYTES:-134217728}"
   local stream_dupe_window="${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}"
 
   # Credenciais via ambiente (NATS_URL/NATS_USER/NATS_PASSWORD sao lidas pelo
@@ -353,42 +369,34 @@ ensure_nats_fanout_stream() {
     nats "$@"
   }
 
-  # Ate 7 tentativas: 2, 4, 8, 16, 32, 64 e 128s de espera (~254s no total).
-  local js_attempts="${NATS_JS_BOOTSTRAP_ATTEMPTS:-7}"
+  # Ate 5 tentativas: 2, 4, 8, 16s (~30s). Antes eram 7 tentativas com espera
+  # exponencial sem teto (2+4+8+16+32+64+128 = 254s): como o nome/subject agora
+  # batem com os da API, a falha aqui so acontece se o NATS estiver realmente
+  # indisponivel — e nesse caso esperar 4 minutos nao ajuda.
+  local js_attempts="${NATS_JS_BOOTSTRAP_ATTEMPTS:-5}"
   local attempt delay
   for attempt in $(seq 1 "$js_attempts"); do
+    # Idempotente: se o stream global JA existe (caso normal quando a API ja
+    # subiu), nao ha nada a fazer — o "stream add" falharia por sobreposicao de
+    # subjects, que era exatamente o falso negocio do bug anterior.
     if run_nats_cli stream info "$stream_name" >/dev/null 2>&1; then
-      if run_nats_cli stream update "$stream_name" \
-        --subjects "$stream_subjects" \
-        --storage file \
-        --retention limits \
-        --discard old \
-        --max-age "$stream_max_age" \
-        --max-bytes "$stream_max_bytes" \
-        --dupe-window "$stream_dupe_window" \
-        --defaults >/dev/null 2>&1; then
-        log "Stream JetStream '$stream_name' atualizado para fan-out de comandos."
-        return
-      fi
-    else
-      if run_nats_cli stream add "$stream_name" \
-        --subjects "$stream_subjects" \
-        --storage file \
-        --retention limits \
-        --discard old \
-        --max-age "$stream_max_age" \
-        --max-bytes "$stream_max_bytes" \
-        --dupe-window "$stream_dupe_window" \
-        --defaults >/dev/null 2>&1; then
-        log "Stream JetStream '$stream_name' criado para fan-out de comandos."
-        return
-      fi
+      log "Stream JetStream '$stream_name' ja existe (fan-out global); nada a fazer."
+      return
     fi
-    # Backoff EXPONENCIAL SEM TETO ANTECIPADO: 2, 4, 8, 16, 32, 64, 128s.
-    # O teto de 16s (2**4) fazia as ultimas tentativas esperarem sempre o mesmo
-    # tempo e desistir em ~48s. Em maquina ocupada com o build do agent
-    # (Wails/Go consumindo CPU e disco), o NATS respondia tarde e a instalacao
-    # terminava com o aviso de fallback mesmo com o JetStream saudavel.
+    if run_nats_cli stream add "$stream_name" \
+      --subjects "$stream_subject" \
+      --storage file \
+      --retention limits \
+      --discard old \
+      --max-age "$stream_max_age" \
+      --max-bytes "$stream_max_bytes" \
+      --dupe-window "$stream_dupe_window" \
+      --defaults >/dev/null 2>&1; then
+      log "Stream JetStream '$stream_name' criado para fan-out de comandos (global)."
+      return
+    fi
+    # Backoff exponencial: 2, 4, 8, 16s. O NATS pode demorar alguns segundos
+    # apos o restart para aceitar operacoes de JetStream.
     delay=$(( 2 ** attempt ))
     log "Tentativa ${attempt}/${js_attempts} de bootstrap JetStream falhou; aguardando ${delay}s..."
     sleep "$delay"

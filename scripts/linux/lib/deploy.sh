@@ -1422,10 +1422,39 @@ run_db_migrations() {
   local filtered_output
   filtered_output="$(printf '%s\n' "$output" | sed -n '/^Admin recovery completed\./,$p')"
   if [[ -z "$filtered_output" ]]; then filtered_output="$output"; fi
+
+  # BUG 2026-11-21 (producao ARM64): o recover-admin imprimia a senha como
+  # " <senha>" (espaco a esquerda para alinhar com o titulo). Quem copiava a
+  # linha levava o espaco junto e o primeiro acesso falhava com "Credenciais
+  # invalidas" usando a senha CORRETA — instalacao sem acesso. Comprovado:
+  # mesmo par usuario/senha, com espaco -> HTTP 401, sem espaco -> HTTP 200.
+  #
+  # Correcao em duas camadas:
+  #  1) o C# nao imprime mais o espaco (MaintenanceMode.PrintResult);
+  #  2) aqui, reimprimimos a senha DESTACADA e sem espaco, para que a copia
+  #     do operador seja sempre a senha valida — funciona mesmo com uma API
+  #     antiga ja instalada (o binario do servidor pode nao ter o fix).
+  local temp_password
+  temp_password="$(printf '%s\n' "$output" \
+    | sed -n '/TEMPORARY PASSWORD (auto-generated)/{n;n;p;}' \
+    | head -n 1 \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+  # Remove a senha (e o ruido em volta) do bloco exibido: ela e reimpressa
+  # abaixo de forma inequivoca, e nao queremos a versao com espaco em lugar
+  # nenhum da saida do instalador.
+  filtered_output="$(printf '%s\n' "$filtered_output" \
+    | sed '/TEMPORARY PASSWORD (auto-generated)/,/^==========/d')"
   ADMIN_RECOVERY_OUTPUT="$filtered_output"
 
   ADMIN_RECOVERY_LOGIN="$(printf '%s\n' "$output" | sed -nE 's/^[[:space:]]*(Login|Usuario|User(name)?)[[:space:]]*:[[:space:]]*(.+)$/\3/p' | head -n 1)"
   if [[ -z "${ADMIN_RECOVERY_LOGIN:-}" ]]; then ADMIN_RECOVERY_LOGIN="$bootstrap_login"; fi
+
+  # Senha destacada, sem espacos, entre marcadores que NAO fazem parte dela.
+  if [[ -n "$temp_password" ]]; then
+    ADMIN_RECOVERY_PASSWORD="$temp_password"
+    log "Senha temporaria do administrador capturada (${#temp_password} caracteres)."
+  fi
 }
 
 # ── NATS env update helpers ────────────────────────────────────────────────
@@ -1877,10 +1906,16 @@ show_summary() {
   else echo "- Usuario administrador: (nao gerado nesta execucao)"; fi
   echo
 
-  if [[ -n "${ADMIN_RECOVERY_OUTPUT:-}" ]]; then
+  if [[ -n "${ADMIN_RECOVERY_OUTPUT:-}" || -n "${ADMIN_RECOVERY_PASSWORD:-}" ]]; then
     echo "========================================"
     echo " CREDENCIAIS DE PRIMEIRO ACESSO"
     echo "----------------------------------------"
+    # Senha em linha propria, sem indentacao e entre marcadores: o operador
+    # copia exatamente o conteudo, sem espaco acidental (bug 2026-11-21 —
+    # a versao com espaco a esquerda causava "Credenciais invalidas").
+    if [[ -n "${ADMIN_RECOVERY_PASSWORD:-}" ]]; then
+      printf "%s\n" "$ADMIN_RECOVERY_PASSWORD"
+    fi
     echo "$ADMIN_RECOVERY_OUTPUT"
     echo "----------------------------------------"
     echo "Guarde a senha temporaria com seguranca."

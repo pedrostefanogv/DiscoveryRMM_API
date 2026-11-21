@@ -326,7 +326,14 @@ internal static class MaintenanceMode
             Console.WriteLine("========================================");
             Console.WriteLine(" TEMPORARY PASSWORD (auto-generated)");
             Console.WriteLine("----------------------------------------");
-            Console.WriteLine($" {resolvedPassword}");
+            // A senha vai SOZINHA na linha, sem indentacao: a versao anterior
+            // imprimia $" {resolvedPassword}" (espaco a esquerda para alinhar com
+            // o titulo) e o operador copiava o espaco junto, gerando
+            // "Credenciais invalidas" no primeiro acesso com a senha CORRETA.
+            // Comprovado em producao (2026-11-21): mesmo par usuario/senha,
+            // com o espaco -> HTTP 401; sem o espaco -> HTTP 200.
+            // O alinhamento visual nao vale o risco de inutilizar o acesso.
+            Console.WriteLine(resolvedPassword);
             Console.WriteLine("----------------------------------------");
             Console.WriteLine("Store it safely. The user MUST change");
             Console.WriteLine("password and login on first access.");
