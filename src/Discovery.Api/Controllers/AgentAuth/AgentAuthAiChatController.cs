@@ -432,7 +432,7 @@ public class AgentAuthAiChatController : AgentAuthControllerBase
     {
         var r = result ?? string.Empty;
         // Captura de tela: o teto padrão (32 KB) destruiria a imagem em base64.
-        var maxLength = toolName == "capture_screenshot" || r.Contains("\"image_base64\"", StringComparison.Ordinal)
+        var maxLength = toolName is "capture_screenshot" or "screen" || r.Contains("\"image_base64\"", StringComparison.Ordinal)
             ? MaxScreenshotToolResultLength
             : MaxToolResultLength;
         if (r.Length <= maxLength) return r;

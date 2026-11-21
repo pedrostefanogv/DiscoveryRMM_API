@@ -90,5 +90,22 @@ public partial class DiscoveryDbContext
             entity.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(p => p.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
         });
+
+        modelBuilder.Entity<McpToolAuditLog>(entity =>
+        {
+            entity.ToTable("mcp_tool_audit_logs");
+            entity.HasKey(a => a.Id);
+            entity.Property(a => a.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(a => a.ToolName).HasColumnName("tool_name").HasMaxLength(128).IsRequired();
+            entity.Property(a => a.Origin).HasColumnName("origin").HasMaxLength(16).IsRequired();
+            entity.Property(a => a.ClientId).HasColumnName("client_id");
+            entity.Property(a => a.SiteId).HasColumnName("site_id");
+            entity.Property(a => a.AgentId).HasColumnName("agent_id");
+            entity.Property(a => a.SessionId).HasColumnName("session_id");
+            entity.Property(a => a.Status).HasColumnName("status").HasMaxLength(24).IsRequired();
+            entity.Property(a => a.DurationMs).HasColumnName("duration_ms");
+            entity.Property(a => a.ErrorMessage).HasColumnName("error_message").HasMaxLength(512);
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        });
     }
 }
