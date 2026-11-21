@@ -50,6 +50,7 @@ public class NatsAuthController(
         if (HttpContext.Items["UserId"] is not Guid userId)
             return Unauthorized(new { message = "Autenticação necessária." });
 
+        scopeContext.SetUserId(userId);
         var access = await scopeContext.GetAccessAsync(ResourceType.Dashboard, ActionType.View);
 
         var response = await natsCredentials.IssueForUserAsync(
