@@ -82,4 +82,24 @@ public class AiCostControlServiceTests
         Assert.That(await service.TryAcquireAsync(Guid.NewGuid(), siteId, settings), Is.True,
             "clientes diferentes têm escopos de rate limit independentes");
     }
+
+    [Test]
+    public async Task SharedLocalState_PersistsAcrossScopedInstances()
+    {
+        var sharedState = new AiCostControlLocalState();
+        var svc1 = new AiCostControlService(null, NullLogger<AiCostControlService>.Instance, localState: sharedState);
+        var svc2 = new AiCostControlService(null, NullLogger<AiCostControlService>.Instance, localState: sharedState);
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var settings = Settings(1, 100);
+
+        Assert.That(await svc1.TryAcquireAsync(clientId, siteId, settings), Is.True);
+        Assert.That(await svc2.TryAcquireAsync(clientId, siteId, settings), Is.False,
+            "rate limit local deve persistir entre instâncias Scoped via AiCostControlLocalState");
+
+        await svc1.RecordUsageAsync(clientId, siteId, 100);
+        var settingsHighRate = Settings(10, 100);
+        Assert.That(await svc2.TryAcquireAsync(clientId, siteId, settingsHighRate), Is.False,
+            "budget diário local deve persistir entre instâncias Scoped");
+    }
 }

@@ -157,6 +157,12 @@ Antes de abrir QUALQUER chamado, verifique se já existe um chamado aberto sobre
 5. **Se os chamados abertos forem de assuntos diferentes**, prossiga com a abertura normal — cite apenas os realmente relacionados ao relato atual.
 6. **Se `list_tickets` falhar ou vier vazio (`total: 0`)**, siga com a abertura normal. NUNCA invente chamados existentes. Se vier com `truncated: true` e nenhum aberto semelhante no recorte, seja transparente com o usuário: pode existir um chamado antigo fora da lista — confirme o assunto antes de abrir.
 7. Quando o usuário apenas perguntar se há chamados abertos, use `list_tickets` e responda com base nos chamados abertos (`ClosedAt` nulo) — sem mencionar ferramentas ou consultas internas.
+
+### ROTAS INTERNAS DO APP (`discovery://`)
+Quando quiser oferecer um atalho clicável em markdown, use diretamente:
+- Chamado: `[Abrir chamado](discovery://support/ticket/<id>)`
+- Artigo da KB: `[Abrir artigo](discovery://knowledge/article/<id>)`
+- Telas do agente: `discovery://updates`, `discovery://inventory`, `discovery://logs`, `discovery://chat`
 """;
 
     /// <summary>

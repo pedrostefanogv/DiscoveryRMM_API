@@ -60,6 +60,55 @@ public class OpenAiProvider : ILlmProvider
         return cts;
     }
 
+    private static bool IsTransientStatusCode(System.Net.HttpStatusCode statusCode) =>
+        statusCode is System.Net.HttpStatusCode.TooManyRequests
+            or System.Net.HttpStatusCode.BadGateway
+            or System.Net.HttpStatusCode.ServiceUnavailable
+            or System.Net.HttpStatusCode.GatewayTimeout;
+
+    private async Task<HttpResponseMessage> SendWithTransientRetryAsync(
+        HttpClient client,
+        Func<HttpRequestMessage> buildRequest,
+        HttpCompletionOption completionOption,
+        CancellationToken ct)
+    {
+        int[] backoffMs = [500, 1500];
+        for (var attempt = 0; ; attempt++)
+        {
+            using var req = buildRequest();
+            try
+            {
+                var response = await client.SendAsync(req, completionOption, ct);
+                if (IsTransientStatusCode(response.StatusCode) && attempt < backoffMs.Length)
+                {
+                    var status = (int)response.StatusCode;
+                    response.Dispose();
+                    _logger.LogWarning("LLM retornou HTTP {Status} (tentativa {Attempt}/{Max}); aguardando {Delay}ms para retentar",
+                        status, attempt + 1, backoffMs.Length + 1, backoffMs[attempt]);
+                    await Task.Delay(backoffMs[attempt], ct);
+                    continue;
+                }
+                return response;
+            }
+            catch (HttpRequestException ex) when (attempt < backoffMs.Length && !ct.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Falha transiente ao chamar LLM (tentativa {Attempt}/{Max}); aguardando {Delay}ms",
+                    attempt + 1, backoffMs.Length + 1, backoffMs[attempt]);
+                await Task.Delay(backoffMs[attempt], ct);
+            }
+        }
+    }
+
+    private static void ValidateAndApplyAuth(HttpRequestMessage request, string effectiveProvider, string? apiKey)
+    {
+        var isOllama = string.Equals(effectiveProvider, AIIntegrationSettings.ProviderOllama, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(apiKey) && !isOllama)
+            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+    }
+
     /// <summary>
     /// Resolve a BaseUrl padrão ou da opção. Suporta Ollama como provider explícito.
     /// </summary>
@@ -229,6 +278,10 @@ public class OpenAiProvider : ILlmProvider
     internal static Dictionary<string, object?> BuildChatPayload(
         LlmOptions options, List<object> openAiMessages, bool includeTools, bool stream)
     {
+        object? responseFormatObj = null;
+        if (!string.IsNullOrWhiteSpace(options.ResponseFormat))
+            responseFormatObj = new Dictionary<string, object> { ["type"] = options.ResponseFormat.Trim() };
+
         var payloadDict = new Dictionary<string, object?>
         {
             ["model"] = options.Model,
@@ -240,11 +293,14 @@ public class OpenAiProvider : ILlmProvider
             ["frequency_penalty"] = options.FrequencyPenalty,
             ["presence_penalty"] = options.PresencePenalty,
             ["seed"] = options.Seed,
-            ["response_format"] = options.ResponseFormat,
+            ["response_format"] = responseFormatObj,
         };
 
         if (stream)
+        {
             payloadDict["stream"] = true;
+            payloadDict["stream_options"] = new Dictionary<string, object> { ["include_usage"] = true };
+        }
 
         if (includeTools && options.EnableTools && options.Tools != null)
         {
@@ -358,100 +414,59 @@ public class OpenAiProvider : ILlmProvider
     {
         try
         {
+            using var timeoutCts = CreateTimeoutCts(cancellationToken, options.TimeoutMs);
+            var requestToken = timeoutCts.Token;
+
             var model = options.Model;
             if (string.IsNullOrWhiteSpace(model))
                 throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
 
-            var apiKey = options.ApiKey;
-            if (string.IsNullOrWhiteSpace(apiKey))
-                throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
-
             // Auto-corrigir provider/baseUrl com base no nome do modelo
             var (effectiveProvider, baseUrl) = AutoCorrectProviderAndBaseUrl(
                 options.Provider, options.BaseUrl, model);
+            var apiKey = options.ApiKey;
+            var isOllama = string.Equals(effectiveProvider, AIIntegrationSettings.ProviderOllama, StringComparison.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(apiKey) && !isOllama)
+                throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
             // IMPORTANTE: NUNCA logar _apiKey
             _logger.LogInformation(
                 "Calling LLM provider={Provider} with {MessageCount} messages, maxTokens={MaxTokens}, model={Model}",
                 effectiveProvider, messages.Count, options.MaxTokens, model);
 
-            // Preparar mensagens no formato OpenAI
-            var openAiMessages = new List<object>
-            {
-                new { role = "system", content = systemPrompt }
-            };
-
-            foreach (var msg in messages)
-            {
-                if (msg.Role == "tool")
-                {
-                    openAiMessages.Add(new
-                    {
-                        role = "tool",
-                        tool_call_id = msg.ToolCallId,
-                        content = msg.Content
-                    });
-                }
-                else if (msg.Role == "assistant" && msg.ToolCalls is { Count: > 0 })
-                {
-                    // Assistant com tool_calls: serializa corretamente para que o LLM
-                    // saiba qual tool foi chamada com quais argumentos.
-                    openAiMessages.Add(new
-                    {
-                        role = "assistant",
-                        content = string.IsNullOrEmpty(msg.Content) ? null : msg.Content,
-                        tool_calls = msg.ToolCalls.Select(tc => new
-                        {
-                            id = tc.Id,
-                            type = "function",
-                            function = new
-                            {
-                                name = tc.Name,
-                                arguments = tc.ArgumentsJson
-                            }
-                        }).ToList()
-                    });
-                }
-                else
-                {
-                    openAiMessages.Add(new
-                    {
-                        role = msg.Role,
-                        content = MessageContent(msg)
-                    });
-                }
-            }
+            var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
 
             // Payload pelo ponto ÚNICO (stream: false = caminho não-streaming).
             var payloadDict = BuildChatPayload(options, openAiMessages, includeTools: true, stream: false);
-
-            var content = new StringContent(
-                JsonSerializer.Serialize(payloadDict, SJsonOpts),
-                Encoding.UTF8,
-                "application/json");
+            var payloadJson = JsonSerializer.Serialize(payloadDict, SJsonOpts);
 
             var requestUri = BuildRequestUri(baseUrl);
-            using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
-            {
-                Content = content
-            };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            // Usa effectiveProvider para decidir headers OpenRouter
             var openRouterOpts = options with { Provider = effectiveProvider };
-            ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
-
             var httpClient = BuildHttpClient(options);
-            var response = await httpClient.SendAsync(request, cancellationToken);
+            using var response = await SendWithTransientRetryAsync(
+                httpClient,
+                () =>
+                {
+                    var req = new HttpRequestMessage(HttpMethod.Post, requestUri)
+                    {
+                        Content = new StringContent(payloadJson, Encoding.UTF8, "application/json")
+                    };
+                    ValidateAndApplyAuth(req, effectiveProvider, apiKey);
+                    ApplyOpenRouterHeaders(req, openRouterOpts, baseUrl);
+                    return req;
+                },
+                HttpCompletionOption.ResponseContentRead,
+                requestToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                var errorBody = await response.Content.ReadAsStringAsync(requestToken);
                 _logger.LogError("OpenAI API error: {StatusCode} - {Error}",
                     response.StatusCode, errorBody);
                 throw new HttpRequestException(BuildProviderErrorMessage(response.StatusCode, errorBody));
             }
 
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var responseBody = await response.Content.ReadAsStringAsync(requestToken);
             var result = JsonSerializer.Deserialize<OpenAiChatResponse>(responseBody)
                 ?? throw new InvalidOperationException("Failed to deserialize OpenAI response");
 
@@ -508,44 +523,37 @@ public class OpenAiProvider : ILlmProvider
         if (string.IsNullOrWhiteSpace(model))
             throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
 
-        var apiKey = options.ApiKey;
-        if (string.IsNullOrWhiteSpace(apiKey))
-            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
-
         // Auto-corrigir provider/baseUrl com base no nome do modelo
         var (effectiveProvider, baseUrl) = AutoCorrectProviderAndBaseUrl(
             options.Provider, options.BaseUrl, model);
+        var apiKey = options.ApiKey;
+        var isOllama = string.Equals(effectiveProvider, AIIntegrationSettings.ProviderOllama, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(apiKey) && !isOllama)
+            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
         _logger.LogInformation(
             "StreamAsync LLM provider={Provider}: {MessageCount} messages, model={Model}",
             effectiveProvider, messages.Count, model);
 
-        // A8: serialização comum — antes o StreamAsync descartava histórico
-        // com tool calls (role=tool / assistant.tool_calls), gerando 400 no
-        // turno seguinte em qualquer provider.
         var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
-
-        // Payload pelo ponto ÚNICO: este caminho NÃO oferece tools.
         var payloadDict = BuildChatPayload(options, openAiMessages, includeTools: false, stream: true);
-
-        var requestBody = new StringContent(
-            JsonSerializer.Serialize(payloadDict, SJsonOpts),
-            Encoding.UTF8,
-            "application/json");
+        var payloadJson = JsonSerializer.Serialize(payloadDict, SJsonOpts);
 
         var requestUri = BuildRequestUri(baseUrl);
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri)
-        {
-            Content = requestBody
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        // Usa effectiveProvider para decidir headers OpenRouter
         var openRouterOpts = options with { Provider = effectiveProvider };
-        ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
-
         var httpClient = BuildHttpClient(options);
-        using var response = await httpClient.SendAsync(
-            request,
+        using var response = await SendWithTransientRetryAsync(
+            httpClient,
+            () =>
+            {
+                var req = new HttpRequestMessage(HttpMethod.Post, requestUri)
+                {
+                    Content = new StringContent(payloadJson, Encoding.UTF8, "application/json")
+                };
+                ValidateAndApplyAuth(req, effectiveProvider, apiKey);
+                ApplyOpenRouterHeaders(req, openRouterOpts, baseUrl);
+                return req;
+            },
             HttpCompletionOption.ResponseHeadersRead,
             requestToken);
 
@@ -650,13 +658,13 @@ public class OpenAiProvider : ILlmProvider
         if (string.IsNullOrWhiteSpace(model))
             throw new InvalidOperationException("Modelo de IA não definido no banco para o escopo atual.");
 
-        var apiKey = options.ApiKey;
-        if (string.IsNullOrWhiteSpace(apiKey))
-            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
-
         // Auto-corrigir provider/baseUrl com base no nome do modelo
         var (effectiveProvider, baseUrl) = AutoCorrectProviderAndBaseUrl(
             options.Provider, options.BaseUrl, model);
+        var apiKey = options.ApiKey;
+        var isOllama = string.Equals(effectiveProvider, AIIntegrationSettings.ProviderOllama, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(apiKey) && !isOllama)
+            throw new InvalidOperationException("API key de IA não definida no banco para o escopo atual.");
 
         _logger.LogInformation(
             "StreamWithToolsAsync LLM provider={Provider}: {MessageCount} messages, model={Model}, tools={Tools}",
@@ -665,26 +673,26 @@ public class OpenAiProvider : ILlmProvider
         // FIX-1 (P0): a serialização passa pelo ponto ÚNICO (BuildOpenAiMessages),
         // que aplica o invariante de pareamento imediatamente antes do envio.
         var openAiMessages = BuildOpenAiMessages(systemPrompt, messages);
-
-        // B16-r2: mesmos parâmetros de amostragem do caminho sem tools — sem
-        // isso o round com tools e a síntese usavam amostragem diferente.
-        // Payload pelo ponto ÚNICO (o de maior tráfego do chat).
         var payloadDict = BuildChatPayload(options, openAiMessages, includeTools: true, stream: true);
-
-        var requestBody = new StringContent(
-            JsonSerializer.Serialize(payloadDict, SJsonOpts),
-            Encoding.UTF8,
-            "application/json");
+        var payloadJson = JsonSerializer.Serialize(payloadDict, SJsonOpts);
 
         var requestUri = BuildRequestUri(baseUrl);
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = requestBody };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        // Usa effectiveProvider para decidir headers OpenRouter
         var openRouterOpts = options with { Provider = effectiveProvider };
-        ApplyOpenRouterHeaders(request, openRouterOpts, baseUrl);
-
         var httpClient = BuildHttpClient(options);
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, requestToken);
+        using var response = await SendWithTransientRetryAsync(
+            httpClient,
+            () =>
+            {
+                var req = new HttpRequestMessage(HttpMethod.Post, requestUri)
+                {
+                    Content = new StringContent(payloadJson, Encoding.UTF8, "application/json")
+                };
+                ValidateAndApplyAuth(req, effectiveProvider, apiKey);
+                ApplyOpenRouterHeaders(req, openRouterOpts, baseUrl);
+                return req;
+            },
+            HttpCompletionOption.ResponseHeadersRead,
+            requestToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -708,7 +716,7 @@ public class OpenAiProvider : ILlmProvider
         {
             requestToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(line)) continue;
-            if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
 
             var data = line.StartsWith("data: ", StringComparison.Ordinal)
                 ? line["data: ".Length..]

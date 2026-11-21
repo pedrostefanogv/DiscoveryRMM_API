@@ -41,25 +41,35 @@ public interface IAiCostControlService
         CancellationToken ct = default);
 }
 
+public sealed class AiCostControlLocalState
+{
+    public ConcurrentDictionary<string, AiCostControlService.SlidingWindow> RateLimits { get; } = new();
+    public ConcurrentDictionary<string, AiCostControlService.DailyBudget> Budgets { get; } = new();
+}
+
 public class AiCostControlService : IAiCostControlService
 {
     private readonly IRedisService? _redis;
     private readonly ILogger<AiCostControlService> _logger;
 
-    // Fallback local quando Redis não está disponível
-    private readonly ConcurrentDictionary<string, SlidingWindow> _localRateLimits = new();
-    private readonly ConcurrentDictionary<string, DailyBudget> _localBudgets = new();
+    // Fallback local quando Redis não está disponível (compartilhado via Singleton AiCostControlLocalState).
+    private readonly ConcurrentDictionary<string, SlidingWindow> _localRateLimits;
+    private readonly ConcurrentDictionary<string, DailyBudget> _localBudgets;
 
     private readonly IAiMonthlyCostReader? _monthlyCostReader;
 
     public AiCostControlService(
         IRedisService? redis,
         ILogger<AiCostControlService> logger,
-        IAiMonthlyCostReader? monthlyCostReader = null)
+        IAiMonthlyCostReader? monthlyCostReader = null,
+        AiCostControlLocalState? localState = null)
     {
         _redis = redis;
         _logger = logger;
         _monthlyCostReader = monthlyCostReader;
+        var state = localState ?? new AiCostControlLocalState();
+        _localRateLimits = state.RateLimits;
+        _localBudgets = state.Budgets;
     }
 
     public async Task<bool> TryAcquireAsync(
@@ -107,10 +117,11 @@ public class AiCostControlService : IAiCostControlService
         else
         {
             var budget = _localBudgets.GetOrAdd(budgetKey, _ => new DailyBudget());
-            if (budget.Used >= settings.TokenBudgetDaily)
+            var usedToday = budget.GetUsedToday();
+            if (usedToday >= settings.TokenBudgetDaily)
             {
                 _logger.LogWarning("AI daily budget exceeded (local) for scope {Scope}: {Used}/{Budget}",
-                    scopeKey, budget.Used, settings.TokenBudgetDaily);
+                    scopeKey, usedToday, settings.TokenBudgetDaily);
                 return false;
             }
         }
@@ -173,7 +184,7 @@ public class AiCostControlService : IAiCostControlService
         else
         {
             var budget = _localBudgets.GetOrAdd(budgetKey, _ => new DailyBudget());
-            Interlocked.Add(ref budget.Used, tokensUsed);
+            budget.AddUsage(tokensUsed);
         }
     }
 
@@ -204,7 +215,7 @@ public class AiCostControlService : IAiCostControlService
         return Task.CompletedTask;
     }
 
-    private class SlidingWindow
+    public class SlidingWindow
     {
         private long _count;
         private DateTime _windowStart = DateTime.UtcNow;
@@ -241,8 +252,38 @@ public class AiCostControlService : IAiCostControlService
         }
     }
 
-    private class DailyBudget
+    public class DailyBudget
     {
-        public int Used;
+        private readonly object _lock = new();
+        private DateOnly _utcDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        private int _used;
+
+        public int GetUsedToday()
+        {
+            lock (_lock)
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                if (_utcDate != today)
+                {
+                    _utcDate = today;
+                    _used = 0;
+                }
+                return _used;
+            }
+        }
+
+        public void AddUsage(int tokens)
+        {
+            lock (_lock)
+            {
+                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                if (_utcDate != today)
+                {
+                    _utcDate = today;
+                    _used = 0;
+                }
+                _used += tokens;
+            }
+        }
     }
 }

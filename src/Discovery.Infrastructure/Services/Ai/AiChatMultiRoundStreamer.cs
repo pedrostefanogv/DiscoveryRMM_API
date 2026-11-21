@@ -24,6 +24,8 @@ public class AiChatMultiRoundStreamer
     private readonly IMemoryCache _memoryCache;
     private readonly AiChatCapabilityResolver _capabilities;
     private readonly AiChatToolRateLimiter _rateLimiter;
+    private readonly IAiCostControlService? _costControl;
+    private readonly IMcpToolAuditService? _auditService;
 
     public AiChatMultiRoundStreamer(
         IAiChatSessionRepository sessionRepository,
@@ -36,7 +38,9 @@ public class AiChatMultiRoundStreamer
         AiChatToolOrchestrator toolOrchestrator,
         IMemoryCache memoryCache,
         AiChatCapabilityResolver capabilities,
-        AiChatToolRateLimiter rateLimiter)
+        AiChatToolRateLimiter rateLimiter,
+        IAiCostControlService? costControl = null,
+        IMcpToolAuditService? auditService = null)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
@@ -49,6 +53,8 @@ public class AiChatMultiRoundStreamer
         _memoryCache = memoryCache;
         _capabilities = capabilities;
         _rateLimiter = rateLimiter;
+        _costControl = costControl;
+        _auditService = auditService;
     }
 
     public async IAsyncEnumerable<AiChatStreamChunk> StreamMultiRoundAsync(
@@ -76,6 +82,17 @@ public class AiChatMultiRoundStreamer
 
         var aiSettings = await resolveAiSettings(session.SiteId, ct);
         if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled) { yield return new AiChatStreamChunk(Type: "error", Error: "Chat IA desabilitado."); yield break; }
+
+        var costAcquired = false;
+        if (_costControl is not null)
+        {
+            costAcquired = await _costControl.TryAcquireAsync(session.ClientId, session.SiteId, aiSettings, ct);
+            if (!costAcquired)
+            {
+                yield return new AiChatStreamChunk(Type: "error", Error: "Limite de uso ou orçamento de IA excedido para este escopo.");
+                yield break;
+            }
+        }
 
         var maxTokens = await _capabilities.ResolveChatMaxTokensAsync(session.SiteId, aiSettings, ct);
 
@@ -239,6 +256,28 @@ public class AiChatMultiRoundStreamer
                 }
 
                 var wrapped = AiChatToolOrchestrator.WrapAgentToolError(tr.Result, tr.Name);
+                if (_auditService is not null)
+                {
+                    var agentStatus = tr.Result.Contains("\"approved\":false", StringComparison.OrdinalIgnoreCase)
+                        || tr.Result.Contains("\"approved\": false", StringComparison.OrdinalIgnoreCase)
+                        ? "denied"
+                        : tr.Result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase)
+                            ? "error"
+                            : "success";
+                    await _auditService.RecordAsync(new McpToolAuditLog
+                    {
+                        ToolName = tr.Name,
+                        Origin = "agent",
+                        ClientId = session.ClientId,
+                        SiteId = session.SiteId,
+                        AgentId = agentId,
+                        SessionId = session.Id,
+                        Status = agentStatus,
+                        DurationMs = 0,
+                        ErrorMessage = agentStatus == "success" ? null : AiChatCapabilityResolver.Shorten(tr.Result, 300),
+                        CreatedAt = DateTime.UtcNow
+                    }, ct);
+                }
                 // Captura de tela: o tool result pode conter a imagem (data URL).
                 // Injeta uma mensagem user multimodal APÓS o tool message — é o
                 // formato aceito por OpenAI/OpenRouter para visão em tool calls.
@@ -729,6 +768,22 @@ public class AiChatMultiRoundStreamer
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
+        if (_costControl is not null)
+        {
+            if (totalTokens is > 0)
+            {
+                try { await _costControl.RecordUsageAsync(session.ClientId, session.SiteId, totalTokens.Value, ct); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao registrar uso de tokens no CostControl (multi-round)", traceId); }
+            }
+            else if (costAcquired && !string.IsNullOrEmpty(providerError) && !anyTokenYielded && !hasToolCalls)
+            {
+                try { await _costControl.ReleaseAsync(session.ClientId, session.SiteId, aiSettings, ct); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao liberar slot no CostControl (multi-round)", traceId); }
+            }
+        }
+
+        fullContent = AiChatGuardrails.ApplyOutputGuardrails(fullContent, aiSettings);
+
         // ── A2UI + sanitização de vazamentos (mesma ordem única do StreamAsync) ──
         // Roda ANTES da síntese forçada: se o conteúdo era só vazamento (DSML,
         // invokes textuais), a sanitização o esvazia e a síntese dispara com a
@@ -797,7 +852,7 @@ public class AiChatMultiRoundStreamer
         // daqui. Se o modelo tivesse deixado texto residual depois do
         // tool_calls suprimido, depender só de "conteúdo vazio" encerraria o
         // turno sem resposta.
-        if (string.IsNullOrWhiteSpace(fullContent) || budgetExhausted || continuationRequested)
+        if ((string.IsNullOrWhiteSpace(fullContent) && a2uiMultiMessages.Count == 0) || budgetExhausted || continuationRequested)
         {
             // budgetExhausted: a nota já foi injetada no caminho delegado.
             if (continuationRequested)

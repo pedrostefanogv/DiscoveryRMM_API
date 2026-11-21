@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Discovery.Api.Filters;
 using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs.Configurations.Commands;
@@ -186,6 +187,71 @@ public class ConfigurationsController(
         }
     }
 
+    private static string? RedactAiSecretsInJson(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "{}")
+            return json;
+
+        try
+        {
+            var node = JsonNode.Parse(json);
+            if (node is not JsonObject obj)
+                return json;
+
+            var keysToRemove = obj
+                .Where(kv => string.Equals(kv.Key, "apiKey", StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(kv.Key, "embeddingApiKey", StringComparison.OrdinalIgnoreCase))
+                .Select(kv => kv.Key)
+                .ToList();
+
+            if (keysToRemove.Count == 0)
+                return json;
+
+            foreach (var key in keysToRemove)
+                obj.Remove(key);
+
+            return obj.ToJsonString(JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return json;
+        }
+    }
+
+    private static ClientConfiguration ProjectClientConfigForClient(ClientConfiguration config)
+    {
+        var clone = JsonSerializer.Deserialize<ClientConfiguration>(
+            JsonSerializer.Serialize(config, JsonOptions), JsonOptions) ?? config;
+        clone.AIIntegrationSettingsJson = RedactAiSecretsInJson(clone.AIIntegrationSettingsJson);
+        return clone;
+    }
+
+    private static SiteConfiguration ProjectSiteConfigForClient(SiteConfiguration config)
+    {
+        var clone = JsonSerializer.Deserialize<SiteConfiguration>(
+            JsonSerializer.Serialize(config, JsonOptions), JsonOptions) ?? config;
+        clone.AIIntegrationSettingsJson = RedactAiSecretsInJson(clone.AIIntegrationSettingsJson);
+        return clone;
+    }
+
+    private static object ProjectAiCredentialForClient(AiProviderCredential c) => new
+    {
+        c.Id,
+        c.ScopeType,
+        c.ClientId,
+        c.SiteId,
+        c.Provider,
+        c.BaseUrl,
+        c.EmbeddingBaseUrl,
+        c.KeyFingerprintHash,
+        c.HasApiKey,
+        c.HasEmbeddingApiKey,
+        c.CreatedAt,
+        c.UpdatedAt,
+        c.CreatedBy,
+        c.UpdatedBy
+    };
+
     private static AIIntegrationSettings? DeserializeAiSettings(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -228,7 +294,9 @@ public class ConfigurationsController(
         if (result.IsSuccess)
             await ApplyScheduleSafeAsync();
 
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: config => Ok(ProjectServerConfigForClient(config)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost("server/reset")]
@@ -236,7 +304,9 @@ public class ConfigurationsController(
     public async Task<IActionResult> ResetServer()
     {
         var result = await mediator.Send(new ResetServerConfigCommand(CurrentUser));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: config => Ok(ProjectServerConfigForClient(config)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     /// <summary>
@@ -345,7 +415,7 @@ public class ConfigurationsController(
     {
         var result = await mediator.Send(new GetClientConfigQuery(clientId));
         return result.Match<IActionResult>(
-            success: c => Ok(c),
+            success: c => Ok(ProjectClientConfigForClient(c)),
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
@@ -356,7 +426,9 @@ public class ConfigurationsController(
     public async Task<IActionResult> UpdateClient(Guid clientId, [FromBody] ClientConfiguration config)
     {
         var result = await mediator.Send(new UpdateClientConfigCommand(clientId, config, CurrentUser));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: c => Ok(ProjectClientConfigForClient(c)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPatch("clients/{clientId:guid}")]
@@ -364,7 +436,9 @@ public class ConfigurationsController(
     public async Task<IActionResult> PatchClient(Guid clientId, [FromBody] Dictionary<string, object> updates)
     {
         var result = await mediator.Send(new PatchClientConfigCommand(clientId, updates, CurrentUser));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: c => Ok(ProjectClientConfigForClient(c)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpDelete("clients/{clientId:guid}")]
@@ -389,7 +463,7 @@ public class ConfigurationsController(
 
         var result = await mediator.Send(new GetSiteConfigQuery(siteId));
         return result.Match<IActionResult>(
-            success: c => Ok(c),
+            success: c => Ok(ProjectSiteConfigForClient(c)),
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
@@ -407,7 +481,9 @@ public class ConfigurationsController(
             return denied;
 
         var result = await mediator.Send(new UpdateSiteConfigCommand(siteId, config, CurrentUser));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: c => Ok(ProjectSiteConfigForClient(c)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPatch("sites/{siteId:guid}")]
@@ -422,7 +498,9 @@ public class ConfigurationsController(
             return denied;
 
         var result = await mediator.Send(new PatchSiteConfigCommand(siteId, updates, CurrentUser));
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: c => Ok(ProjectSiteConfigForClient(c)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpDelete("sites/{siteId:guid}")]
@@ -569,7 +647,9 @@ public class ConfigurationsController(
     public async Task<IActionResult> GetAiCredentials(CancellationToken ct)
     {
         var result = await mediator.Send(new GetAiCredentialsQuery(), ct);
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: list => Ok(list.Select(ProjectAiCredentialForClient)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpPost("ai/credentials")]
@@ -577,7 +657,9 @@ public class ConfigurationsController(
     public async Task<IActionResult> CreateAiCredential([FromBody] AiProviderCredential credential, CancellationToken ct)
     {
         var result = await mediator.Send(new CreateAiCredentialCommand(credential), ct);
-        return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(
+            success: cred => Ok(ProjectAiCredentialForClient(cred)),
+            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpDelete("ai/credentials/{credentialId:guid}")]

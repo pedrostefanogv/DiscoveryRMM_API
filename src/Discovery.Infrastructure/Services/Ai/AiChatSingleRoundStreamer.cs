@@ -26,6 +26,7 @@ public class AiChatSingleRoundStreamer
     private readonly IMemoryCache _memoryCache;
     private readonly AiChatCapabilityResolver _capabilities;
     private readonly AiChatToolRateLimiter _rateLimiter;
+    private readonly IAiCostControlService? _costControl;
 
     public AiChatSingleRoundStreamer(
         IAiChatSessionRepository sessionRepository,
@@ -40,7 +41,8 @@ public class AiChatSingleRoundStreamer
         AiChatQuickReply quickReply,
         IMemoryCache memoryCache,
         AiChatCapabilityResolver capabilities,
-        AiChatToolRateLimiter rateLimiter)
+        AiChatToolRateLimiter rateLimiter,
+        IAiCostControlService? costControl = null)
     {
         _sessionRepository = sessionRepository;
         _messageRepository = messageRepository;
@@ -55,6 +57,7 @@ public class AiChatSingleRoundStreamer
         _memoryCache = memoryCache;
         _capabilities = capabilities;
         _rateLimiter = rateLimiter;
+        _costControl = costControl;
     }
 
     public async IAsyncEnumerable<AiChatStreamChunk> StreamAsync(
@@ -193,6 +196,17 @@ public class AiChatSingleRoundStreamer
             yield break;
         }
 
+        var costAcquired = false;
+        if (_costControl is not null)
+        {
+            costAcquired = await _costControl.TryAcquireAsync(scopeClientId, scopeSiteId, aiSettings, ct);
+            if (!costAcquired)
+            {
+                yield return new AiChatStreamChunk(Type: "error", Error: "Limite de uso ou orçamento de IA excedido para este escopo.");
+                yield break;
+            }
+        }
+
         // ── Streaming com tool call loop ──
         var contentBuilder = new StringBuilder();
         var toolIterations = 0;
@@ -218,6 +232,12 @@ public class AiChatSingleRoundStreamer
         // Dedupe por nome: KB + agent podem colidir e função repetida no payload do
         // provedor é ambígua (a OpenAI recusa).
         var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
+        if (availableTools.Count > 0 && !await _capabilities.ShouldSendToolsAsync(aiSettings, scopeClientId, scopeSiteId, ct))
+        {
+            _logger.LogInformation("[{TraceId}] Modelo {Model} não suporta tools no catálogo — omitindo {Count} tools no round 1.",
+                traceId, aiSettings.ChatModel, availableTools.Count);
+            availableTools.Clear();
+        }
         if (agentTools is { Count: > 0 })
         {
             _logger.LogDebug("[{TraceId}] StreamAsync: {Count} agent tools mescladas ({Total} no total após dedupe)",
@@ -265,6 +285,7 @@ public class AiChatSingleRoundStreamer
                 : kbExhausted
                     ? availableTools.Where(t => t.Name != "knowledge_search").ToList()
                     : availableTools;
+            roundTools = AiChatHelpers.CapToolsPerRound(roundTools);
 
             var streamOptions = new LlmOptions(
                 MaxTokens: maxTokens,
@@ -511,6 +532,22 @@ public class AiChatSingleRoundStreamer
         stopwatch.Stop();
         var fullContent = contentBuilder.ToString();
 
+        if (_costControl is not null)
+        {
+            if (totalTokens is > 0)
+            {
+                try { await _costControl.RecordUsageAsync(scopeClientId, scopeSiteId, totalTokens.Value, ct); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao registrar uso de tokens no CostControl", traceId); }
+            }
+            else if (costAcquired && !string.IsNullOrEmpty(providerError) && !anyTokenYielded && !hasToolCalls)
+            {
+                try { await _costControl.ReleaseAsync(scopeClientId, scopeSiteId, aiSettings, ct); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao liberar slot no CostControl", traceId); }
+            }
+        }
+
+        fullContent = AiChatGuardrails.ApplyOutputGuardrails(fullContent, aiSettings);
+
         // ── A2UI + sanitização de vazamentos (ordem única, ver AiChatOutputPipeline) ──
         // A extração A2UI DEVE rodar antes da sanitização: o sanitizador apaga
         // blocos ```a2ui como fallback e, se rodasse primeiro, o agent nunca
@@ -600,7 +637,7 @@ public class AiChatSingleRoundStreamer
         // orçamento de iterações esgotou com o LLM ainda querendo tools, ou
         // com toolIterations == 0 (ex.: só tool calls textuais sanitizados).
         // Faz até MaxSynthesisRetries chamadas SEM tools para garantir resposta.
-        if (string.IsNullOrWhiteSpace(fullContent))
+        if (string.IsNullOrWhiteSpace(fullContent) && a2uiMessages.Count == 0)
         {
             // budgetExhausted: a nota de síntese já foi injetada no caminho
             // delegado — evita duplicá-la e dispara a síntese normal.
@@ -638,7 +675,7 @@ public class AiChatSingleRoundStreamer
                 if (!string.IsNullOrWhiteSpace(fullContent)) break;
             }
 
-            if (string.IsNullOrWhiteSpace(fullContent))
+            if (string.IsNullOrWhiteSpace(fullContent) && a2uiMessages.Count == 0)
             {
                 fullContent = "Não foi possível gerar uma resposta. Tente reformular sua pergunta ou entre em contato com o suporte.";
                 yield return new AiChatStreamChunk(Type: "token", Content: fullContent);

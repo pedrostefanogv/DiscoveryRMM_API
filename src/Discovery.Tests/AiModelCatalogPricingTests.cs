@@ -72,4 +72,42 @@ public class AiModelCatalogPricingTests
         Assert.That(AiModelCatalogService.ParseInt32(root, "ausente"), Is.Null);
         Assert.That(AiModelCatalogService.ParseInt32(root, "nulo"), Is.Null);
     }
+
+    [Test]
+    public void InferOpenAiCapabilities_SupportsMiniToolsAndVisionModels()
+    {
+        var miniCaps = AiModelCatalogService.InferOpenAiCapabilities("gpt-4o-mini");
+        Assert.That(miniCaps, Does.Contain("tools"));
+        Assert.That(miniCaps, Does.Contain("vision"));
+
+        var gpt4oCaps = AiModelCatalogService.InferOpenAiCapabilities("gpt-4o");
+        Assert.That(gpt4oCaps, Does.Contain("tools"));
+        Assert.That(gpt4oCaps, Does.Contain("vision"));
+
+        var o3MiniCaps = AiModelCatalogService.InferOpenAiCapabilities("o3-mini");
+        Assert.That(o3MiniCaps, Does.Contain("tools"));
+        Assert.That(o3MiniCaps, Does.Not.Contain("vision"));
+    }
+
+    [Test]
+    public void OpenAiProvider_BuildChatPayload_FormatsResponseFormatAndStreamOptions()
+    {
+        var opts = new Discovery.Core.Interfaces.LlmOptions(
+            MaxTokens: 1024,
+            Temperature: 0.2,
+            Model: "gpt-4o",
+            ResponseFormat: "json_object",
+            Provider: "openai");
+
+        var payload = OpenAiProvider.BuildChatPayload(opts, [], includeTools: false, stream: true);
+
+        Assert.That(payload["stream"], Is.EqualTo(true));
+        var streamOpts = payload["stream_options"] as Dictionary<string, object>;
+        Assert.That(streamOpts, Is.Not.Null);
+        Assert.That(streamOpts!["include_usage"], Is.EqualTo(true));
+
+        var respFmt = payload["response_format"] as Dictionary<string, object>;
+        Assert.That(respFmt, Is.Not.Null);
+        Assert.That(respFmt!["type"], Is.EqualTo("json_object"));
+    }
 }

@@ -40,20 +40,30 @@ public class AiCostCockpitQueryHandler(DiscoveryDbContext db)
         var from = q.FromUtc ?? DateTime.UtcNow.AddDays(-30);
         var to = q.ToUtc ?? DateTime.UtcNow;
 
-        var rows = await db.AiChatMessages.AsNoTracking()
+        var baseQuery = db.AiChatMessages.AsNoTracking()
             .Where(m => m.CreatedAt >= from && m.CreatedAt <= to && m.Session != null)
             .Join(db.AiChatSessions.AsNoTracking(),
                 m => m.SessionId, s => s.Id,
                 (m, s) => new { m.Role, m.TokensUsed, m.ToolName, s.ClientId })
-            .Where(r => q.ClientId == null || r.ClientId == q.ClientId)
+            .Where(r => q.ClientId == null || r.ClientId == q.ClientId);
+
+        var clientAggs = await baseQuery
+            .GroupBy(r => r.ClientId)
+            .Select(g => new
+            {
+                ClientId = g.Key,
+                InputTokens = g.Sum(x => x.Role == "user" ? (long)(x.TokensUsed ?? 0) : 0L),
+                OutputTokens = g.Sum(x => x.Role == "assistant" ? (long)(x.TokensUsed ?? 0) : 0L),
+                Requests = g.Count(x => x.Role == "assistant" && x.TokensUsed != null)
+            })
             .ToListAsync(ct);
 
-        long inputTokens = rows.Where(r => r.Role == "user").Sum(r => (long?)r.TokensUsed ?? 0);
-        long outputTokens = rows.Where(r => r.Role == "assistant").Sum(r => (long?)r.TokensUsed ?? 0);
-        var requests = rows.Count(r => r.Role == "assistant" && r.TokensUsed is not null);
+        long inputTokens = clientAggs.Sum(c => c.InputTokens);
+        long outputTokens = clientAggs.Sum(c => c.OutputTokens);
+        var requests = clientAggs.Sum(c => c.Requests);
         var costUsd = AiCostEstimator.EstimateUsd(inputTokens, outputTokens);
 
-        var clientIds = rows.Select(r => r.ClientId).Distinct().ToList();
+        var clientIds = clientAggs.Select(c => c.ClientId).ToList();
         var clientNames = await db.Clients.AsNoTracking()
             .Where(c => clientIds.Contains(c.Id))
             .Select(c => new { c.Id, c.Name })
@@ -64,31 +74,32 @@ public class AiCostCockpitQueryHandler(DiscoveryDbContext db)
             .Select(c => new { c.ClientId, c.AIIntegrationSettingsJson })
             .ToDictionaryAsync(c => c.ClientId, c => c.AIIntegrationSettingsJson, ct);
 
-        var byClient = clientIds.Select(clientId =>
-        {
-            var own = rows.Where(r => r.ClientId == clientId);
-            var inTok = own.Where(r => r.Role == "user").Sum(r => (long?)r.TokensUsed ?? 0);
-            var outTok = own.Where(r => r.Role == "assistant").Sum(r => (long?)r.TokensUsed ?? 0);
-            return new AiCostClientDto(
-                clientId,
-                clientNames.TryGetValue(clientId, out var name) ? name : clientId.ToString(),
-                own.Count(r => r.Role == "assistant" && r.TokensUsed is not null),
-                inTok,
-                outTok,
-                AiCostEstimator.EstimateUsd(inTok, outTok),
-                ReadBudget(budgets.GetValueOrDefault(clientId)));
-        }).OrderByDescending(c => c.CostUsd).ToList();
+        var byClient = clientAggs.Select(c => new AiCostClientDto(
+                c.ClientId,
+                clientNames.TryGetValue(c.ClientId, out var name) ? name : c.ClientId.ToString(),
+                c.Requests,
+                c.InputTokens,
+                c.OutputTokens,
+                AiCostEstimator.EstimateUsd(c.InputTokens, c.OutputTokens),
+                ReadBudget(budgets.GetValueOrDefault(c.ClientId))))
+            .OrderByDescending(c => c.CostUsd)
+            .ToList();
 
-        var topTools = rows
-            .Where(r => r.Role == "tool" && !string.IsNullOrEmpty(r.ToolName))
+        var topToolsRaw = await baseQuery
+            .Where(r => r.Role == "tool" && r.ToolName != null && r.ToolName != "")
             .GroupBy(r => r.ToolName!)
-            .Select(g => new AiCostToolDto(
-                g.Key,
-                g.Count(),
+            .Select(g => new { ToolName = g.Key, Calls = g.Count() })
+            .OrderByDescending(x => x.Calls)
+            .Take(50)
+            .ToListAsync(ct);
+
+        var topTools = topToolsRaw
+            .Select(t => new AiCostToolDto(
+                t.ToolName,
+                t.Calls,
                 // A execução da tool é local (sem tokens próprios); o custo do
                 // LLM permanece nas mensagens assistant que geraram as tool calls.
                 0d))
-            .OrderByDescending(t => t.Calls)
             .ToList();
 
         return Result<AiCostCockpitDto>.Success(new AiCostCockpitDto(

@@ -96,6 +96,9 @@ public static class McpToolCatalogMetadata
             ["get_agent_sensor_history"] = new("Sensores",
                 "Use para a SÉRIE HISTÓRICA e a timeline de eventos de UM sensor da máquina (retenção de 90 dias). Somente leitura; 'sensorId' é obrigatório (descubra-o com get_agent_sensors). Sensor que não se aplica a esta máquina devolve resposta vazia, nunca dados de outro agente.",
                 60, true),
+            ["request_human_support"] = new("Chamados",
+                "Use quando o problema exigir intervenção de técnico humano ou quando o usuário pedir para falar com o suporte. Abre chamado (ou comenta no chamado indicado) com resumo estruturado.",
+                30, true),
 
             // ── Software (winget) ────────────────────────────────────────────
             ["search_packages"] = new("Software",
@@ -281,6 +284,26 @@ public static class McpToolCatalogMetadata
             ["build_internal_navigation_link"] = new("Navegação",
                 "Use para montar links/cards clicáveis no chat — com parcimônia.",
                 15, true),
+
+            // ── Registro do Windows (somente leitura) ────────────────────────
+            ["registry_read"] = new("Sistema",
+                "Leitura segura (somente leitura) de chaves e valores do Registro do Windows via guard fail-closed (bloqueia SAM/SECURITY/secrets).",
+                30, true),
+            ["ad_gpo_certs"] = new("Segurança",
+                "Diagnóstico corporativo somente leitura: domínio AD/Entra, certificados locais expirando, status BitLocker e sessões de usuários.",
+                60, true),
+            ["software"] = new("Software",
+                "Família consolidada de software/winget (search, list_installed, list_start_menu, pending_updates, actions, install, upgrade, upgrade_all, uninstall).",
+                900, true),
+            ["event_log"] = new("Diagnóstico",
+                "Família consolidada do Event Log do Windows (query, recent_errors, recent_crashes).",
+                45, true),
+            ["local_memory"] = new("Memória (agente)",
+                "Família consolidada de anotações locais da máquina (list, create, delete).",
+                15, true),
+            ["screen"] = new("Captura de tela",
+                "Família consolidada de tela (capture, list_windows, permission_status). Ações de captura aguardam consentimento interativo.",
+                0, false),
         };
 
     /// <summary>Metadados da tool; fallback genérico por origem quando desconhecida.</summary>

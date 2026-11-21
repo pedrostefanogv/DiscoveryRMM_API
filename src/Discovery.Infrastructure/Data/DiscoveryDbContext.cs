@@ -56,6 +56,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     public DbSet<AiChatMessage> AiChatMessages => Set<AiChatMessage>();
     public DbSet<AiChatJob> AiChatJobs => Set<AiChatJob>();
     public DbSet<McpToolPolicy> McpToolPolicies => Set<McpToolPolicy>();
+    public DbSet<McpToolAuditLog> McpToolAuditLogs => Set<McpToolAuditLog>();
     public DbSet<AppApprovalRule> AppApprovalRules => Set<AppApprovalRule>();
     public DbSet<AppApprovalAudit> AppApprovalAudits => Set<AppApprovalAudit>();
     public DbSet<AutomationScriptDefinition> AutomationScriptDefinitions => Set<AutomationScriptDefinition>();

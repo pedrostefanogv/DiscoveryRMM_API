@@ -6,6 +6,7 @@ using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -16,11 +17,14 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public class AiModelCatalogService : IAiModelCatalogService
 {
-    private readonly HttpClient _httpClient;
+    private static readonly HttpClient FallbackHttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    private readonly IHttpClientFactory? _httpClientFactory;
+    private readonly IMemoryCache? _memoryCache;
     private readonly IAiCredentialResolver _credentialResolver;
     private readonly ILogger<AiModelCatalogService> _logger;
 
-    // Cache: key = $"{provider}:{keyFingerprint}" → (timestamp, models)
+    // Fallback local quando IMemoryCache não é injetado (ex.: testes unitários).
     private readonly ConcurrentDictionary<string, (DateTime CachedAt, List<AiModelInfo> Models)> _cache = new();
 
     private static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromMinutes(60);
@@ -31,18 +35,25 @@ public class AiModelCatalogService : IAiModelCatalogService
 
     public AiModelCatalogService(
         IAiCredentialResolver credentialResolver,
-        ILogger<AiModelCatalogService> logger)
+        ILogger<AiModelCatalogService> logger,
+        IHttpClientFactory? httpClientFactory = null,
+        IMemoryCache? memoryCache = null)
     {
         _credentialResolver = credentialResolver;
         _logger = logger;
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _httpClientFactory = httpClientFactory;
+        _memoryCache = memoryCache;
     }
+
+    private HttpClient CreateHttpClient() =>
+        _httpClientFactory?.CreateClient("AiModelCatalog") ?? FallbackHttpClient;
 
     public List<string> GetSupportedProviders() =>
     [
         AIIntegrationSettings.ProviderOpenAi,
         AIIntegrationSettings.ProviderOpenRouter,
-        AIIntegrationSettings.ProviderOpenAiCompatible
+        AIIntegrationSettings.ProviderOpenAiCompatible,
+        AIIntegrationSettings.ProviderOllama
     ];
 
     public async Task<AiModelCatalogResponse> ListModelsAsync(
@@ -58,11 +69,21 @@ public class AiModelCatalogService : IAiModelCatalogService
         var apiKey = resolved?.ApiKey;
 
         var cacheKey = BuildCacheKey(provider, apiKey);
+        var memCacheKey = $"ai_model_catalog:{cacheKey}";
 
         // Cache hit?
-        if (!request.ForceRefresh && _cache.TryGetValue(cacheKey, out var cached))
+        if (!request.ForceRefresh)
         {
-            if (DateTime.UtcNow - cached.CachedAt < DefaultCacheTtl)
+            if (_memoryCache is not null &&
+                _memoryCache.TryGetValue<(DateTime CachedAt, List<AiModelInfo> Models)>(memCacheKey, out var memCached) &&
+                DateTime.UtcNow - memCached.CachedAt < DefaultCacheTtl)
+            {
+                var filtered = FilterAndSearch(memCached.Models, request);
+                return new AiModelCatalogResponse(filtered, filtered.Count, provider, memCached.CachedAt, true);
+            }
+
+            if (_cache.TryGetValue(cacheKey, out var cached) &&
+                DateTime.UtcNow - cached.CachedAt < DefaultCacheTtl)
             {
                 var filtered = FilterAndSearch(cached.Models, request);
                 return new AiModelCatalogResponse(filtered, filtered.Count, provider, cached.CachedAt, true);
@@ -93,10 +114,12 @@ public class AiModelCatalogService : IAiModelCatalogService
         }
 
         // Atualiza cache
-        _cache[cacheKey] = (DateTime.UtcNow, models);
+        var now = DateTime.UtcNow;
+        _cache[cacheKey] = (now, models);
+        _memoryCache?.Set(memCacheKey, (now, models), DefaultCacheTtl);
 
         var result = FilterAndSearch(models, request);
-        return new AiModelCatalogResponse(result, result.Count, provider, DateTime.UtcNow, false);
+        return new AiModelCatalogResponse(result, result.Count, provider, now, false);
     }
 
     public async Task<AiModelInfo?> GetModelAsync(
@@ -157,7 +180,7 @@ public class AiModelCatalogService : IAiModelCatalogService
         if (!string.IsNullOrWhiteSpace(apiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        var response = await CreateHttpClient().SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadAsStringAsync(ct);
@@ -216,7 +239,7 @@ public class AiModelCatalogService : IAiModelCatalogService
         if (!string.IsNullOrWhiteSpace(apiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        var response = await CreateHttpClient().SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         var body = await response.Content.ReadAsStringAsync(ct);
@@ -287,7 +310,7 @@ public class AiModelCatalogService : IAiModelCatalogService
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-            var response = await _httpClient.SendAsync(request, ct);
+            var response = await CreateHttpClient().SendAsync(request, ct);
             if (!response.IsSuccessStatusCode) return null;
 
             var body = await response.Content.ReadAsStringAsync(ct);
@@ -372,16 +395,28 @@ public class AiModelCatalogService : IAiModelCatalogService
         return caps;
     }
 
-    private static List<string> InferOpenAiCapabilities(string id)
+    internal static List<string> InferOpenAiCapabilities(string id)
     {
         var caps = new List<string>();
-        if (id.StartsWith("gpt-") || id.StartsWith("o1") || id.StartsWith("o3") || id.StartsWith("o4"))
+        if (id.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith("o1", StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith("o3", StringComparison.OrdinalIgnoreCase)
+            || id.StartsWith("o4", StringComparison.OrdinalIgnoreCase))
         {
             caps.Add("chat");
             caps.Add("streaming");
-            if (!id.Contains("mini")) caps.Add("tools");
+            caps.Add("tools");
+
+            var lower = id.ToLowerInvariant();
+            var isVisionModel = (lower.StartsWith("gpt-4o") || lower.StartsWith("gpt-4.1")
+                || lower.StartsWith("gpt-5") || lower.Contains("vision") || lower.Contains("turbo")
+                || lower.StartsWith("o1") || lower.StartsWith("o3") || lower.StartsWith("o4"))
+                && !lower.StartsWith("o1-mini") && !lower.StartsWith("o3-mini");
+            if (isVisionModel)
+                caps.Add("vision");
         }
-        else if (id.Contains("embedding") || id.Contains("embed"))
+        else if (id.Contains("embedding", StringComparison.OrdinalIgnoreCase)
+              || id.Contains("embed", StringComparison.OrdinalIgnoreCase))
         {
             caps.Add("embeddings");
         }
@@ -520,10 +555,22 @@ public class AiModelCatalogService : IAiModelCatalogService
         bool forceRefresh = false,
         CancellationToken ct = default)
     {
-        if (!forceRefresh && _openRouterCache.HasValue &&
-            DateTime.UtcNow - _openRouterCache.Value.CachedAt < OpenRouterCacheTtl)
+        const string openRouterMemKey = "ai_model_catalog:openrouter_public";
+
+        if (!forceRefresh)
         {
-            return _openRouterCache.Value.Response with { FromCache = true };
+            if (_memoryCache is not null &&
+                _memoryCache.TryGetValue<(DateTime CachedAt, OpenRouterModelsResponse Response)>(openRouterMemKey, out var memCached) &&
+                DateTime.UtcNow - memCached.CachedAt < OpenRouterCacheTtl)
+            {
+                return memCached.Response with { FromCache = true };
+            }
+
+            if (_openRouterCache.HasValue &&
+                DateTime.UtcNow - _openRouterCache.Value.CachedAt < OpenRouterCacheTtl)
+            {
+                return _openRouterCache.Value.Response with { FromCache = true };
+            }
         }
 
         var baseUrl = AIIntegrationSettings.OpenRouterDefaultBaseUrl;
@@ -535,16 +582,18 @@ public class AiModelCatalogService : IAiModelCatalogService
 
         await Task.WhenAll(chatTask, embedTask, rerankTask);
 
+        var now = DateTime.UtcNow;
         var response = new OpenRouterModelsResponse(
             ChatModels: chatTask.Result,
             EmbeddingModels: embedTask.Result,
             RerankModels: rerankTask.Result,
-            CachedAt: DateTime.UtcNow,
+            CachedAt: now,
             TtlMinutes: (int)OpenRouterCacheTtl.TotalMinutes,
             FromCache: false
         );
 
-        _openRouterCache = (DateTime.UtcNow, response);
+        _openRouterCache = (now, response);
+        _memoryCache?.Set(openRouterMemKey, (now, response), OpenRouterCacheTtl);
         return response;
     }
 
@@ -556,7 +605,7 @@ public class AiModelCatalogService : IAiModelCatalogService
             request.Headers.TryAddWithoutValidation("User-Agent", "DiscoveryRMM/1.0");
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-            var response = await _httpClient.SendAsync(request, ct);
+            var response = await CreateHttpClient().SendAsync(request, ct);
             response.EnsureSuccessStatusCode();
             var body = await response.Content.ReadAsStringAsync(ct);
 
@@ -646,7 +695,7 @@ public class AiModelCatalogService : IAiModelCatalogService
         var url = $"{baseUrl.TrimEnd('/')}/models";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        var response = await _httpClient.SendAsync(request, ct);
+        var response = await CreateHttpClient().SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return true;
     }
@@ -667,12 +716,15 @@ public class AiModelCatalogService : IAiModelCatalogService
         var body = JsonSerializer.Serialize(new { model = modelId, query, documents, top_n = n });
         var url = $"{baseUrl.TrimEnd('/')}/rerank";
 
+        var resolved = await _credentialResolver.ResolveAsync(null, null, ct);
         using var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
         };
+        if (!string.IsNullOrWhiteSpace(resolved?.ApiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", resolved.ApiKey);
 
-        var response = await _httpClient.SendAsync(request, ct);
+        var response = await CreateHttpClient().SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
         var responseBody = await response.Content.ReadAsStringAsync(ct);

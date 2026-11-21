@@ -20,7 +20,10 @@ namespace Discovery.Api.Controllers;
 public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
 {
     private static readonly Regex ToolNamePattern =
-        new("^[a-zA-Z0-9_-]{1,64}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        new("^[a-zA-Z0-9_.-]{1,64}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool IsValidToolName(string? name) =>
+        !string.IsNullOrEmpty(name) && ToolNamePattern.IsMatch(name) && !name.Contains("..", StringComparison.Ordinal);
 
     [HttpGet]
     [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
@@ -37,7 +40,7 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
     public async Task<IActionResult> Save(
         string toolName, [FromBody] SaveMcpToolPolicyRequest request, CancellationToken ct)
     {
-        if (!ToolNamePattern.IsMatch(toolName ?? string.Empty))
+        if (!IsValidToolName(toolName))
             return BadRequest(new { errors = new[] { new { Code = "InvalidToolName", Message = "Nome de tool inválido." } } });
 
         var scope = NormalizeScope(request.ClientId, request.SiteId, request.AgentId);
@@ -87,6 +90,24 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
     {
         var count = await governance.GetImpactAsync(toolName, NormalizeScope(clientId, siteId, agentId), ct);
         return Ok(new McpToolPolicyImpact(count));
+    }
+
+    [HttpGet("audit")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.View, ScopeSource.Global)]
+    public async Task<IActionResult> Audit(
+        [FromServices] Discovery.Core.Interfaces.IMcpToolAuditService auditService,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? agentId = null,
+        [FromQuery] string? toolName = null,
+        [FromQuery] string? status = null,
+        [FromQuery] DateTime? fromUtc = null,
+        [FromQuery] DateTime? toUtc = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default)
+    {
+        var result = await auditService.QueryAsync(clientId, agentId, toolName, status, fromUtc, toUtc, page, pageSize, ct);
+        return Ok(result);
     }
 
     /// <summary>

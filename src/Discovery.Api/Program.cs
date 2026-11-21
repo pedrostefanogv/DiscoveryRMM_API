@@ -207,6 +207,11 @@ builder.Services.AddHttpClient("AiChat", client =>
     client.DefaultRequestHeaders.Add("Accept", "application/json");
 });
 
+builder.Services.AddHttpClient("AiModelCatalog", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
+
 // Generic HttpClient for other services
 builder.Services.AddHttpClient();
 
@@ -225,8 +230,10 @@ var backgroundServicesConfig = BackgroundServicesCollectionExtensions.ReadBackgr
 
 // AI Chat & MCP
 builder.Services.AddSingleton<ILlmProvider, OpenAiProvider>();
+builder.Services.AddScoped<IMcpToolAuditService, McpToolAuditService>();
 builder.Services.AddScoped<IMcpToolExecutor, McpToolExecutor>();
 builder.Services.AddScoped<IMcpToolGovernance, McpToolGovernance>();
+builder.Services.AddSingleton<AiCostControlLocalState>();
 builder.Services.AddScoped<IAiCostControlService, AiCostControlService>();
 // Sub-services internos do chat IA
 builder.Services.AddScoped<AiChatSettingsResolver>();

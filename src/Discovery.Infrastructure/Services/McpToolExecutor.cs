@@ -4,6 +4,8 @@ using Discovery.Core.Cqrs.AgentLabels.Commands;
 using Discovery.Core.Cqrs.AgentLabels.Queries;
 using Discovery.Core.Cqrs.Alerts.Queries;
 using Discovery.Core.Cqrs.MonitoringEvents.Queries;
+using Discovery.Core.Cqrs.Tickets.Commands;
+using Discovery.Core.Cqrs.Tickets.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
@@ -109,14 +111,21 @@ public class McpToolExecutor : IMcpToolExecutor
     // o defeito só aparece em runtime: por isso o teto global é resolvido aqui via
     // IConfigurationResolver, que NÃO depende do executor (grafo acíclico).
     private readonly IConfigurationResolver? _configurationResolver;
+    private readonly IRedisService? _redis;
+    private readonly IMcpToolAuditService? _auditService;
 
     private readonly ConcurrentDictionary<string, Func<McpToolCallContext, Task<string>>> _handlers = new(StringComparer.OrdinalIgnoreCase);
 
-    // P1: o executor é Scoped (depende de repositórios scoped) — contadores de
-    // instância zeravam a cada request HTTP, tornando o rate limit de tools
-    // MCP inefetivo. Estáticos: o teto sobrevive aos requests (chave inclui
-    // tool/client/site/agent; expira via TryRemove após 1 min).
-    private static readonly ConcurrentDictionary<string, int> RateLimitCounters = new(StringComparer.OrdinalIgnoreCase);
+    // Fallback local quando Redis não está conectado (janela fixa de 60s por chave,
+    // sem Task.Delay fire-and-forget).
+    private sealed class LocalRateBucket
+    {
+        public readonly object Lock = new();
+        public int Count;
+        public DateTime WindowStartUtc = DateTime.UtcNow;
+    }
+
+    private static readonly ConcurrentDictionary<string, LocalRateBucket> RateLimitBuckets = new(StringComparer.OrdinalIgnoreCase);
 
     public McpToolExecutor(
         IMcpToolPolicyRepository policyRepo,
@@ -127,7 +136,9 @@ public class McpToolExecutor : IMcpToolExecutor
         ISensorReadService sensorReadService,
         ISensorSeriesService sensorSeriesService,
         ILogger<McpToolExecutor> logger,
-        IConfigurationResolver? configurationResolver = null)
+        IConfigurationResolver? configurationResolver = null,
+        IRedisService? redis = null,
+        IMcpToolAuditService? auditService = null)
     {
         _policyRepo = policyRepo;
         _knowledgeMcpTool = knowledgeMcpTool;
@@ -138,6 +149,8 @@ public class McpToolExecutor : IMcpToolExecutor
         _sensorSeriesService = sensorSeriesService;
         _logger = logger;
         _configurationResolver = configurationResolver;
+        _redis = redis;
+        _auditService = auditService;
 
         // Handlers padrão da KB: busca por assunto + catálogo.
         RegisterHandler("knowledge_search", HandleKnowledgeSearchAsync);
@@ -145,6 +158,9 @@ public class McpToolExecutor : IMcpToolExecutor
         RegisterHandler("time.current", ctx => HandleTimeCurrentAsync(ctx));
         RegisterHandler("sequential_thinking", ctx => HandleSequentialThinkingAsync(ctx));
         RegisterHandler("memory.search", HandleMemorySearchAsync);
+        RegisterHandler("request_human_support", HandleRequestHumanSupportAsync);
+        RegisterHandler("list_tickets", HandleListTicketsAsync);
+        RegisterHandler("get_ticket_details", HandleGetTicketDetailsAsync);
 
         // Tools de contexto operacional do SERVIDOR (leitura). Ficam sujeitas à
         // governança de /settings/mcp-tools como qualquer outra tool: sem policy
@@ -234,12 +250,14 @@ public class McpToolExecutor : IMcpToolExecutor
         if (policy is null)
         {
             _logger.LogWarning("MCP tool '{ToolName}' não tem política registrada para o escopo", toolName);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "denied", 0, "Política não registrada para este escopo.", ct);
             return $"{{\"error\": \"Tool '{toolName}' não autorizada para este escopo.\"}}";
         }
 
         if (!policy.IsEnabled)
         {
             _logger.LogWarning("MCP tool '{ToolName}' desabilitada para o escopo", toolName);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "denied", 0, "Tool desabilitada para este escopo.", ct);
             return $"{{\"error\": \"Tool '{toolName}' está desabilitada.\"}}";
         }
 
@@ -267,19 +285,35 @@ public class McpToolExecutor : IMcpToolExecutor
                 toolName, policy.MaxCallsPerMinute);
         }
 
-        var rateKey = $"{toolName}:{clientId}:{siteId}:{agentId}";
-        var currentCount = RateLimitCounters.AddOrUpdate(rateKey, 1, (_, v) => v + 1);
-
-        // Reset simples (não é sliding window, mas evita a necessidade de Redis para este caso)
-        _ = Task.Delay(TimeSpan.FromMinutes(1)).ContinueWith(t =>
+        var rateKey = $"mcp_rate:{toolName}:{clientId}:{siteId}:{agentId}";
+        long currentCount;
+        if (_redis?.IsConnected == true)
         {
-            RateLimitCounters.TryRemove(rateKey, out var removed);
-        });
+            currentCount = await _redis.IncrementAsync(rateKey);
+            if (currentCount == 1)
+                await _redis.SetExpiryAsync(rateKey, 60);
+        }
+        else
+        {
+            var bucket = RateLimitBuckets.GetOrAdd(rateKey, _ => new LocalRateBucket());
+            var now = DateTime.UtcNow;
+            lock (bucket.Lock)
+            {
+                if ((now - bucket.WindowStartUtc).TotalSeconds >= 60)
+                {
+                    bucket.WindowStartUtc = now;
+                    bucket.Count = 0;
+                }
+                bucket.Count++;
+                currentCount = bucket.Count;
+            }
+        }
 
         if (currentCount > effectiveMaxCallsPerMinute)
         {
             _logger.LogWarning("MCP tool '{ToolName}' excedeu limite efetivo de {Max}/min (política {PolicyMax}/min)",
                 toolName, effectiveMaxCallsPerMinute, policy.MaxCallsPerMinute);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "rate_limited", 0, $"Máximo: {effectiveMaxCallsPerMinute}/min.", ct);
             return $"{{\"error\": \"Rate limit excedido para tool '{toolName}'. Máximo: {effectiveMaxCallsPerMinute}/min.\"}}";
         }
 
@@ -291,31 +325,38 @@ public class McpToolExecutor : IMcpToolExecutor
         }
 
         // 4. Executar com timeout
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             using var argsDoc = JsonDocument.Parse(argumentsJson);
-            var context = new McpToolCallContext(
-                toolName, argumentsJson, argsDoc,
-                clientId, siteId, agentId,
-                policy, aiSettings, excludeArticleIds,
-                departmentId, sessionId, ct);
-
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             // Timeout <= 0 = sem limite (a tool fica só sob o cancelamento do turno).
             if (policy.TimeoutSeconds > 0)
                 cts.CancelAfter(TimeSpan.FromSeconds(policy.TimeoutSeconds));
 
+            var context = new McpToolCallContext(
+                toolName, argumentsJson, argsDoc,
+                clientId, siteId, agentId,
+                policy, aiSettings, excludeArticleIds,
+                departmentId, sessionId, cts.Token);
+
             var result = await handler(context);
+            sw.Stop();
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "success", (int)sw.ElapsedMilliseconds, null, ct);
             return result;
         }
         catch (OperationCanceledException)
         {
+            sw.Stop();
             _logger.LogWarning("MCP tool '{ToolName}' timeout após {Timeout}s", toolName, policy.TimeoutSeconds);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "timeout", (int)sw.ElapsedMilliseconds, $"Timeout de {policy.TimeoutSeconds}s", ct);
             return $"{{\"error\": \"Tool '{toolName}' excedeu timeout de {policy.TimeoutSeconds}s.\"}}";
         }
         catch (Exception ex)
         {
+            sw.Stop();
             _logger.LogError(ex, "Erro ao executar MCP tool '{ToolName}'", toolName);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "error", (int)sw.ElapsedMilliseconds, ex.Message, ct);
             return $"{{\"error\": \"Erro interno ao executar tool '{toolName}'.\"}}";
         }
     }
@@ -394,6 +435,12 @@ public class McpToolExecutor : IMcpToolExecutor
         "get_agent_sensor_history" => "Lê NO SERVIDOR a SÉRIE HISTÓRICA de UM sensor desta máquina, com pontos ao longo do tempo e a timeline de eventos (transições de status/severidade, alertas e erros de execução). Use para TENDÊNCIA e LINHA DO TEMPO ('o disco C: encheu quando?', 'desde quando o serviço está parado?'). SOMENTE LEITURA. O parâmetro 'sensorId' é OBRIGATÓRIO — descubra-o antes com get_agent_sensors; parâmetros opcionais: 'from'/'to' (ISO 8601/UTC; padrão últimas 24h), 'channel' (um canal específico, ex.: free_percent), 'targetKey' (quando o sensor cobre vários alvos, ex.: C:) e 'limit' (1–200, padrão 50). A resposta indica 'truncated' quando a janela tem mais pontos do que o limit. Se o sensor não existir para esta máquina, a resposta vem vazia com mensagem — NÃO é erro, e o sensor pode pertencer a outra máquina (nunca presuma). O status/severidade são os que o SERVIDOR registrou: não invente limiar nem recalcule diagnóstico.",
 
         "sequential_thinking" => "Executa raciocínio estruturado multi-step para diagnosticar problemas complexos de TI. Use APENAS quando o problema exigir análise em etapas (ex: diagnosticar por que um computador está lento considerando CPU, memória, disco e rede). O parâmetro 'thought' é OBRIGATÓRIO e deve conter o raciocínio do passo atual. NÃO use para perguntas simples ou respostas diretas — apenas para diagnósticos que exigem múltiplas camadas de análise.",
+
+        "request_human_support" => "Escalona o atendimento atual para um técnico humano quando o problema não puder ser resolvido pela IA ou quando o usuário solicitar falar com um atendente. Abre um novo chamado (ou adiciona comentário em 'ticketId' existente) com o resumo estruturado do diagnóstico. Parâmetro obrigatório: 'summary'. Opcionais: 'reason', 'urgency' (low, medium, high, critical), 'ticketId'.",
+
+        "list_tickets" => "Lista os chamados (abertos e encerrados) vinculados a esta máquina no servidor. Use antes de abrir qualquer chamado novo para evitar duplicidade. Parâmetros opcionais: 'status' ('open' | 'closed'), 'text' (filtro), 'limit' (1-50, padrão 20).",
+
+        "get_ticket_details" => "Obtém os detalhes completos de um chamado específico pelo 'ticketId' (GUID).",
 
         _ => $"Executa a tool '{toolName}'."
     };
@@ -1179,5 +1226,177 @@ public class McpToolExecutor : IMcpToolExecutor
         if (string.IsNullOrWhiteSpace(text) || text.Length <= maxLength)
             return text;
         return text[..maxLength] + "...";
+    }
+
+    private Task RecordAuditAsync(
+        string toolName, Guid? clientId, Guid? siteId, Guid? agentId, Guid? sessionId,
+        string status, int durationMs, string? errorMessage, CancellationToken ct)
+    {
+        if (_auditService is null)
+            return Task.CompletedTask;
+
+        return _auditService.RecordAsync(new McpToolAuditLog
+        {
+            ToolName = toolName,
+            Origin = "server",
+            ClientId = clientId,
+            SiteId = siteId,
+            AgentId = agentId,
+            SessionId = sessionId,
+            Status = status,
+            DurationMs = durationMs,
+            ErrorMessage = errorMessage,
+            CreatedAt = DateTime.UtcNow
+        }, ct);
+    }
+
+    private async Task<string> HandleRequestHumanSupportAsync(McpToolCallContext ctx)
+    {
+        var summary = GetStringArg(ctx.Arguments.RootElement, "summary");
+        if (string.IsNullOrWhiteSpace(summary))
+            return JsonSerializer.Serialize(new { error = "O parâmetro 'summary' é obrigatório para escalonar ao suporte humano." });
+
+        var reason = GetStringArg(ctx.Arguments.RootElement, "reason");
+        var urgencyRaw = GetStringArg(ctx.Arguments.RootElement, "urgency")?.Trim().ToLowerInvariant();
+        var ticketIdRaw = GetStringArg(ctx.Arguments.RootElement, "ticketId");
+
+        var body = string.IsNullOrWhiteSpace(reason)
+            ? $"[Escalonamento automático da IA]\n\n{summary.Trim()}"
+            : $"[Escalonamento automático da IA]\nMotivo: {reason.Trim()}\n\n{summary.Trim()}";
+
+        if (Guid.TryParse(ticketIdRaw, out var existingTicketId))
+        {
+            var commentRes = await _mediator.Send(
+                new AddTicketCommentCommand(existingTicketId, body, IsInternal: false, UserId: null, UserName: "Assistente IA (Escalonamento)"),
+                ctx.CancellationToken);
+
+            if (!commentRes.IsSuccess)
+                return JsonSerializer.Serialize(new { error = commentRes.Errors.FirstOrDefault()?.Message ?? "Falha ao comentar no chamado." });
+
+            return JsonSerializer.Serialize(new
+            {
+                escalated = true,
+                ticketId = existingTicketId,
+                commentId = commentRes.Value!.CommentId,
+                deepLink = $"discovery://support/ticket/{existingTicketId}",
+                message = "Resumo anexado ao chamado existente para atendimento humano."
+            });
+        }
+
+        if (!ctx.ClientId.HasValue)
+            return JsonSerializer.Serialize(new { error = "Contexto de cliente ausente para abrir chamado de escalonamento." });
+
+        var priority = urgencyRaw switch
+        {
+            "low" => TicketPriority.Low,
+            "high" => TicketPriority.High,
+            "critical" => TicketPriority.Critical,
+            _ => TicketPriority.Medium
+        };
+
+        var titleSummary = summary.Trim().Split('\n')[0];
+        if (titleSummary.Length > 110) titleSummary = titleSummary[..110] + "...";
+
+        var createRes = await _mediator.Send(new CreateTicketCommand(
+            Title: $"[Escalonamento IA] {titleSummary}",
+            Description: body,
+            Priority: priority,
+            ClientId: ctx.ClientId.Value,
+            SiteId: ctx.SiteId,
+            AgentId: ctx.AgentId,
+            DepartmentId: ctx.DepartmentId,
+            WorkflowProfileId: null,
+            AssignedToUserId: null,
+            Category: "Escalonamento IA"), ctx.CancellationToken);
+
+        if (!createRes.IsSuccess)
+            return JsonSerializer.Serialize(new { error = createRes.Errors.FirstOrDefault()?.Message ?? "Falha ao criar chamado de escalonamento." });
+
+        var ticket = createRes.Value!;
+        return JsonSerializer.Serialize(new
+        {
+            escalated = true,
+            ticketId = ticket.Id,
+            deepLink = $"discovery://support/ticket/{ticket.Id}",
+            message = "Chamado aberto e encaminhado à fila de suporte humano."
+        });
+    }
+
+    private async Task<string> HandleListTicketsAsync(McpToolCallContext ctx)
+    {
+        if (!ctx.ClientId.HasValue || !ctx.AgentId.HasValue)
+            return JsonSerializer.Serialize(new { error = "Contexto de cliente/agente ausente para listar chamados." });
+
+        var status = GetStringArg(ctx.Arguments.RootElement, "status")?.Trim().ToLowerInvariant();
+        bool? isClosed = status switch
+        {
+            "open" => false,
+            "closed" => true,
+            _ => null
+        };
+        var text = GetStringArg(ctx.Arguments.RootElement, "text");
+        var limit = GetIntArg(ctx.Arguments.RootElement, "limit", 20);
+        if (limit < 1) limit = 1;
+        if (limit > 50) limit = 50;
+
+        var res = await _mediator.Send(new ListTicketsQuery(new TicketFilterQuery(
+            ClientId: ctx.ClientId.Value,
+            AgentId: ctx.AgentId.Value,
+            IsClosed: isClosed,
+            Text: string.IsNullOrWhiteSpace(text) ? null : text.Trim(),
+            Limit: limit)), ctx.CancellationToken);
+
+        if (!res.IsSuccess)
+            return JsonSerializer.Serialize(new { error = res.Errors.FirstOrDefault()?.Message ?? "Falha ao listar chamados." });
+
+        var page = res.Value!;
+        var items = page.Items.Select(t => new
+        {
+            id = t.Id,
+            title = t.Title,
+            priority = t.Priority.ToString(),
+            workflowStateId = t.WorkflowStateId,
+            isOpen = t.ClosedAt == null,
+            createdAt = t.CreatedAt,
+            closedAt = t.ClosedAt,
+            deepLink = $"discovery://support/ticket/{t.Id}"
+        }).ToList();
+
+        return JsonSerializer.Serialize(new
+        {
+            total = items.Count,
+            truncated = page.HasMore,
+            tickets = items
+        });
+    }
+
+    private async Task<string> HandleGetTicketDetailsAsync(McpToolCallContext ctx)
+    {
+        var ticketIdRaw = GetStringArg(ctx.Arguments.RootElement, "ticketId");
+        if (!Guid.TryParse(ticketIdRaw, out var ticketId))
+            return JsonSerializer.Serialize(new { error = "Parâmetro obrigatório 'ticketId' (GUID) ausente ou inválido." });
+
+        var res = await _mediator.Send(new GetTicketByIdQuery(ticketId), ctx.CancellationToken);
+        if (!res.IsSuccess)
+            return JsonSerializer.Serialize(new { error = res.Errors.FirstOrDefault()?.Message ?? "Chamado não encontrado." });
+
+        var t = res.Value!;
+        if (ctx.ClientId.HasValue && t.ClientId != ctx.ClientId.Value)
+            return JsonSerializer.Serialize(new { error = "Chamado não pertence ao escopo desta máquina." });
+
+        return JsonSerializer.Serialize(new
+        {
+            id = t.Id,
+            title = t.Title,
+            description = t.Description,
+            category = t.Category,
+            priority = t.Priority.ToString(),
+            workflowStateId = t.WorkflowStateId,
+            isOpen = t.ClosedAt == null,
+            createdAt = t.CreatedAt,
+            updatedAt = t.UpdatedAt,
+            closedAt = t.ClosedAt,
+            deepLink = $"discovery://support/ticket/{t.Id}"
+        });
     }
 }
