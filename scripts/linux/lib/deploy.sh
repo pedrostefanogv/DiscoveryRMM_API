@@ -564,7 +564,8 @@ write_environment_file() {
     idx=$((idx + 1))
   done
 
-  local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
+  local callout_subject
+  callout_subject="$(printf '%s' "${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH}" | sed -E 's/\\+\$/$/g')"
   local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
   # O command substitution remove o \n final: sem re-adicionar, o ultimo
   # Subjects__N cola na linha seguinte (Nats__FanoutStream__MaxAge=...),
@@ -641,7 +642,7 @@ Nats__XKeySeed=${NATS_XKEY_SEED:-}
 Nats__AccountPublicKey=${NATS_ACCOUNT_PUBLIC_KEY:-}
 Nats__XKeyPublicKey=${NATS_XKEY_PUBLIC_KEY:-}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
-Nats__AuthCallout__Subject=${escaped_callout_subject}
+Nats__AuthCallout__Subject=${callout_subject}
 Nats__ServerHostExternal=${nats_server_external_host}
 Nats__ServerHostInternal=127.0.0.1
 Nats__UseWssExternal=${nats_use_wss_external}
@@ -1779,7 +1780,8 @@ update_nats_environment_file() {
   if [[ -z "$nats_ws_external_url" && "${NATS_USE_WSS_EXTERNAL:-false}" == "true" && -n "$nats_server_external_host" ]]; then
     nats_ws_external_url="wss://${nats_server_external_host}/nats/"
   fi
-  local escaped_callout_subject="${NATS_AUTH_CALLOUT_SUBJECT//\$/\\\$}"
+  local callout_subject
+  callout_subject="$(printf '%s' "${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH}" | sed -E 's/\\+\$/$/g')"
   local fanout_subject_lines; fanout_subject_lines="$(build_fanout_subject_lines)"
   # O command substitution remove o \n final: sem re-adicionar, o ultimo
   # Subjects__N cola na linha seguinte (Nats__FanoutStream__MaxAge=...),
@@ -1797,7 +1799,7 @@ Nats__UseWssExternal=${NATS_USE_WSS_EXTERNAL:-false}
 # Vazio = a API deriva wss://<host externo>/nats/ (NatsWebSocketUrlNormalizer).
 Nats__WebSocketExternalUrl=${nats_ws_external_url}
 Nats__AuthCallout__Enabled=$( [[ "$NATS_AUTH_CALLOUT_ENABLED" == "1" ]] && echo true || echo false )
-Nats__AuthCallout__Subject=${escaped_callout_subject}
+Nats__AuthCallout__Subject=${callout_subject}
 Nats__AccountSeed=${NATS_ACCOUNT_SEED:-}
 Nats__XKeySeed=${NATS_XKEY_SEED:-}
 Nats__AccountPublicKey=${NATS_ACCOUNT_PUBLIC_KEY:-}
@@ -1825,6 +1827,19 @@ EOF
 
   sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
   rm -f "$tmp_file"
+}
+
+sanitize_nats_callout_subject_in_env() {
+  local env_file="${1:-${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}}"
+  local run_cmd=()
+  if [[ ! -w "$env_file" ]] && command -v sudo >/dev/null 2>&1; then
+    run_cmd=(sudo)
+  fi
+  "${run_cmd[@]}" test -f "$env_file" || return 0
+  if "${run_cmd[@]}" grep -Eq '^Nats__AuthCallout__Subject=.*\\\$' "$env_file" 2>/dev/null; then
+    log "Corrigindo escape indevido em Nats__AuthCallout__Subject no ${env_file}"
+    "${run_cmd[@]}" sed -i -E '/^Nats__AuthCallout__Subject=/ s/\\+\$/$/g' "$env_file"
+  fi
 }
 
 update_site_realtime_environment_file() {

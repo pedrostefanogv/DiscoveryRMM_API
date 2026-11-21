@@ -93,12 +93,19 @@ normalize_letsencrypt_auto_renew_enabled() {
   esac
 }
 
+sanitize_nats_callout_subject() {
+  local raw="${1:-}"
+  # Remove barras invertidas espurias antes de '$' (ex.: \\$SYS.REQ.USER.AUTH -> $SYS.REQ.USER.AUTH).
+  # systemd EnvironmentFile nao expande '$', mas interpreta '\\' como '\' literal.
+  printf '%s' "$raw" | sed -E 's/\\+\$/$/g'
+}
+
 normalize_nats_settings() {
   NATS_BIND_HOST="${NATS_BIND_HOST:-0.0.0.0}"
   NATS_MONITOR_HOST="${NATS_MONITOR_HOST:-127.0.0.1}"
   NATS_AUTH_USER="${NATS_AUTH_USER:-$NATS_USER}"
   NATS_AUTH_PASSWORD="${NATS_AUTH_PASSWORD:-$NATS_PASSWORD}"
-  NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH}"
+  NATS_AUTH_CALLOUT_SUBJECT="$(sanitize_nats_callout_subject "${NATS_AUTH_CALLOUT_SUBJECT:-\$SYS.REQ.USER.AUTH}")"
   NATS_AUTH_CALLOUT_ENABLED="${NATS_AUTH_CALLOUT_ENABLED:-1}"
 
   # Aceita y/n (padrao dos prompts de wizard) alem de 1/0/true/false.

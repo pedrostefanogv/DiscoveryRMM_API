@@ -71,6 +71,7 @@ update_api() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
+  sanitize_nats_callout_subject_in_env || warn "Falha ao sanitizar Nats__AuthCallout__Subject no discovery.env (nao-bloqueante)"
   # Gera o par VAPID na primeira vez (o install escreve o env, o update nao).
   ensure_vapid_environment_file || warn "Falha ao garantir o par VAPID (nao-bloqueante)"
   # M-fix (413 homologacao): o nginx config e REGENERADO por padrao no update —
@@ -201,6 +202,7 @@ update_all_components() {
   ensure_wails_toolchain
   publish_api
   update_remote_access_environment_file || warn "Falha ao atualizar variaveis RemoteAccess (nao-bloqueante)"
+  sanitize_nats_callout_subject_in_env || warn "Falha ao sanitizar Nats__AuthCallout__Subject no discovery.env (nao-bloqueante)"
   # Gera o par VAPID na primeira vez (o install escreve o env, o update nao).
   ensure_vapid_environment_file || warn "Falha ao garantir o par VAPID (nao-bloqueante)"
   publish_site

@@ -286,6 +286,37 @@ apply_stack_update_only <<< "voltar" >/dev/null 2>&1 || rc=$?
 expect_eq "$rc" "10" "apply_stack_update_only 'voltar' retorna 10"
 expect_eq "$SYSTEM_UPDATES_CALLED" "0" "apply_stack_update_only nao executa apt-get upgrade ao voltar"
 
+echo "== 8. Sanitizacao de Nats__AuthCallout__Subject =="
+source "$LINUX_DIR/lib/deploy.sh"
+
+expect_eq "$(sanitize_nats_callout_subject '$SYS.REQ.USER.AUTH')" '$SYS.REQ.USER.AUTH' "sanitize mantem subject limpo"
+expect_eq "$(sanitize_nats_callout_subject '\$SYS.REQ.USER.AUTH')" '$SYS.REQ.USER.AUTH' "sanitize remove barra simples antes de $"
+expect_eq "$(sanitize_nats_callout_subject '\\$SYS.REQ.USER.AUTH')" '$SYS.REQ.USER.AUTH' "sanitize remove barra dupla antes de $"
+
+NATS_USER="u"
+NATS_PASSWORD="p"
+NATS_AUTH_USER=""
+NATS_AUTH_PASSWORD=""
+NATS_AUTH_CALLOUT_ENABLED="1"
+NATS_AUTH_CALLOUT_SUBJECT='\\$SYS.REQ.USER.AUTH'
+normalize_nats_settings
+expect_eq "$NATS_AUTH_CALLOUT_SUBJECT" '$SYS.REQ.USER.AUTH' "normalize_nats_settings sanitiza subject"
+
+CALLOUT_ENV="$TEST_TMP/discovery_callout.env"
+cat > "$CALLOUT_ENV" <<'ENVEOF'
+OTHER=keep
+Nats__AuthCallout__Subject=\\$SYS.REQ.USER.AUTH
+ENVEOF
+sanitize_nats_callout_subject_in_env "$CALLOUT_ENV"
+expect_eq "$(grep '^Nats__AuthCallout__Subject=' "$CALLOUT_ENV" | cut -d= -f2-)" '$SYS.REQ.USER.AUTH' "sanitize_nats_callout_subject_in_env corrige arquivo"
+expect_eq "$(grep '^OTHER=' "$CALLOUT_ENV" | cut -d= -f2-)" 'keep' "sanitize_nats_callout_subject_in_env preserva outras linhas"
+
+if grep -q 'escaped_callout_subject' "$LINUX_DIR/lib/deploy.sh"; then
+  bad "deploy.sh ainda contem escaped_callout_subject"
+else
+  ok "deploy.sh nao contem mais escaped_callout_subject"
+fi
+
 echo
 if [[ "$FAILED" -eq 0 ]]; then
   echo "TODOS OS TESTES DE MELHORIAS PASSARAM"

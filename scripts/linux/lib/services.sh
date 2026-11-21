@@ -256,7 +256,9 @@ load_existing_nats_defaults() {
               false) NATS_AUTH_CALLOUT_ENABLED="0" ;;
             esac
           fi ;;
-        Nats__AuthCallout__Subject) NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$val}" ;;
+        Nats__AuthCallout__Subject)
+          val="$(printf '%s' "$val" | sed -E 's/\\+\$/$/g')"
+          NATS_AUTH_CALLOUT_SUBJECT="${NATS_AUTH_CALLOUT_SUBJECT:-$val}" ;;
         Nats__ServerHostExternal) NATS_SERVER_HOST_EXTERNAL="${NATS_SERVER_HOST_EXTERNAL:-$val}" ;;
         Nats__ServerHostInternal) NATS_SERVER_HOST_INTERNAL="${NATS_SERVER_HOST_INTERNAL:-$val}" ;;
         Nats__UseWssExternal)
