@@ -299,21 +299,28 @@ public class RemoteAccessWebRtcInheritanceTests
         });
     }
 
-    // ── Kind terminal é recusado (decisão por medição) ───────────────────
+    // ── Kinds terminal e processes são ACEITOS (o caminho de dados existe) ──
 
     [Test]
-    public void Terminal_nao_e_aceito_como_kind()
+    public void Terminal_e_processes_sao_aceitos_como_kind()
     {
-        // Terminal não ganha com WebRTC: o gargalo é 1 round-trip e o volume é
-        // trivial (coalescer de 16 ms). Recusar explicitamente evita que alguém
-        // ligue "só por simetria" e crie um caminho de falha sem benefício.
-        var json = """{"enabled":true,"kinds":["terminal"]}""";
-
-        Assert.Multiple(() =>
+        // Passaram a ser aceitos quando o caminho de dados deles passou a existir DE
+        // FATO (canais "terminal" e "processes" no agente e no console). Antes disso a
+        // recusa era a decisão CORRETA: liberar a allow-list sem o caminho de dados
+        // faria o peer connection conectar e o tráfego continuar no NATS — o selo
+        // mostraria verde e mentiria.
+        foreach (var kind in new[] { "terminal", "processes" })
         {
-            Assert.That(RemoteAccessWebRtcPolicy.TryParseStrict(json, out _, out var error), Is.False);
-            Assert.That(error, Does.Contain("terminal").IgnoreCase.Or.Contain("não é suportado"));
-        });
+            var json = "{\"enabled\":true,\"kinds\":[\"" + kind + "\"]}";
+            var policy = RemoteAccessWebRtcPolicy.Parse(json);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(policy.EffectiveKinds, Is.EqualTo(new[] { kind }),
+                    $"{kind} deveria ser um kind efetivo");
+                Assert.That(policy.IsEffective, Is.True);
+            });
+        }
     }
 
     [Test]

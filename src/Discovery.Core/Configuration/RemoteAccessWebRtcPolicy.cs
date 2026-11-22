@@ -33,27 +33,37 @@ public class RemoteAccessWebRtcPolicy
     public const string DefaultStunCloudflare = "stun:stun.cloudflare.com:3478";
 
     /// <summary>
-    /// Kinds que PODEM usar WebRTC.
-    ///
-    /// Excluídos, com o motivo:
-    ///   - TERMINAL: o gargalo é um único round-trip mais o coalescimento local
-    ///     de 16 ms (session_terminal.go), e o volume é de poucos KB/s. O WebRTC
-    ///     adicionaria handshake ICE e um caminho de falha sem ganho perceptível.
-    ///   - REGISTRY: já é PAGINADO em 500 itens (winregistry/ops_windows.go)
-    ///     justamente porque uma resposta única estouraria o limite de mensagem
-    ///     do NATS. Ali o gargalo é o TAMANHO da página, não o transporte —
-    ///     trocar o transporte não ajudaria e a rajada SCTP seria pior.
-    ///   - PROCESSES/SERVICES: request/response por clique, volume pequeno e uso
-    ///     esporádico. Ganho marginal; vale apenas de carona no "all".
-    ///
-    /// PROXY está aqui porque usa o MESMO SessionTunnel do RDP (manager.go:
-    /// runProxySession e runRdpSession constroem o mesmo NewSessionTunnel, com o
-    /// mesmo framing binário de 6 B e os mesmos subjects .tunnel.*). Excluí-lo
-    /// seria incoerente: tecnicamente é o mesmo caso de multiplexação TCP — e é
-    /// onde o P2P mais ajuda, porque o destino (Proxmox, iDRAC, switch) costuma
-    /// estar em outra rede.
-    /// </summary>
-    public static readonly string[] AllowedKinds = ["screen", "rdp", "files", "proxy", "all"];
+/// Kinds que PODEM usar WebRTC.
+///
+/// TERMINAL e PROCESSES entraram em 2026-11-21, depois de a implementação do
+/// caminho de dados existir de fato (canais "terminal" e "processes" no agente e
+/// no console). Antes disso eles estavam excluídos, e a exclusão era HONESTA:
+/// liberar a allow-list sem o caminho de dados faria o peer connection conectar e
+/// o tráfego continuar no NATS — o selo mostraria verde e mentiria, que é o pior
+/// modo de falha para um indicador cuja única função é dizer a verdade.
+///
+/// O ganho continua sendo o CAMINHO (P2P, sem broker), não o codec:
+///   - TERMINAL: o gargalo é um round-trip + coalescimento local de 16 ms
+///     (session_terminal.go) e o volume é de poucos KB/s. O ganho aparece em
+///     redes com NAT agressivo, onde o P2P evita o relay. O replay por seq
+///     sobrevive ao transporte porque o seq vai no payload.
+///   - PROCESSES/SERVICES: request/response por clique, volume pequeno.
+///     O data channel SCTP é orientado a mensagem, então cada requisição ou
+///     resposta inteira é uma mensagem — mesmo contrato do .proc.req/.proc.resp.
+///
+/// REGISTRY segue EXCLUÍDO, e a razão é técnica: já é PAGINADO em 500 itens
+/// (winregistry/ops_windows.go) justamente porque uma resposta única estouraria o
+/// limite de mensagem do NATS. Ali o gargalo é o TAMANHO da página, não o
+/// transporte — trocar o transporte não ajudaria e a rajada SCTP seria pior.
+///
+/// PROXY está aqui porque usa o MESMO SessionTunnel do RDP (manager.go:
+/// runProxySession e runRdpSession constroem o mesmo NewSessionTunnel, com o
+/// mesmo framing binário de 6 B e os mesmos subjects .tunnel.*). Excluí-lo
+/// seria incoerente: tecnicamente é o mesmo caso de multiplexação TCP — e é
+/// onde o P2P mais ajuda, porque o destino (Proxmox, iDRAC, switch) costuma
+/// estar em outra rede.
+/// </summary>
+    public static readonly string[] AllowedKinds = ["screen", "rdp", "files", "proxy", "terminal", "processes", "all"];
 
     /// <summary>
     /// Liga o WebRTC. Default <c>false</c>: preserva o comportamento atual e

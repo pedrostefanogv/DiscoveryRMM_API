@@ -78,9 +78,16 @@ public static class RemoteSessionViewerPermissions
         // concedê-lo ampliaria silenciosamente o que uma sessão de tela pode ver.
         var registryAllowed = !noRegistry && kind is RemoteSessionKind.Registry;
         // WEBRTC: subjects dedicados de sinalização (.webrtc.in/.webrtc.out)
-        // apenas para kinds elegíveis (screen, rdp, files, proxy, all).
+        // apenas para kinds elegíveis.
+        //
+        // A lista PRECISA espelhar RemoteAccessWebRtcPolicy.AllowedKinds: o gate da
+        // política decide se o bloco webrtc entra no payload, e ESTA decisão decide se
+        // o viewer consegue negociar. Divergir produziria o pior caso — o agente
+        // autorizado a negociar e o console barrado no PUB do .webrtc.in.
+        // Terminal e processos entraram junto com o caminho de dados deles.
         var webRtcAllowed = kind is null or RemoteSessionKind.Screen or RemoteSessionKind.Rdp
-            or RemoteSessionKind.Files or RemoteSessionKind.Proxy or RemoteSessionKind.All;
+            or RemoteSessionKind.Files or RemoteSessionKind.Proxy or RemoteSessionKind.All
+            or RemoteSessionKind.Terminal or RemoteSessionKind.Processes;
 
         var pub = new List<string>
         {

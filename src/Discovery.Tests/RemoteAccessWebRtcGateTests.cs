@@ -31,7 +31,9 @@ public class RemoteAccessWebRtcGateTests
         Assert.That(noKinds.IsEffective, Is.False,
             "lista vazia é 'nenhum kind', nunca 'todos' — um default implícito ligaria WebRTC em terminal");
 
-        var onlyInvalidKinds = RemoteAccessWebRtcPolicy.Parse("""{"enabled":true,"kinds":["terminal"]}""");
+        // registry segue sendo o exemplo de kind que NÃO é suportado: o gargalo
+        // é o tamanho da página (500 itens), não o transporte.
+        var onlyInvalidKinds = RemoteAccessWebRtcPolicy.Parse("""{"enabled":true,"kinds":["registry"]}""");
         Assert.That(onlyInvalidKinds.IsEffective, Is.False,
             "kind só inválido é filtrado e deixa a política sem efeito");
     }
@@ -40,10 +42,11 @@ public class RemoteAccessWebRtcGateTests
     public void EffectiveKinds_filtra_o_que_nao_e_suportado()
     {
         var policy = RemoteAccessWebRtcPolicy.Parse(
-            """{"enabled":true,"kinds":["screen","terminal","processes","rdp"]}""");
+            """{"enabled":true,"kinds":["screen","terminal","processes","rdp","registry","banana"]}""");
 
-        Assert.That(policy.EffectiveKinds, Is.EqualTo(new[] { "screen", "rdp" }),
-            "terminal e processes não usam WebRTC e devem ser descartados");
+        Assert.That(policy.EffectiveKinds,
+            Is.EqualTo(new[] { "screen", "terminal", "processes", "rdp" }),
+            "terminal e processes SÃO suportados; registry e kinds inexistentes são filtrados");
     }
 
     [Test]
@@ -87,10 +90,13 @@ public class RemoteAccessWebRtcGateTests
             Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Contain("proxy"));
             Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Contain("all"));
 
-            // Excluídos com motivo documentado.
-            Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Not.Contain("terminal"));
+            // Excluído com motivo documentado.
+            // Terminal e processes: liberados junto com o caminho de dados deles.
+            // Sem o caminho de dados o peer conectaria e o tráfego seguiria no
+            // NATS — selo verde mentindo.
+            Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Contain("terminal"));
             Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Not.Contain("registry"));
-            Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Not.Contain("processes"));
+            Assert.That(RemoteAccessWebRtcPolicy.AllowedKinds, Does.Contain("processes"));
         });
     }
 

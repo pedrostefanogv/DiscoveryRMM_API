@@ -135,21 +135,27 @@ public sealed class RemoteSessionViewerPermissionsTests
     [Test]
     public void Build_ConcedeSubjectsWebRtcApenasParaKindsElegiveis()
     {
+        // Terminal e processes entraram junto com o caminho de dados deles no agente
+        // e no console: negociar sem caminho de dados faria o selo mentir.
         foreach (var kind in new[]
-                 {
+                     {
                      RemoteSessionKind.Screen,
                      RemoteSessionKind.Rdp,
                      RemoteSessionKind.Files,
                      RemoteSessionKind.Proxy,
-                     RemoteSessionKind.All
-                 })
+                     RemoteSessionKind.All,
+                     RemoteSessionKind.Terminal,
+                     RemoteSessionKind.Processes
+                     })
         {
             var (pub, sub) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, kind);
             Assert.That(pub, Does.Contain(Subject + ".webrtc.in"), $"pub faltando .webrtc.in para {kind}");
             Assert.That(sub, Does.Contain(Subject + ".webrtc.out"), $"sub faltando .webrtc.out para {kind}");
         }
 
-        foreach (var kind in new[] { RemoteSessionKind.Terminal, RemoteSessionKind.Registry })
+        // Registry SEGUE excluído: ali o gargalo é o TAMANHO da página (500 itens),
+        // não o transporte.
+        foreach (var kind in new[] { RemoteSessionKind.Registry })
         {
             var (pub, sub) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, kind);
             Assert.That(pub, Does.Not.Contain(Subject + ".webrtc.in"), $"pub não deveria ter .webrtc.in para {kind}");
