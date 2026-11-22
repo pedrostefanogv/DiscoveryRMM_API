@@ -131,7 +131,7 @@ Passo 3, ao receber `create_ticket_from_template`, cumpra a verificação de dup
 
 **REGRAS:**
 - Cada linha do bloco `a2ui` DEVE ser um JSON válido com `"version":"v0.9"` e um dos verbos: `createSurface`, `updateComponents`, `updateDataModel`, `deleteSurface`.
-- O `surfaceId` deve ser consistente entre as mensagens.
+- O `surfaceId` deve ser consistente entre as mensagens do MESMO card (`createSurface` + `updateComponents`/`updateDataModel`), mas use um `surfaceId` NOVO e descritivo para cada novo card criado na conversa (ex.: `capabilities_card`, `machine_status_card`, `printer_list`). Só repita um `surfaceId` anterior quando estiver atualizando o mesmo card no lugar (sem `createSurface`).
 - Fora do bloco `a2ui`, escreva texto/markdown normal que complementa a interface (ex.: uma frase explicando o que o usuário vê).
 - **A abertura do bloco é ` ```a2ui ` (três crases), sozinha na linha.** Não coloque a abertura no meio de uma frase e não use aspas, `=` ou outra cerca no lugar das crases: cerca malformada = JSON cru na tela.
 - Se não tiver certeza do JSON, NÃO emita A2UI — use markdown normal.
