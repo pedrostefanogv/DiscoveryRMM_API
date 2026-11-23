@@ -485,31 +485,6 @@ public sealed class ReportAgentHardwareCommandHandler(
     }
 
     /// <summary>
-    /// true quando o payload NÃO trouxe inventário cru útil: campo ausente,
-    /// JSON null, string vazia ou string JSON vazia.
-    ///
-    /// Detalhe que importa: o envelope do agente emite <c>inventoryRaw</c> sem
-    /// omitempty, então um sync parcial (só componentes) manda <c>""</c> — e
-    /// <c>GetRawText()</c> devolveria <c>"\"\""</c>, que NÃO é vazio para
-    /// IsNullOrWhiteSpace. Sem esta distinção o sync parcial continuaria sendo
-    /// tratado como sync completo no carregamento dos campos de hardware.
-    /// </summary>
-    private static bool IsMissingInventoryRaw(JsonElement? raw)
-    {
-        if (raw is not { } element)
-            return true;
-
-        if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            return true;
-
-        var text = element.ValueKind == JsonValueKind.String
-            ? element.GetString()
-            : element.GetRawText();
-
-        return string.IsNullOrWhiteSpace(text) || text == "null";
-    }
-
-    /// <summary>
     /// Lê um inteiro do objeto "hardware". Aceita número JSON e, por
     /// tolerância, texto numérico ("2"). Devolve null quando ausente/ilegível —
     /// assim um sync parcial NUNCA apaga o valor já persistido.
