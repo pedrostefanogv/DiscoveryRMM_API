@@ -102,7 +102,8 @@ public sealed class GetAgentHardwareReportQueryHandler(
                 hardware.OsName,
                 hardware.OsVersion, hardware.OsBuild, hardware.OsArchitecture,
                 hardware.OsEdition, hardware.IsServer, hardware.ProductType,
-                hardware.Domain, hardware.Workgroup, hardware.PartOfDomain
+                hardware.Domain, hardware.Workgroup, hardware.PartOfDomain,
+                hardware.IsLaptop, hardware.MachineType, hardware.ChassisType, hardware.PcSystemType
             );
         }
 
@@ -139,9 +140,22 @@ public sealed class GetAgentHardwareReportQueryHandler(
                 mm.Slot, null, null
             )).ToList(),
             CollectedAt: hardware?.InventoryCollectedAt,
-            ServerInventory: BuildServerInventory(components)
+            ServerInventory: BuildServerInventory(components),
+            Batteries: MapBatteries(components)
         ));
     }
+
+    /// <summary>
+    /// Projeta as baterias do snapshot de componentes. Desktop/VM e agentes
+    /// antigos devolvem lista vazia — o painel decide se renderiza o card.
+    /// </summary>
+    private static List<AgentBatteryDto> MapBatteries(AgentHardwareComponents components)
+        => components.Batteries.Select(b => new AgentBatteryDto(
+            b.Manufacturer, b.Model, b.SerialNumber, b.Chemistry, b.State,
+            b.Present, b.OnAC, b.Charging, b.Charged, b.PercentRemaining,
+            b.DesignedCapacityMAh, b.MaxCapacityMAh, b.CurrentCapacityMAh,
+            b.Health, b.CycleCount, b.MinutesUntilEmpty, b.MinutesToCharge
+        )).ToList();
 
     /// <summary>
     /// Projeta o inventário de Windows Server. Devolve null quando não há
@@ -426,7 +440,13 @@ public sealed class GetAgentHardwareComponentsQueryHandler(
                 st.ActionPath, st.ActionArgs, st.TriggerType, st.TriggerDesc,
                 st.NextRunTime, st.LastRunTime, st.LastResult
             )).ToList(),
-            hardware?.CollectedAt
+            hardware?.CollectedAt,
+            components.Batteries.Select(b => new AgentBatteryDto(
+                b.Manufacturer, b.Model, b.SerialNumber, b.Chemistry, b.State,
+                b.Present, b.OnAC, b.Charging, b.Charged, b.PercentRemaining,
+                b.DesignedCapacityMAh, b.MaxCapacityMAh, b.CurrentCapacityMAh,
+                b.Health, b.CycleCount, b.MinutesUntilEmpty, b.MinutesToCharge
+            )).ToList()
         ));
     }
 }

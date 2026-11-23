@@ -311,6 +311,14 @@ public partial class DiscoveryDbContext
                 .HasColumnName("os_workgroup")
                 .HasMaxLength(255);
             entity.Property(info => info.PartOfDomain).HasColumnName("os_part_of_domain");
+            // Formato físico da máquina (M294). Opcionais: linhas antigas ficam
+            // NULL até o próximo sync e o painel trata NULL como desconhecido.
+            entity.Property(info => info.IsLaptop).HasColumnName("is_laptop");
+            entity.Property(info => info.MachineType)
+                .HasColumnName("machine_type")
+                .HasMaxLength(20);
+            entity.Property(info => info.ChassisType).HasColumnName("chassis_type");
+            entity.Property(info => info.PcSystemType).HasColumnName("pc_system_type");
             entity.Property(info => info.ProcessorTdpWatts).HasColumnName("processor_tdp_watts");
             entity.Property(info => info.ProcessorSocket)
                 .HasColumnName("processor_socket")

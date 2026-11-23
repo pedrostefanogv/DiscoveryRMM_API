@@ -6,13 +6,15 @@ using Discovery.Infrastructure.Cqrs.Agents.QueryHandlers;
 namespace Discovery.Tests;
 
 /// <summary>
-/// Cobre a propagação da identidade Windows Server do hardware para o AgentDto,
-/// usada pelo site para escolher o ícone de servidor.
+/// Cobre a propagação da identidade da máquina do hardware para o AgentDto:
+/// Windows Server (ícone de servidor) e formato físico — notebook × desktop ×
+/// tablet × servidor (selo de notebook na listagem).
 ///
 /// Contrato que este teste trava: NULL significa "não reportado" (agente antigo
-/// ou inventário de hardware ainda não recebido), NUNCA "não é servidor". Se
-/// alguém trocar null por false no mapeamento, o site passaria a pintar todo
-/// agente sem inventário como estação de trabalho.
+/// ou inventário de hardware ainda não recebido), NUNCA "não é servidor" nem
+/// "não é notebook". Se alguém trocar null por false no mapeamento, o site
+/// passaria a pintar todo agente sem inventário como estação de trabalho e
+/// esconderia o selo de notebook de máquinas sem coleta.
 /// </summary>
 [TestFixture]
 public class AgentOsIdentityDtoTests
@@ -58,7 +60,7 @@ public class AgentOsIdentityDtoTests
             [agentId] = new() { AgentId = agentId, IsServer = true, ProductType = "LanmanNT" }
         });
 
-        var map = await AgentQueryHelper.GetOsIdentityByAgentAsync(repo, new[] { agentId }, CancellationToken.None);
+        var map = await AgentQueryHelper.GetMachineIdentityByAgentAsync(repo, new[] { agentId }, CancellationToken.None);
 
         Assert.That(map[agentId].IsServer, Is.True);
         Assert.That(map[agentId].ProductType, Is.EqualTo("LanmanNT"),
@@ -75,7 +77,7 @@ public class AgentOsIdentityDtoTests
             [comInventario] = new() { AgentId = comInventario, IsServer = false, ProductType = "WinNT" }
         });
 
-        var map = await AgentQueryHelper.GetOsIdentityByAgentAsync(
+        var map = await AgentQueryHelper.GetMachineIdentityByAgentAsync(
             repo, new[] { comInventario, semInventario }, CancellationToken.None);
 
         Assert.That(map.ContainsKey(comInventario), Is.True);
@@ -112,9 +114,61 @@ public class AgentOsIdentityDtoTests
     [Test]
     public async Task ListaVazia_NaoConsultaRepositorio()
     {
-        var map = await AgentQueryHelper.GetOsIdentityByAgentAsync(
+        var map = await AgentQueryHelper.GetMachineIdentityByAgentAsync(
             new ExplodingHardwareRepo(), Array.Empty<Guid>(), CancellationToken.None);
 
         Assert.That(map, Is.Empty);
+    }
+
+    /// <summary>
+    /// Notebook: isLaptop/machineType precisam chegar ao DTO para o site mostrar
+    /// o selo na listagem.
+    /// </summary>
+    [Test]
+    public async Task Notebook_ChegaNoDtoComMachineType()
+    {
+        var agentId = Guid.NewGuid();
+        var repo = new FakeHardwareRepo(new Dictionary<Guid, AgentHardwareInfo>
+        {
+            [agentId] = new() { AgentId = agentId, IsServer = false, IsLaptop = true, MachineType = "notebook" }
+        });
+
+        var map = await AgentQueryHelper.GetMachineIdentityByAgentAsync(repo, new[] { agentId }, CancellationToken.None);
+        var dto = AgentQueryHelper.MapToDto(BuildAgent(agentId), null, map[agentId]);
+
+        Assert.That(dto.IsLaptop, Is.True);
+        Assert.That(dto.MachineType, Is.EqualTo("notebook"));
+    }
+
+    /// <summary>
+    /// Desktop é resposta POSITIVA (false explícito), não ausência de dado.
+    /// </summary>
+    [Test]
+    public async Task Desktop_ChegaNoDtoComoFalseExplicito()
+    {
+        var agentId = Guid.NewGuid();
+        var repo = new FakeHardwareRepo(new Dictionary<Guid, AgentHardwareInfo>
+        {
+            [agentId] = new() { AgentId = agentId, IsServer = false, IsLaptop = false, MachineType = "desktop" }
+        });
+
+        var map = await AgentQueryHelper.GetMachineIdentityByAgentAsync(repo, new[] { agentId }, CancellationToken.None);
+        var dto = AgentQueryHelper.MapToDto(BuildAgent(agentId), null, map[agentId]);
+
+        Assert.That(dto.IsLaptop, Is.False);
+        Assert.That(dto.MachineType, Is.EqualTo("desktop"));
+    }
+
+    /// <summary>
+    /// Sem inventário (ou agente antigo), isLaptop/machineType ficam NULL — o
+    /// site não pinta selo nenhum. Este é o caso mais comum na frota real.
+    /// </summary>
+    [Test]
+    public void AgenteSemInventario_IsLaptopFicaNull()
+    {
+        var dto = AgentQueryHelper.MapToDto(BuildAgent(Guid.NewGuid()), null, default);
+
+        Assert.That(dto.IsLaptop, Is.Null, "null = não reportado; false significaria 'é desktop'");
+        Assert.That(dto.MachineType, Is.Null);
     }
 }

@@ -128,6 +128,32 @@ public class AgentHardwareRepository : IAgentHardwareRepository
         existing.OsVersion = hardware.OsVersion;
         existing.OsBuild = hardware.OsBuild;
         existing.OsArchitecture = hardware.OsArchitecture;
+
+        // ── Campos NULLABLE de identidade (M272) e de formato físico (M294) ──
+        //
+        // Copiados SÓ quando reportados. Motivo: o agente manda payloads
+        // PARCIAIS (SyncNetworkConnections/SyncStartupAndScheduledTasks enviam
+        // apenas Components, sem o objeto "hardware"), e esses campos são
+        // NULLABLE justamente para distinguir "não reportado" de "falso".
+        // Copiar null apagaria o valor aprendido — no caso do isLaptop, o selo
+        // de notebook sumiria da listagem a cada sync de portas.
+        //
+        // Isso também corrige a whitelist: até aqui as colunas de SO (M272)
+        // NUNCA eram copiadas no caminho de UPDATE, então agentes cujo registro
+        // de hardware já existia ficavam com os_is_server/os_product_type NULL
+        // para sempre (o site mascarava isso caindo na heurística de texto).
+        if (hardware.OsEdition is not null) existing.OsEdition = hardware.OsEdition;
+        if (hardware.IsServer is not null) existing.IsServer = hardware.IsServer;
+        if (hardware.ProductType is not null) existing.ProductType = hardware.ProductType;
+        if (hardware.Domain is not null) existing.Domain = hardware.Domain;
+        if (hardware.Workgroup is not null) existing.Workgroup = hardware.Workgroup;
+        if (hardware.PartOfDomain is not null) existing.PartOfDomain = hardware.PartOfDomain;
+
+        if (hardware.IsLaptop is not null) existing.IsLaptop = hardware.IsLaptop;
+        if (hardware.MachineType is not null) existing.MachineType = hardware.MachineType;
+        if (hardware.ChassisType is not null) existing.ChassisType = hardware.ChassisType;
+        if (hardware.PcSystemType is not null) existing.PcSystemType = hardware.PcSystemType;
+
         existing.InventoryRaw = hardware.InventoryRaw;
         existing.HardwareComponentsJson = hardware.HardwareComponentsJson;
         existing.InventorySchemaVersion = hardware.InventorySchemaVersion;

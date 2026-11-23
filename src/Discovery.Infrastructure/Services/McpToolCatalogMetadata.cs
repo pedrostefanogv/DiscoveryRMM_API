@@ -37,6 +37,59 @@ public static class McpToolCatalogMetadata
     public static readonly IReadOnlySet<string> GovernableCapabilities =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { A2uiCapability };
 
+    /// <summary>
+    /// Tools legadas REMOVIDAS ou UNIFICADAS em famílias action-based. Elas não
+    /// têm mais handler no agente atual, mas o nome pode sobreviver em
+    /// mcp_tool_policies de instalações antigas: o auto-registro do agente
+    /// (EnsureGlobalPoliciesAsync) só INSERE linhas e nunca remove as que deixaram
+    /// de existir. Sem este mapa, cada consolidação deixava "fantasmas" na tela de
+    /// governança — uma instalação antiga continuava listando 76 tools enquanto uma
+    /// nova listava 57.
+    ///
+    /// valor = família que substituiu a tool; null = removida sem substituta
+    /// (navegação interna, hoje resolvida por cards/A2UI no chat).
+    ///
+    /// As entradas de metadados em <see cref="Known"/> para esses nomes são
+    /// mantidas como registro histórico, mas nunca são alcançadas porque
+    /// McpToolGovernance.GetCatalogAsync filtra os nomes substituídos.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string?> SupersededTools =
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            // software (winget) → família "software"
+            ["search_packages"] = "software",
+            ["list_installed_packages"] = "software",
+            ["get_pending_updates"] = "software",
+            ["get_package_actions"] = "software",
+            ["install_package"] = "software",
+            ["uninstall_package"] = "software",
+            ["upgrade_package"] = "software",
+            ["upgrade_all_packages"] = "software",
+
+            // Event Log do Windows → família "event_log"
+            ["query_event_log"] = "event_log",
+            ["get_recent_errors"] = "event_log",
+            ["get_recent_crashes"] = "event_log",
+
+            // Anotações locais da máquina → família "local_memory"
+            ["memory_list"] = "local_memory",
+            ["memory_create"] = "local_memory",
+            ["memory_delete"] = "local_memory",
+
+            // Captura de tela/janelas → família "screen"
+            ["capture_screenshot"] = "screen",
+            ["list_open_windows"] = "screen",
+            ["screenshot_permission"] = "screen",
+
+            // Navegação interna: removidas sem família (cards/A2UI assumiram).
+            ["get_internal_navigation_routes"] = null,
+            ["build_internal_navigation_link"] = null,
+        };
+
+    /// <summary>true quando o nome é de uma tool legada já substituída.</summary>
+    public static bool IsSuperseded(string? toolName) =>
+        !string.IsNullOrWhiteSpace(toolName) && SupersededTools.ContainsKey(toolName);
+
     /// <summary>Descrição da capacidade exibida na tela de governança.</summary>
     public static string? CapabilityDescription(string name) =>
         GovernableCapabilities.Contains(name)

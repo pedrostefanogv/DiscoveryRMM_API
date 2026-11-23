@@ -12,6 +12,9 @@ public class AgentHardwareComponents
     // sem coluna própria; agents antigos simplesmente não enviam as listas).
     public List<StartupItemInfo> StartupItems { get; set; } = [];
     public List<ScheduledTaskInfo> ScheduledTasks { get; set; } = [];
+    // Baterias (notebook). Desktop/VM: lista vazia. Vive no JSON de
+    // componentes, sem tabela própria — é um punhado de itens por máquina.
+    public List<AgentBatteryInfo> Batteries { get; set; } = [];
 
     // ── Windows Server ──────────────────────────────────────────────────
     // Coletados SÓ quando a máquina é Windows Server (o agente faz gate por

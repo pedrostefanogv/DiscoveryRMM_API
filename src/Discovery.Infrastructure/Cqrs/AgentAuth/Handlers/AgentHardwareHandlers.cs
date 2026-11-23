@@ -51,6 +51,11 @@ public sealed class GetAgentHardwareQueryHandler(
                 osEdition = hardware.OsEdition,
                 osIsServer = hardware.IsServer,
                 osProductType = hardware.ProductType,
+                // Formato físico da máquina (M294): null = não reportado.
+                isLaptop = hardware.IsLaptop,
+                machineType = hardware.MachineType,
+                chassisType = hardware.ChassisType,
+                pcSystemType = hardware.PcSystemType,
                 osDomain = hardware.Domain,
                 osWorkgroup = hardware.Workgroup,
                 osPartOfDomain = hardware.PartOfDomain,
@@ -208,6 +213,22 @@ public sealed class ReportAgentHardwareCommandHandler(
 
             var reportedPartOfDomain = ReadOsBool(hw, "osPartOfDomain", ["partOfDomain", "osIsDomainJoined"]);
             if (reportedPartOfDomain is not null) hardwareInfo.PartOfDomain = reportedPartOfDomain;
+
+            // ── Formato físico da máquina (notebook × desktop × tablet × servidor) ──
+            // Aliases tolerados para não descartar payload de versão diferente do
+            // agente. Valor ausente NÃO apaga o que já está gravado.
+            var reportedIsLaptop = ReadOsBool(hw, "isLaptop", ["isNotebook", "notebook"]);
+            if (reportedIsLaptop is not null) hardwareInfo.IsLaptop = reportedIsLaptop;
+
+            var reportedMachineType = ReadOsString(hw, "machineType", ["machine_type", "deviceType"]);
+            if (reportedMachineType is not null)
+                hardwareInfo.MachineType = NormalizeMachineType(reportedMachineType);
+
+            var reportedChassisType = ReadInt(hw, "chassisType", ["chassis_type"]);
+            if (reportedChassisType is not null) hardwareInfo.ChassisType = reportedChassisType;
+
+            var reportedPcSystemType = ReadInt(hw, "pcSystemType", ["pc_system_type", "systemType"]);
+            if (reportedPcSystemType is not null) hardwareInfo.PcSystemType = reportedPcSystemType;
         }
 
         // MachineScore: enviado pelo agent no nível raiz do envelope (cmd.MachineScore),
@@ -270,6 +291,38 @@ public sealed class ReportAgentHardwareCommandHandler(
             cmd.AgentId,
             collectedAt);
 
+        // ── Sync PARCIAL (só componentes) ──────────────────────────────────
+        //
+        // SyncNetworkConnections e SyncStartupAndScheduledTasks enviam APENAS
+        // o objeto "components" — sem "hardware" e sem "inventoryRaw". O
+        // UpsertAsync recopia campo a campo, então sem este carregamento os
+        // dados de hardware já persistidos (fabricante, modelo, processador,
+        // SO, séries, inventoryRaw) eram APAGADOS a cada sync parcial — e o
+        // sync de portas roda durante toda a vida do agente.
+        //
+        // Aqui o payload é claramente parcial, então preenchemos só o que ele
+        // NÃO trouxe com o estado atual: um sync parcial nunca apaga hardware.
+        // Um sync completo continua autoritativo (só campos nulos são
+        // preenchidos), inclusive para refletir mudanças legítimas.
+        if (cmd.Hardware is null && IsMissingInventoryRaw(cmd.InventoryRaw))
+        {
+            var current = await hardwareRepo.GetByAgentIdAsync(cmd.AgentId);
+            if (current is not null)
+            {
+                // Preenche o que este payload NÃO trouxe (só campos nulos).
+                FillMissingHardwareFields(hardwareInfo, current);
+
+                // Estes dois o payload parcial SOBRESCREVE sem ter coletado
+                // hardware: inventoryRaw chega como string vazia (o campo não
+                // tem omitempty no envelope) e inventoryCollectedAt chega com a
+                // hora do sync de portas. Restaurar evita perder o inventário
+                // cru (fallback de bateria/BitLocker/usuário no site) e evita
+                // anunciar uma coleta de hardware que não aconteceu.
+                hardwareInfo.InventoryRaw = current.InventoryRaw ?? hardwareInfo.InventoryRaw;
+                hardwareInfo.InventoryCollectedAt = current.InventoryCollectedAt ?? hardwareInfo.InventoryCollectedAt;
+            }
+        }
+
         await hardwareRepo.UpsertAsync(hardwareInfo, components);
 
         // Agendamento debounced: no-op quando AgentLabeling:TriggerOnInventorySync=false.
@@ -289,6 +342,7 @@ public sealed class ReportAgentHardwareCommandHandler(
     /// </summary>
     private static void FillMissingHardwareFields(AgentHardwareInfo target, AgentHardwareInfo source)
     {
+        target.InventoryRaw ??= source.InventoryRaw;
         target.InventorySchemaVersion ??= source.InventorySchemaVersion;
         target.InventoryCollectedAt ??= source.InventoryCollectedAt;
 
@@ -335,6 +389,36 @@ public sealed class ReportAgentHardwareCommandHandler(
         target.Domain ??= source.Domain;
         target.Workgroup ??= source.Workgroup;
         target.PartOfDomain ??= source.PartOfDomain;
+
+        // Formato físico da máquina.
+        target.IsLaptop ??= source.IsLaptop;
+        target.MachineType ??= source.MachineType;
+        target.ChassisType ??= source.ChassisType;
+        target.PcSystemType ??= source.PcSystemType;
+    }
+
+    /// <summary>MachineType canônico usado pelo painel (mesmo vocabulário do agente).</summary>
+    private static readonly HashSet<string> KnownMachineTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "notebook",
+        "desktop",
+        "tablet",
+        "server",
+        "unknown"
+    };
+
+    /// <summary>
+    /// Normaliza <c>machineType</c> para o vocabulário fechado. Qualquer valor
+    /// fora dele vira "unknown" — o painel não deve receber texto livre, e a
+    /// coluna é varchar(20) com semântica conhecida.
+    /// </summary>
+    private static string NormalizeMachineType(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+            return "unknown";
+
+        return KnownMachineTypes.Contains(trimmed) ? trimmed.ToLowerInvariant() : "unknown";
     }
 
     /// <summary>
@@ -391,6 +475,54 @@ public sealed class ReportAgentHardwareCommandHandler(
                 if (text is "true" or "1" or "sim" or "yes") return true;
                 if (text is "false" or "0" or "nao" or "não" or "no") return false;
             }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// true quando o payload NÃO trouxe inventário cru útil: campo ausente,
+    /// JSON null, string vazia ou string JSON vazia.
+    ///
+    /// Detalhe que importa: o envelope do agente emite <c>inventoryRaw</c> sem
+    /// omitempty, então um sync parcial (só componentes) manda <c>""</c> — e
+    /// <c>GetRawText()</c> devolveria <c>"\"\""</c>, que NÃO é vazio para
+    /// IsNullOrWhiteSpace. Sem esta distinção o sync parcial continuaria sendo
+    /// tratado como sync completo no carregamento dos campos de hardware.
+    /// </summary>
+    private static bool IsMissingInventoryRaw(JsonElement? raw)
+    {
+        if (raw is not { } element)
+            return true;
+
+        if (element.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return true;
+
+        var text = element.ValueKind == JsonValueKind.String
+            ? element.GetString()
+            : element.GetRawText();
+
+        return string.IsNullOrWhiteSpace(text) || text == "null";
+    }
+
+    /// <summary>
+    /// Lê um inteiro do objeto "hardware". Aceita número JSON e, por
+    /// tolerância, texto numérico ("2"). Devolve null quando ausente/ilegível —
+    /// assim um sync parcial NUNCA apaga o valor já persistido.
+    /// </summary>
+    private static int? ReadInt(JsonElement hw, string key, params string[] alternates)
+    {
+        foreach (var candidate in new[] { key }.Concat(alternates))
+        {
+            if (!hw.TryGetProperty(candidate, out var value))
+                continue;
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+                return number;
+
+            if (value.ValueKind == JsonValueKind.String
+                && int.TryParse(value.GetString(), out var parsed))
+                return parsed;
         }
 
         return null;

@@ -32,6 +32,7 @@ internal static class HardwareInventoryParser
             OpenSockets = ParseOpenSockets(root, agentId, collectedAt),
             StartupItems = ParseStartupItems(root, agentId, collectedAt),
             ScheduledTasks = ParseScheduledTasks(root, agentId, collectedAt),
+            Batteries = ParseBatteries(root, agentId, collectedAt),
 
             // Windows Server: roles, RAID/BMC, Hyper-V, cluster, storage/RDS.
             WindowsRoles = ParseWindowsRoles(root, agentId, collectedAt),
@@ -60,6 +61,7 @@ internal static class HardwareInventoryParser
             && result.OpenSockets.Count == 0
             && result.StartupItems.Count == 0
             && result.ScheduledTasks.Count == 0
+            && result.Batteries.Count == 0
             && result.WindowsRoles.Count == 0
             && result.RaidControllers.Count == 0
             && result.VirtualMachines.Count == 0
@@ -489,6 +491,11 @@ internal static class HardwareInventoryParser
             StartupItems = Pick(inc, hasIncoming, "startupItems", rawRoot, hasRaw, existing?.StartupItems, ParseStartupItems, agentId, collectedAt),
             ScheduledTasks = Pick(inc, hasIncoming, "scheduledTasks", rawRoot, hasRaw, existing?.ScheduledTasks, ParseScheduledTasks, agentId, collectedAt),
 
+            // Baterias: única lista cujo nome difere entre o envelope de
+            // componentes (batteries) e o inventário cru (battery, o nome do
+            // modelo Go que agentes já lançados enviam). Merge dedicado.
+            Batteries = PickBatteries(inc, hasIncoming, rawRoot, hasRaw, existing?.Batteries, agentId, collectedAt),
+
             // Windows Server. Os dados são aninhados (osRoles é array na raiz,
             // mas raidTools/vms/clusters/storagePools/rdsSessions vivem dentro
             // de serverHardware/hyperV/cluster/storageRds), por isso cada um tem
@@ -836,6 +843,93 @@ internal static class HardwareInventoryParser
             return value;
 
         return value.Length <= maxLength ? value : value[..maxLength];
+    }
+
+    /// <summary>
+    /// Baterias do agente. A lista é pequena (1-3 itens) e por isso vive no JSON
+    /// de componentes, sem tabela própria.
+    ///
+    /// Aceita <c>batteries</c> (envelope novo de componentes) e <c>battery</c>
+    /// (nome no inventoryRaw, herdado do modelo Go) — a mesma tolerância a
+    /// aliases dos outros parseadores evita rejeitar agente já lançado.
+    /// </summary>
+    private static List<AgentBatteryInfo> ParseBatteries(JsonElement root, Guid agentId, DateTime collectedAt)
+    {
+        var result = new List<AgentBatteryInfo>();
+
+        if (!ParseJson.TryGetArrayProperty(root, out var array, "batteries", "battery"))
+            return result;
+
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            result.Add(new AgentBatteryInfo
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                Manufacturer = Truncate(ParseJson.GetString(item, "manufacturer"), 200),
+                Model = Truncate(ParseJson.GetString(item, "model"), 200),
+                SerialNumber = Truncate(ParseJson.GetString(item, "serialNumber"), 100),
+                Chemistry = Truncate(ParseJson.GetString(item, "chemistry"), 50),
+                State = Truncate(ParseJson.GetString(item, "state"), 50),
+                Present = ParseJson.GetNullableBool(item, "present"),
+                OnAC = ParseJson.GetNullableBool(item, "onAc"),
+                Charging = ParseJson.GetBool(item, "charging"),
+                Charged = ParseJson.GetBool(item, "charged"),
+                PercentRemaining = NormalizeBatteryPercent(ParseJson.GetNullableInt(item, "percentRemaining")),
+                DesignedCapacityMAh = ParseJson.GetNullableInt(item, "designedCapacityMAh") ?? 0,
+                MaxCapacityMAh = ParseJson.GetNullableInt(item, "maxCapacityMAh") ?? 0,
+                CurrentCapacityMAh = ParseJson.GetNullableInt(item, "currentCapacityMAh") ?? 0,
+                Health = Truncate(ParseJson.GetString(item, "health"), 50),
+                CycleCount = ParseJson.GetNullableInt(item, "cycleCount") ?? 0,
+                MinutesUntilEmpty = ParseJson.GetNullableInt(item, "minutesUntilEmpty") ?? 0,
+                MinutesToCharge = ParseJson.GetNullableInt(item, "minutesToCharge") ?? 0,
+                CollectedAt = collectedAt
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Percentual sempre entre 0 e 100: 255 é o sentinela de "desconhecido" em
+    /// SYSTEM_POWER_STATUS e valor fora da faixa não pode chegar ao painel como
+    /// "255%". Fora da faixa é normalizado para 0 (o estado real vem de OnAC).
+    /// </summary>
+    private static int NormalizeBatteryPercent(int? value)
+    {
+        if (value is null || value < 0 || value > 100)
+            return 0;
+
+        return value.Value;
+    }
+
+    /// <summary>
+    /// Merge da lista de baterias: payload do agente → inventoryRaw → lista já
+    /// armazenada. Existe separado do <see cref="Pick"/> apenas porque o nome da
+    /// propriedade muda entre as duas fontes (batteries × battery).
+    /// </summary>
+    private static List<AgentBatteryInfo> PickBatteries(
+        JsonElement incoming,
+        bool hasIncoming,
+        JsonElement rawRoot,
+        bool hasRaw,
+        List<AgentBatteryInfo>? existing,
+        Guid agentId,
+        DateTime collectedAt)
+    {
+        if (hasIncoming && incoming.ValueKind == JsonValueKind.Object
+            && ParseJson.TryGetArrayProperty(incoming, out var fromPayload, "batteries", "battery"))
+        {
+            return ParseBatteries(WrapArrayAsRoot(fromPayload, "battery"), agentId, collectedAt);
+        }
+
+        if (hasRaw && ParseJson.TryGetArrayProperty(rawRoot, out var fromRaw, "battery", "batteries"))
+            return ParseBatteries(WrapArrayAsRoot(fromRaw, "battery"), agentId, collectedAt);
+
+        return existing ?? [];
     }
 
     private static List<T> Pick<T>(

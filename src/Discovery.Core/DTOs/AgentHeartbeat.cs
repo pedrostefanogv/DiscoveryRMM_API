@@ -49,5 +49,15 @@ public record AgentHeartbeat(
     // Quantas UIs companion estão conectadas ao serviço (agregado). Aditivo:
     // ausente em agentes antigos e no modo standalone. Complementa UiOnline
     // (bool) para o console distinguir 1 UI de 2+ sessões simultâneas.
-    int? UiOnlineCount = null
+    int? UiOnlineCount = null,
+
+    // ── Energia (bateria × tomada), ao vivo ──
+    // Este é o canal FREQUENTE (≈15 s): o inventário só roda a cada 24 h, então
+    // sem estes campos o painel mostraria "na tomada" para um notebook já
+    // desplugado. Todos opcionais e nullable: ausente = agente antigo/leitura
+    // incerta — NUNCA tratar ausência como false.
+    bool? HasBattery = null,
+    int? BatteryPercent = null,
+    bool? BatteryOnAc = null,
+    bool? BatteryCharging = null
 );

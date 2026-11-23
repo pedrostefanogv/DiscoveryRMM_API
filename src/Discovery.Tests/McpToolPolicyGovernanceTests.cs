@@ -6,6 +6,7 @@ using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
+using Discovery.Migrations.Migrations;
 using Microsoft.EntityFrameworkCore;
 using NUnit.Framework;
 
@@ -315,6 +316,73 @@ public class McpToolPolicyGovernanceTests
     }
 
     [Test]
+    public async Task Catalog_HidesSupersededTools_AndKeepsTheConsolidatedFamilies()
+    {
+        await using var db = NewDb();
+        // Cenário de instalação antiga: as famílias novas E os nomes legados
+        // (unificados nelas) coexistem em mcp_tool_policies.
+        db.Add(Global("software", enabled: true));
+        db.Add(Global("event_log", enabled: true));
+        db.Add(Global("local_memory", enabled: true));
+        db.Add(Global("screen", enabled: true));
+        db.Add(Global("search_packages", enabled: true));
+        db.Add(Global("capture_screenshot", enabled: true));
+        db.Add(Global("memory_list", enabled: true));
+        db.Add(Global("query_event_log", enabled: true));
+        db.Add(Global("get_internal_navigation_routes", enabled: true));
+        await db.SaveChangesAsync();
+
+        var governance = new McpToolGovernance(new McpToolPolicyRepository(db), new FakeExecutor());
+        var catalog = await governance.GetCatalogAsync(new McpToolScope(null, null, null));
+
+        foreach (var legacy in new[]
+                 {
+                     "search_packages", "capture_screenshot", "memory_list",
+                     "query_event_log", "get_internal_navigation_routes",
+                 })
+        {
+            Assert.That(catalog.Tools.Any(t => t.Name == legacy), Is.False,
+                $"a tool legada '{legacy}' não pode aparecer no catálogo — só a família substituta");
+        }
+
+        foreach (var family in new[] { "software", "event_log", "local_memory", "screen" })
+        {
+            Assert.That(catalog.Tools.Any(t => t.Name == family), Is.True,
+                $"a família consolidada '{family}' precisa continuar no catálogo");
+        }
+    }
+
+    [Test]
+    public async Task Catalog_KeepsSupersededName_WhenTheServerStillOwnsAHandler()
+    {
+        await using var db = NewDb();
+        db.Add(Global("capture_screenshot", enabled: true));
+        await db.SaveChangesAsync();
+
+        // Um handler vivo no servidor nunca pode ser escondido pelo filtro de
+        // nomes substituídos: o catálogo reflete o que o executor realmente tem.
+        var executor = new FakeExecutor([("capture_screenshot", "captura ainda no servidor")]);
+        var governance = new McpToolGovernance(new McpToolPolicyRepository(db), executor);
+        var catalog = await governance.GetCatalogAsync(new McpToolScope(null, null, null));
+
+        Assert.That(catalog.Tools.Any(t => t.Name == "capture_screenshot"), Is.True,
+            "nome legado com handler de servidor vivo continua visível");
+    }
+
+    [Test]
+    public void SupersededTools_MatchTheCleanupMigration()
+    {
+        // O filtro de runtime (SupersededTools) e a limpeza física (M295) guardam a
+        // MESMA lista de nomes legados em lugares diferentes; este teste impede que
+        // elas divirjam (um nome filtrado na tela mas não apagado do banco, ou
+        // vice-versa).
+        Assert.That(
+            M295_RemoveSupersededMcpToolPolicies.SupersededToolNames,
+            Is.EquivalentTo(McpToolCatalogMetadata.SupersededTools.Keys),
+            "a lista de nomes legados da M295 deve ser igual à de McpToolCatalogMetadata.SupersededTools");
+    }
+
+    [Test]
     public async Task RateLimit_LocalFallback_BlocksAfterMaxCallsPerMinute()
     {
         // Sem Redis (null) → usa o contador local, que é o fallback.
@@ -435,9 +503,10 @@ public class McpToolPolicyGovernanceTests
     }
 
     /// <summary>Executor falso: expõe um catálogo mínimo de tools de servidor.</summary>
-    private sealed class FakeExecutor : IMcpToolExecutor
+    private sealed class FakeExecutor(IReadOnlyList<(string Name, string Description)>? catalog = null)
+        : IMcpToolExecutor
     {
-        private static readonly IReadOnlyList<(string Name, string Description)> Catalog =
+        private static readonly IReadOnlyList<(string Name, string Description)> DefaultCatalog =
         [
             ("knowledge_search", "Busca na base de conhecimento."),
             ("get_inventory", "Inventário do computador."),
@@ -455,7 +524,7 @@ public class McpToolPolicyGovernanceTests
             Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default) =>
             Task.FromResult(new List<LlmTool>());
 
-        public IReadOnlyList<(string Name, string Description)> GetServerCatalog() => Catalog;
+        public IReadOnlyList<(string Name, string Description)> GetServerCatalog() => catalog ?? DefaultCatalog;
 
         public Task<bool> IsToolEnabledAsync(
             string toolName, Guid? clientId, Guid? siteId, Guid? agentId, CancellationToken ct = default) =>

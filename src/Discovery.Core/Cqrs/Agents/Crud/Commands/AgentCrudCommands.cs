@@ -71,7 +71,18 @@ public sealed record AgentDto(
     /// membro), "LanmanNT" (controlador de domínio). Único jeito de distinguir DC de
     /// membro; <c>null</c> = não reportado.
     /// </summary>
-    string? ProductType = null
+    string? ProductType = null,
+    /// <summary>
+    /// Notebook/tablet? Vem de <c>agent_hardware_info.is_laptop</c> (migration M294).
+    /// <c>null</c> = NÃO REPORTADO (agente antigo, VM sem WMI ou coleta inconclusiva) —
+    /// nunca "não é notebook". O site só mostra o selo com <c>true</c> explícito.
+    /// </summary>
+    bool? IsLaptop = null,
+    /// <summary>
+    /// Vocabulário fechado: "notebook" | "desktop" | "tablet" | "server" | "unknown".
+    /// <c>null</c> = não reportado.
+    /// </summary>
+    string? MachineType = null
 );
 
 /// <summary>Página de agentes na lixeira (soft-deleted), com o clientId já resolvido.</summary>
@@ -103,5 +114,12 @@ public sealed record HeartbeatMetricsDto(
     string? AgentVersion,
     string? CommitHash,
     DateTime? TimestampUtc,
-    DateTime? ReceivedAtUtc
+    DateTime? ReceivedAtUtc,
+    // ── Energia (bateria × tomada), ao vivo pelo heartbeat ──
+    // Ponteiros/nullable: null = não reportado (agente antigo ou leitura
+    // incerta). O painel esconde o bloco em vez de afirmar "sem bateria".
+    bool? HasBattery = null,
+    int? BatteryPercent = null,
+    bool? BatteryOnAc = null,
+    bool? BatteryCharging = null
 );

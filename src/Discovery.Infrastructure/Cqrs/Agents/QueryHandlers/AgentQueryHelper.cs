@@ -35,27 +35,35 @@ internal static class AgentQueryHelper
         PendingRebootCheckedAt: a.PendingRebootCheckedAt);
 
     /// <summary>
-    /// Identidade Windows Server por agente, vinda de <c>agent_hardware_info</c>
-    /// (colunas <c>os_is_server</c>/<c>os_product_type</c>, migration M272).
-    /// Valores <c>null</c> significam "não reportado" — nunca "não é servidor".
+    /// Identidade da máquina por agente, vinda de <c>agent_hardware_info</c>:
+    /// Windows Server/ProductType (M272) e formato físico — notebook × desktop ×
+    /// tablet × servidor (M294).
+    ///
+    /// Valores <c>null</c> significam "não reportado" — nunca "não é servidor" nem
+    /// "não é notebook". O painel só mostra o selo de notebook com <c>true</c>
+    /// explícito.
     /// </summary>
-    internal readonly record struct AgentOsIdentity(bool? IsServer, string? ProductType);
+    internal readonly record struct AgentMachineIdentity(
+        bool? IsServer,
+        string? ProductType,
+        bool? IsLaptop,
+        string? MachineType);
 
     /// <summary>
-    /// Busca a identidade de SO em LOTE para os agentes pedidos.
+    /// Busca a identidade da máquina em LOTE para os agentes pedidos.
     ///
     /// Feito à parte do MapToDto de propósito: a listagem de agentes é chamada
     /// com frequência e um Include/join por agente transformaria a consulta em
-    /// N+1. Aqui é UMA consulta projetando só as duas colunas, devolvendo um
+    /// N+1. Aqui é UMA consulta para todos os agentes da página, devolvendo um
     /// dicionário vazio quando o repositório não suporta (o DTO fica com null,
     /// que o site trata como "desconhecido" e cai para a heurística).
     /// </summary>
-    internal static async Task<Dictionary<Guid, AgentOsIdentity>> GetOsIdentityByAgentAsync(
+    internal static async Task<Dictionary<Guid, AgentMachineIdentity>> GetMachineIdentityByAgentAsync(
         IAgentHardwareRepository hardwareRepo,
         IReadOnlyCollection<Guid> agentIds,
         CancellationToken ct)
     {
-        var map = new Dictionary<Guid, AgentOsIdentity>(agentIds.Count);
+        var map = new Dictionary<Guid, AgentMachineIdentity>(agentIds.Count);
         if (agentIds.Count == 0)
             return map;
 
@@ -67,7 +75,11 @@ internal static class AgentQueryHelper
         {
             if (hardware is null)
                 continue;
-            map[agentId] = new AgentOsIdentity(hardware.IsServer, hardware.ProductType);
+            map[agentId] = new AgentMachineIdentity(
+                hardware.IsServer,
+                hardware.ProductType,
+                hardware.IsLaptop,
+                hardware.MachineType);
         }
 
         return map;
@@ -109,7 +121,8 @@ internal static class AgentQueryHelper
                 hb.P2pPeers, hb.UptimeSeconds, hb.ProcessCount,
                 hb.UiOnline,
                 hb.IpAddress, hb.Hostname, version, commitHash,
-                hb.LastHeartbeatAt, hb.LastHeartbeatAt),
+                hb.LastHeartbeatAt, hb.LastHeartbeatAt,
+                hb.HasBattery, hb.BatteryPercent, hb.BatteryOnAc, hb.BatteryCharging),
             PendingReboot: a.PendingReboot,
             PendingRebootReasons: a.PendingRebootReasons,
             PendingRebootCheckedAt: a.PendingRebootCheckedAt);
@@ -118,12 +131,18 @@ internal static class AgentQueryHelper
     }
 
     /// <summary>
-    /// MapToDto com a identidade de SO já resolvida (ver <see cref="AgentOsIdentity"/>).
-    /// Sobrecarga separada para NÃO obrigar todos os chamadores existentes a
-    /// carregar hardware só para montar o DTO.
+    /// MapToDto com a identidade da máquina já resolvida (ver
+    /// <see cref="AgentMachineIdentity"/>). Sobrecarga separada para NÃO obrigar
+    /// todos os chamadores existentes a carregar hardware só para montar o DTO.
     /// </summary>
-    internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb, AgentOsIdentity identity)
-        => MapToDto(a, hb) with { IsServer = identity.IsServer, ProductType = identity.ProductType };
+    internal static AgentDto MapToDto(Agent a, HeartbeatCacheEntry? hb, AgentMachineIdentity identity)
+        => MapToDto(a, hb) with
+        {
+            IsServer = identity.IsServer,
+            ProductType = identity.ProductType,
+            IsLaptop = identity.IsLaptop,
+            MachineType = identity.MachineType
+        };
 
     /// <summary>
     /// Precedência do usuário logado: heartbeat ao vivo (Redis) → último

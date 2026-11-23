@@ -99,6 +99,15 @@ public class McpToolGovernance : IMcpToolGovernance
         // aparecer na tela para poder ser ligadas/desligadas por escopo.
         names.UnionWith(McpToolCatalogMetadata.GovernableCapabilities);
 
+        // Tools legadas (unificadas em famílias action-based) podem sobreviver em
+        // mcp_tool_policies de instalações antigas: o auto-registro do agente só
+        // INSERE e nunca remove o que deixou de existir. Exibir o nome legado ao
+        // lado da família inflava a contagem da tela (76 em vez de 57). Filtramos
+        // aqui — a limpeza física das linhas fica na migration M295 —, mas NUNCA
+        // escondemos um nome que ainda tenha handler vivo no servidor.
+        names.RemoveWhere(name =>
+            McpToolCatalogMetadata.IsSuperseded(name) && !serverByName.ContainsKey(name));
+
         // Contagem de sobrescritas em lote: uma passada para TODAS as tools
         // (antes era uma consulta por tool = N+1 no catálogo).
         var lowerScopeCounts = await _policies.GetLowerScopeOverrideCountsAsync(

@@ -90,7 +90,13 @@ public sealed record AgentHardwareDto(
     string? ProductType = null,
     string? Domain = null,
     string? Workgroup = null,
-    bool? PartOfDomain = null
+    bool? PartOfDomain = null,
+    // Formato físico da máquina (M294). Nullable: NULL = não reportado (agente
+    // antigo/VM), nunca "não é notebook".
+    bool? IsLaptop = null,
+    string? MachineType = null,
+    int? ChassisType = null,
+    int? PcSystemType = null
 );
 
 /// <summary>
@@ -108,7 +114,35 @@ public sealed record AgentHardwareReportDto(
     DateTime? CollectedAt,
     // Windows Server (roles, RAID/BMC, Hyper-V, cluster, Storage/RDS).
     // Null em estações/agentes antigos.
-    AgentServerInventoryDto? ServerInventory = null
+    AgentServerInventoryDto? ServerInventory = null,
+    // Baterias (notebook). Vazio em desktop/VM e em agente antigo que ainda não
+    // envia a lista — o painel simplesmente não renderiza o card.
+    List<AgentBatteryDto>? Batteries = null
+);
+
+/// <summary>
+/// Bateria individual do agente. <see cref="OnAC"/> e <see cref="Present"/> são
+/// nullable: NULL = não reportado (nunca "falso"), o que impede o painel de
+/// afirmar "na bateria" a partir de leitura que falhou.
+/// </summary>
+public sealed record AgentBatteryDto(
+    string? Manufacturer,
+    string? Model,
+    string? SerialNumber,
+    string? Chemistry,
+    string? State,
+    bool? Present,
+    bool? OnAC,
+    bool Charging,
+    bool Charged,
+    int PercentRemaining,
+    int DesignedCapacityMAh,
+    int MaxCapacityMAh,
+    int CurrentCapacityMAh,
+    string? Health,
+    int CycleCount,
+    int MinutesUntilEmpty,
+    int MinutesToCharge
 );
 
 /// <summary>
@@ -233,7 +267,9 @@ public sealed record AgentHardwareComponentsDto(
     List<AgentHardwareMemoryModuleDto> MemoryModules,
     List<AgentStartupItemDto> StartupItems,
     List<AgentScheduledTaskDto> ScheduledTasks,
-    DateTime? CollectedAt
+    DateTime? CollectedAt,
+    // Baterias: pequenas e sempre incluídas (não dependem de IncludeNetwork).
+    List<AgentBatteryDto>? Batteries = null
 );
 
 public sealed record AgentStartupItemDto(

@@ -79,8 +79,8 @@ public sealed class GetAgentsBySiteQueryHandler(
         var agents = (await agentRepo.GetBySiteIdAsync(q.SiteId)).ToList();
         var heartbeatByAgent = await AgentQueryHelper.GetHeartbeatSnapshotAsync(heartbeatCache, agents.Select(a => a.Id));
         var grace = await AgentQueryHelper.GetOnlineGraceSecondsAsync(configResolver, q.SiteId);
-        // Identidade Windows Server em UMA consulta (ver AgentOsIdentity).
-        var osByAgent = await AgentQueryHelper.GetOsIdentityByAgentAsync(
+        // Identidade da máquina (servidor + formato físico) em UMA consulta.
+        var machineByAgent = await AgentQueryHelper.GetMachineIdentityByAgentAsync(
             hardwareRepo, agents.Select(a => a.Id).ToList(), ct);
 
         var dtos = new List<AgentDto>(agents.Count);
@@ -90,7 +90,7 @@ public sealed class GetAgentsBySiteQueryHandler(
             AgentQueryHelper.ApplyRealtimeHeartbeat(agent, heartbeat);
             AgentQueryHelper.ApplyEffectiveStatus(agent, grace);
             dtos.Add(AgentQueryHelper.WithLiveLoggedUser(
-                AgentQueryHelper.MapToDto(agent, heartbeat, osByAgent.GetValueOrDefault(agent.Id)), agent, heartbeat));
+                AgentQueryHelper.MapToDto(agent, heartbeat, machineByAgent.GetValueOrDefault(agent.Id)), agent, heartbeat));
         }
         return Result<IReadOnlyList<AgentDto>>.Success(dtos);
     }
@@ -114,8 +114,8 @@ public sealed class GetAgentsByClientQueryHandler(
         var agents = (await agentRepo.GetByClientIdAsync(q.ClientId)).ToList();
         var heartbeatByAgent = await AgentQueryHelper.GetHeartbeatSnapshotAsync(heartbeatCache, agents.Select(a => a.Id));
         var graceBySite = await AgentQueryHelper.GetOnlineGraceSecondsBySiteAsync(configResolver, agents.Select(a => a.SiteId).Distinct());
-        // Identidade Windows Server em UMA consulta (ver AgentOsIdentity).
-        var osByAgent = await AgentQueryHelper.GetOsIdentityByAgentAsync(
+        // Identidade da máquina (servidor + formato físico) em UMA consulta.
+        var machineByAgent = await AgentQueryHelper.GetMachineIdentityByAgentAsync(
             hardwareRepo, agents.Select(a => a.Id).ToList(), ct);
 
         var dtos = new List<AgentDto>(agents.Count);
@@ -125,7 +125,7 @@ public sealed class GetAgentsByClientQueryHandler(
             AgentQueryHelper.ApplyRealtimeHeartbeat(agent, heartbeat);
             AgentQueryHelper.ApplyEffectiveStatus(agent, graceBySite.GetValueOrDefault(agent.SiteId, 60));
             dtos.Add(AgentQueryHelper.WithLiveLoggedUser(
-                AgentQueryHelper.MapToDto(agent, heartbeat, osByAgent.GetValueOrDefault(agent.Id)), agent, heartbeat));
+                AgentQueryHelper.MapToDto(agent, heartbeat, machineByAgent.GetValueOrDefault(agent.Id)), agent, heartbeat));
         }
         return Result<IReadOnlyList<AgentDto>>.Success(dtos);
     }

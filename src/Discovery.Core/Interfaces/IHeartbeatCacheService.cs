@@ -132,4 +132,20 @@ public class HeartbeatCacheEntry
 
     /// <summary>Quantas UIs companion estão conectadas ao serviço (agregado).</summary>
     public int? UiOnlineCount { get; init; }
+
+    // ── Energia (bateria × tomada), ao vivo pelo heartbeat ──
+    // Null = não reportado. Entradas antigas no Redis desserializam com null
+    // (o JSON é aditivo), então não há backfill nem quebra de compatibilidade.
+
+    /// <summary>Presença de bateria; null = não reportado.</summary>
+    public bool? HasBattery { get; init; }
+
+    /// <summary>Carga atual em % (0-100); null = não reportada.</summary>
+    public int? BatteryPercent { get; init; }
+
+    /// <summary>Na tomada agora; null = não reportado.</summary>
+    public bool? BatteryOnAc { get; init; }
+
+    /// <summary>Carregando agora; null = não reportado.</summary>
+    public bool? BatteryCharging { get; init; }
 }

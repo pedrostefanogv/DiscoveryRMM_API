@@ -87,6 +87,29 @@ public class AgentHardwareInfo
     /// <summary>true quando o host é membro de um domínio AD (PartOfDomain).</summary>
     public bool? PartOfDomain { get; set; }
 
+    // ── Formato físico da máquina (migration M294) ──────────────────────────
+    // Todas NULLABLE pela mesma razão de IsServer: NULL = NÃO REPORTADO (agente
+    // antigo, VM sem WMI, coleta inconclusiva) — nunca "não é notebook".
+
+    /// <summary>
+    /// true quando a máquina é notebook (ou tablet/convertível). Derivado no
+    /// agente de PCSystemType + presença física de bateria.
+    /// </summary>
+    public bool? IsLaptop { get; set; }
+
+    /// <summary>
+    /// Vocabulário fechado: "notebook" | "desktop" | "tablet" | "server" |
+    /// "unknown". O servidor normaliza qualquer valor fora dele para "unknown",
+    /// para não gravar lixo nem quebrar o painel.
+    /// </summary>
+    public string? MachineType { get; set; }
+
+    /// <summary>SMBIOS chassis type quando o agente conseguir ler (hoje não envia).</summary>
+    public int? ChassisType { get; set; }
+
+    /// <summary>Win32_ComputerSystem.PCSystemType(Ex) usado na classificação.</summary>
+    public int? PcSystemType { get; set; }
+
     public DateTime CollectedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
