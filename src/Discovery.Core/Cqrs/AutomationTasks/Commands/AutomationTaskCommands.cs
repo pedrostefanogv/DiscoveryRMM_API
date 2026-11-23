@@ -32,6 +32,7 @@ public sealed record CreateAutomationTaskCommand(
     bool? WriteOutputToNote = null,
     bool TaskRespectMaintenanceWindow = false,
     string? Key = null,
+    int? ExecutionOrder = null,
     string? ChangedBy = null,
     string? IpAddress = null,
     string? CorrelationId = null
@@ -66,6 +67,7 @@ public sealed record UpdateAutomationTaskCommand(
     bool? WriteOutputToNote = null,
     bool? TaskRespectMaintenanceWindow = null,
     string? Key = null,
+    int? ExecutionOrder = null,
     string? Reason = null,
     string? ChangedBy = null,
     string? IpAddress = null,

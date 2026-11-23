@@ -13,6 +13,7 @@ public class AutomationScriptDefinition
     public string Version { get; set; } = "1.0.0";
     public string Content { get; set; } = string.Empty;
     public bool IsActive { get; set; } = true;
+    public DateTime? DeletedAt { get; set; }
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

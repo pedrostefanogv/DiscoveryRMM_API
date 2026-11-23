@@ -30,16 +30,26 @@ public class AutomationScriptService : IAutomationScriptService
         _loggingService = loggingService;
     }
 
-    public async Task<CursorPageDto<AutomationScriptSummaryDto>> GetListPageAsync(
+    public Task<CursorPageDto<AutomationScriptSummaryDto>> GetListPageAsync(
         Guid? clientId,
         bool activeOnly,
         string? cursor,
         int limit,
         CancellationToken cancellationToken = default)
+        => GetListPageAsync(clientId, activeOnly, cursor, limit, cancellationToken, null, null);
+
+    public async Task<CursorPageDto<AutomationScriptSummaryDto>> GetListPageAsync(
+        Guid? clientId,
+        bool activeOnly,
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken,
+        string? search,
+        AutomationScriptType? scriptType)
     {
         _ = cancellationToken;
         var safeLimit = Math.Clamp(limit, 1, 200);
-        var items = await _scriptRepository.GetListPageAsync(clientId, activeOnly, cursor, safeLimit);
+        var items = await _scriptRepository.GetListPageAsync(clientId, activeOnly, cursor, safeLimit, search, scriptType);
         var slice = CursorPaginationHelper.SlicePage<AutomationScriptDefinition>(items, safeLimit);
         var pageItems = slice.Page.Select(ToSummaryDto).ToList();
         return new CursorPageDto<AutomationScriptSummaryDto>(

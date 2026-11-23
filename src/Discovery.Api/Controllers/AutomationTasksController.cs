@@ -1,7 +1,10 @@
+using Discovery.Api.Filters;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AutomationTasks.Commands;
 using Discovery.Core.Cqrs.CustomFields.Queries;
 using Discovery.Core.Cqrs.AutomationTasks.Queries;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,6 +17,7 @@ namespace Discovery.Api.Controllers;
 public class AutomationTasksController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? clientId = null,
         [FromQuery] string? cursor = null,
@@ -39,13 +43,15 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetById(Guid id)
     {
         var result = await mediator.Send(new GetAutomationTaskByIdQuery(id));
-        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) }) : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(success: Ok, failure: MapFailure);
     }
 
     [HttpGet("{id:guid}/audit")]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAudit(Guid id, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new GetAutomationTaskAuditQuery(id, limit));
@@ -53,23 +59,34 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
     }
 
     [HttpGet("{id:guid}/executions")]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetExecutions(Guid id, [FromQuery] int limit = 50)
     {
         var result = await mediator.Send(new GetAutomationTaskExecutionsQuery(id, Math.Clamp(limit, 1, 500)));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        return result.Match<IActionResult>(success: Ok, failure: MapFailure);
+    }
+
+    [HttpGet("{id:guid}/preview-targets")]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> PreviewTargets(Guid id, [FromQuery] int limit = 50, [FromQuery] int offset = 0)
+    {
+        var result = await mediator.Send(new PreviewAutomationTaskTargetsQuery(id, Math.Clamp(limit, 1, 200), Math.Max(0, offset)));
+        return result.Match<IActionResult>(success: Ok, failure: MapFailure);
     }
 
     [HttpPost]
+    [RequirePermission(ResourceType.Automation, ActionType.Create, ScopeSource.AccessList)]
     public async Task<IActionResult> Create([FromBody] CreateAutomationTaskCommand cmd)
     {
-        var result = await mediator.Send(cmd);
+        var result = await mediator.Send(cmd with
+        {
+            ChangedBy = CurrentActor(),
+            IpAddress = ClientIp(),
+            CorrelationId = CorrelationId()
+        });
         return result.Match<IActionResult>(
             success: dto => CreatedAtAction(nameof(GetById), new { id = dto.Id }, dto),
-            failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+            failure: MapFailure);
     }
 
     /// <summary>
@@ -77,6 +94,7 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
     /// autorização da automação, e não mais sob ServerConfig.
     /// </summary>
     [HttpGet("{id:guid}/custom-fields")]
+    [RequirePermission(ResourceType.Automation, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFields(Guid id)
     {
         var result = await mediator.Send(new ListCustomFieldsQuery(null, false, id, null));
@@ -84,35 +102,65 @@ public class AutomationTasksController(IMediator mediator) : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [RequirePermission(ResourceType.Automation, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAutomationTaskCommand cmd)
     {
-        var result = await mediator.Send(cmd with { Id = id });
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));
+        var result = await mediator.Send(cmd with
+        {
+            Id = id,
+            ChangedBy = CurrentActor(),
+            IpAddress = ClientIp(),
+            CorrelationId = CorrelationId()
+        });
+        return result.Match<IActionResult>(success: Ok, failure: MapFailure);
     }
 
     [HttpDelete("{id:guid}")]
+    [RequirePermission(ResourceType.Automation, ActionType.Delete, ScopeSource.AccessList)]
     public async Task<IActionResult> Delete(Guid id, [FromQuery] string? reason = null)
     {
-        var result = await mediator.Send(new DeleteAutomationTaskCommand(id, reason));
-        return result.Match<IActionResult>(
-            success: _ => NoContent(),
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        var result = await mediator.Send(new DeleteAutomationTaskCommand(
+            id,
+            reason,
+            CurrentActor(),
+            ClientIp(),
+            CorrelationId()));
+        return result.Match<IActionResult>(success: _ => NoContent(), failure: MapFailure);
     }
 
     [HttpPatch("{id:guid}/restore")]
+    [RequirePermission(ResourceType.Automation, ActionType.Edit, ScopeSource.AccessList)]
     public async Task<IActionResult> Restore(Guid id, [FromQuery] string? reason = null)
     {
-        var result = await mediator.Send(new RestoreAutomationTaskCommand(id, reason));
-        return result.Match<IActionResult>(
-            success: Ok,
-            failure: errors => errors[0].Code == "NotFound"
-                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
-                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+        var result = await mediator.Send(new RestoreAutomationTaskCommand(
+            id,
+            reason,
+            CurrentActor(),
+            ClientIp(),
+            CorrelationId()));
+        return result.Match<IActionResult>(success: Ok, failure: MapFailure);
     }
+
+    private IActionResult MapFailure(IReadOnlyList<Error> errors)
+    {
+        var body = new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) };
+        return errors[0].Code switch
+        {
+            "NotFound" => NotFound(body),
+            "Forbidden" => StatusCode(StatusCodes.Status403Forbidden, body),
+            _ => BadRequest(body)
+        };
+    }
+
+    private string CurrentActor()
+        => HttpContext?.Items["UserId"] is Guid userId
+            ? $"user:{userId}"
+            : HttpContext?.Items["Username"] as string ?? "system";
+
+    private string? ClientIp() => HttpContext?.Connection.RemoteIpAddress?.ToString();
+
+    private string CorrelationId()
+        => HttpContext is not null && Request.Headers.TryGetValue("X-Correlation-Id", out var values) && !string.IsNullOrWhiteSpace(values.ToString())
+            ? values.ToString()
+            : "api";
 }

@@ -26,6 +26,7 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.Version).HasColumnName("version").HasMaxLength(50);
             entity.Property(s => s.Content).HasColumnName("content").HasColumnType("text");
             entity.Property(s => s.IsActive).HasColumnName("is_active");
+            entity.Property(s => s.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
             entity.Property(s => s.LastUpdatedAt).HasColumnName("last_updated_at").HasColumnType("timestamptz");
             entity.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             entity.Property(s => s.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");

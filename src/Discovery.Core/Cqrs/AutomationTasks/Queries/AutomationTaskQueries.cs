@@ -27,6 +27,7 @@ public sealed record ListAutomationTasksQuery(
 public sealed record GetAutomationTaskByIdQuery(Guid Id) : IQuery<Result<AutomationTaskDetailDto>>;
 public sealed record GetAutomationTaskAuditQuery(Guid Id, int Limit = 50) : IQuery<Result<IReadOnlyList<AutomationTaskAuditDto>>>;
 public sealed record GetAutomationTaskExecutionsQuery(Guid Id, int Limit = 50) : IQuery<Result<IReadOnlyList<AutomationTaskExecutionDto>>>;
+public sealed record PreviewAutomationTaskTargetsQuery(Guid Id, int Limit = 50, int Offset = 0) : IQuery<Result<AutomationTaskTargetPreviewPageDto>>;
 
 [Obsolete("Substituído por AutomationTaskSummaryDto na listagem (não expõe escopo). Manter até v2.")]
 public sealed record AutomationTaskDto(Guid Id, string Name, string? Description, bool IsActive, DateTime CreatedAt, DateTime UpdatedAt);

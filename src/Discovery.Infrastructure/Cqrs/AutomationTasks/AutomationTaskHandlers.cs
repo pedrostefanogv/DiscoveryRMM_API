@@ -4,12 +4,82 @@ using Discovery.Core.Cqrs.AutomationTasks.Commands;
 using Discovery.Core.Cqrs.AutomationTasks.Queries;
 using Discovery.Core.DTOs;
 using Discovery.Core.Enums;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 namespace Discovery.Infrastructure.Cqrs.AutomationTasks;
+
+internal static class AutomationTaskScopeGuard
+{
+    public static async Task<Error?> ResolveAndCheckScopeAccessAsync(
+        IScopeContext? scopeContext,
+        ISiteRepository? siteRepo,
+        IAgentRepository? agentRepo,
+        ActionType action,
+        AppApprovalScopeType scopeType,
+        Guid? scopeId,
+        Guid? fallbackClientId = null,
+        Guid? fallbackSiteId = null)
+    {
+        if (scopeContext is null || !scopeContext.UserId.HasValue)
+            return null;
+
+        var access = await scopeContext.GetAccessAsync(ResourceType.Automation, action);
+        if (access.HasGlobalAccess)
+            return null;
+
+        Guid? clientId = fallbackClientId;
+        Guid? siteId = fallbackSiteId;
+
+        if (scopeType == AppApprovalScopeType.Site && scopeId.HasValue)
+        {
+            siteId = scopeId.Value;
+            if (siteRepo is not null)
+            {
+                var site = await siteRepo.GetByIdAsync(scopeId.Value);
+                clientId = site?.ClientId ?? fallbackClientId;
+            }
+        }
+        else if (scopeType == AppApprovalScopeType.Agent && scopeId.HasValue)
+        {
+            if (agentRepo is not null)
+            {
+                var agent = await agentRepo.GetByIdAsync(scopeId.Value);
+                siteId = agent?.SiteId ?? fallbackSiteId;
+            }
+            if (siteRepo is not null && siteId.HasValue)
+            {
+                var site = await siteRepo.GetByIdAsync(siteId.Value);
+                clientId = site?.ClientId ?? fallbackClientId;
+            }
+        }
+
+        var allowed = scopeType switch
+        {
+            AppApprovalScopeType.Global => false,
+            AppApprovalScopeType.Client => TenantScopePolicy.Allows(access, scopeId ?? clientId ?? Guid.Empty, Guid.Empty),
+            AppApprovalScopeType.Site => TenantScopePolicy.Allows(access, clientId ?? Guid.Empty, siteId ?? Guid.Empty),
+            AppApprovalScopeType.Agent => TenantScopePolicy.Allows(access, clientId ?? Guid.Empty, siteId ?? Guid.Empty),
+            _ => false
+        };
+
+        return allowed ? null : Error.Forbidden("Você não tem permissão para operar tarefas neste escopo.");
+    }
+
+    public static Task<Error?> CheckScopeAccessAsync(
+        IScopeContext? scopeContext,
+        ActionType action,
+        AppApprovalScopeType scopeType,
+        Guid? scopeId,
+        Guid? resolvedClientId = null,
+        Guid? resolvedSiteId = null)
+        => ResolveAndCheckScopeAccessAsync(scopeContext, null, null, action, scopeType, scopeId, resolvedClientId, resolvedSiteId);
+}
 
 public sealed class ListAutomationTasksQueryHandler(IAutomationTaskService svc) : IRequestHandler<ListAutomationTasksQuery, Result<CursorPageDto<AutomationTaskSummaryDto>>>
 {
@@ -125,18 +195,39 @@ public sealed class GetAutomationTaskExecutionsQueryHandler(
     }
 }
 
+public sealed class PreviewAutomationTaskTargetsQueryHandler(
+    IAutomationTaskService svc) : IRequestHandler<PreviewAutomationTaskTargetsQuery, Result<AutomationTaskTargetPreviewPageDto>>
+{
+    public async Task<Result<AutomationTaskTargetPreviewPageDto>> Handle(PreviewAutomationTaskTargetsQuery q, CancellationToken ct)
+    {
+        var page = await svc.PreviewTargetAgentsAsync(q.Id, q.Limit, q.Offset, ct);
+        if (page is null)
+            return Result<AutomationTaskTargetPreviewPageDto>.Failure(Error.NotFound($"Task {q.Id} not found"));
+
+        return Result<AutomationTaskTargetPreviewPageDto>.Success(page);
+    }
+}
+
 // ── Commands ─────────────────────────────────────────────────────────
 
 public sealed class CreateAutomationTaskCommandHandler(
     IAutomationTaskService svc,
-    ISyncInvalidationPublisher syncPublisher) : IRequestHandler<CreateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
+    ISyncInvalidationPublisher syncPublisher,
+    IScopeContext? scopeContext = null,
+    ISiteRepository? siteRepo = null,
+    IAgentRepository? agentRepo = null) : IRequestHandler<CreateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
 {
     public async Task<Result<AutomationTaskDetailDto>> Handle(CreateAutomationTaskCommand cmd, CancellationToken ct)
     {
+        var denied = await AutomationTaskScopeGuard.ResolveAndCheckScopeAccessAsync(
+            scopeContext, siteRepo, agentRepo, ActionType.Create, cmd.ScopeType, cmd.ScopeId);
+        if (denied is not null)
+            return Result<AutomationTaskDetailDto>.Failure(denied);
+
         var request = new CreateAutomationTaskRequest
         {
             Name = cmd.Name,
-            Description = cmd.Description,
+            Description = string.IsNullOrWhiteSpace(cmd.Description) ? null : cmd.Description,
             ActionType = cmd.ActionType,
             InstallationType = cmd.InstallationType,
             PackageId = cmd.PackageId,
@@ -156,10 +247,11 @@ public sealed class CreateAutomationTaskCommandHandler(
             CloseProcesses = cmd.CloseProcesses ?? (IReadOnlyList<string>)[],
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds,
             NotificationMode = cmd.NotificationMode,
-            CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId,
+            CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId == Guid.Empty ? null : cmd.CollectorFieldDefinitionId,
             WriteOutputToNote = cmd.WriteOutputToNote ?? false,
             TaskRespectMaintenanceWindow = cmd.TaskRespectMaintenanceWindow,
             Key = cmd.Key,
+            ExecutionOrder = cmd.ExecutionOrder,
             ToastTiming = cmd.ToastTiming,
             IsActive = cmd.IsActive
         };
@@ -235,7 +327,10 @@ internal static class AutomationTaskValidationGuard
 
 public sealed class UpdateAutomationTaskCommandHandler(
     IAutomationTaskService svc,
-    ISyncInvalidationPublisher syncPublisher) : IRequestHandler<UpdateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
+    ISyncInvalidationPublisher syncPublisher,
+    IScopeContext? scopeContext = null,
+    ISiteRepository? siteRepo = null,
+    IAgentRepository? agentRepo = null) : IRequestHandler<UpdateAutomationTaskCommand, Result<AutomationTaskDetailDto>>
 {
     public async Task<Result<AutomationTaskDetailDto>> Handle(UpdateAutomationTaskCommand cmd, CancellationToken ct)
     {
@@ -246,6 +341,55 @@ public sealed class UpdateAutomationTaskCommandHandler(
         if (current is null)
             return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
 
+        // Verifica acesso no escopo ATUAL da tarefa.
+        var deniedCurrent = await AutomationTaskScopeGuard.ResolveAndCheckScopeAccessAsync(
+            scopeContext,
+            siteRepo,
+            agentRepo,
+            ActionType.Edit,
+            current.ScopeType,
+            current.ScopeId,
+            current.ScopeClientId,
+            current.ScopeSiteId);
+        if (deniedCurrent is not null)
+            return Result<AutomationTaskDetailDto>.Failure(deniedCurrent);
+
+        var targetScopeType = cmd.ScopeType ?? current.ScopeType;
+        var targetScopeId = cmd.ScopeType.HasValue ? cmd.ScopeId : current.ScopeId;
+        if (targetScopeType != current.ScopeType || targetScopeId != current.ScopeId)
+        {
+            // Se o escopo mudou, valida também o escopo DESTINO sem herdar client/site antigos.
+            var deniedTarget = await AutomationTaskScopeGuard.ResolveAndCheckScopeAccessAsync(
+                scopeContext,
+                siteRepo,
+                agentRepo,
+                ActionType.Edit,
+                targetScopeType,
+                targetScopeId);
+            if (deniedTarget is not null)
+                return Result<AutomationTaskDetailDto>.Failure(deniedTarget);
+        }
+
+        var nextActionType = cmd.ActionType ?? current.ActionType;
+        var isPackageAction = nextActionType is AutomationTaskActionType.InstallPackage
+            or AutomationTaskActionType.UpdatePackage
+            or AutomationTaskActionType.RemovePackage
+            or AutomationTaskActionType.UpdateOrInstallPackage;
+
+        // Se o ActionType mudou, limpa campos incompatíveis do tipo anterior
+        // (ex.: CollectorFieldDefinitionId de RunScript não pode bloquear InstallPackage).
+        var resolvedCollectorFieldId = nextActionType != AutomationTaskActionType.RunScript
+            ? null
+            : cmd.CollectorFieldDefinitionId == Guid.Empty
+                ? null
+                : (cmd.CollectorFieldDefinitionId ?? current.CollectorFieldDefinitionId);
+
+        var resolvedDescription = cmd.Description is null
+            ? current.Description
+            : (string.IsNullOrWhiteSpace(cmd.Description) ? null : cmd.Description);
+
+        var resolvedTriggerRecurring = cmd.TriggerRecurring ?? current.TriggerRecurring;
+
         var request = new UpdateAutomationTaskRequest
         {
             // PUT parcial: TODO campo ausente preserva o valor atual. Antes, os
@@ -253,33 +397,34 @@ public sealed class UpdateAutomationTaskCommandHandler(
             // um PUT só com "description" virava RunScript ou policy GLOBAL,
             // apagando ClientId/SiteId/AgentId (revisão 2026-10-31, A03).
             Name = cmd.Name ?? current.Name,
-            Description = cmd.Description ?? current.Description,
-            ActionType = cmd.ActionType ?? current.ActionType,
-            InstallationType = cmd.InstallationType ?? current.InstallationType,
-            PackageId = cmd.PackageId ?? current.PackageId,
-            ScriptId = cmd.ScriptId ?? current.ScriptId,
-            CommandPayload = cmd.CommandPayload ?? current.CommandPayload,
-            ScopeType = cmd.ScopeType ?? current.ScopeType,
+            Description = resolvedDescription,
+            ActionType = nextActionType,
+            InstallationType = isPackageAction ? (cmd.InstallationType ?? current.InstallationType) : null,
+            PackageId = isPackageAction ? (cmd.PackageId ?? current.PackageId) : null,
+            ScriptId = nextActionType == AutomationTaskActionType.RunScript ? (cmd.ScriptId ?? current.ScriptId) : null,
+            CommandPayload = nextActionType == AutomationTaskActionType.CustomCommand ? (cmd.CommandPayload ?? current.CommandPayload) : null,
+            ScopeType = targetScopeType,
             // Sem troca de escopo declarada, mantém o scopeId do registro; um
             // ScopeId explícito acompanha a troca de tipo de escopo.
-            ScopeId = cmd.ScopeType.HasValue ? cmd.ScopeId : current.ScopeId,
+            ScopeId = targetScopeId,
             IncludeTags = cmd.IncludeTags ?? current.IncludeTags,
             ExcludeTags = cmd.ExcludeTags ?? current.ExcludeTags,
             TriggerImmediate = cmd.TriggerImmediate ?? current.TriggerImmediate,
-            TriggerRecurring = cmd.TriggerRecurring ?? current.TriggerRecurring,
+            TriggerRecurring = resolvedTriggerRecurring,
             TriggerOnUserLogin = cmd.TriggerOnUserLogin ?? current.TriggerOnUserLogin,
             TriggerOnAgentCheckIn = cmd.TriggerOnAgentCheckIn ?? current.TriggerOnAgentCheckIn,
-            ScheduleCron = cmd.ScheduleCron ?? current.ScheduleCron,
+            ScheduleCron = resolvedTriggerRecurring ? (cmd.ScheduleCron ?? current.ScheduleCron) : null,
             RequiresApproval = cmd.RequiresApproval ?? current.RequiresApproval,
             IsActive = cmd.IsActive ?? current.IsActive,
             AllowDefer = cmd.AllowDefer ?? current.AllowDefer,
             CloseProcesses = cmd.CloseProcesses ?? current.CloseProcesses,
             PromptTimeoutSeconds = cmd.PromptTimeoutSeconds ?? current.PromptTimeoutSeconds,
             NotificationMode = cmd.NotificationMode ?? current.NotificationMode,
-            CollectorFieldDefinitionId = cmd.CollectorFieldDefinitionId ?? current.CollectorFieldDefinitionId,
+            CollectorFieldDefinitionId = resolvedCollectorFieldId,
             WriteOutputToNote = cmd.WriteOutputToNote ?? current.WriteOutputToNote,
             TaskRespectMaintenanceWindow = cmd.TaskRespectMaintenanceWindow ?? current.TaskRespectMaintenanceWindow,
             Key = cmd.Key ?? current.Key,
+            ExecutionOrder = cmd.ExecutionOrder ?? current.ExecutionOrder,
             ToastTiming = cmd.ToastTiming ?? current.ToastTiming,
             Reason = cmd.Reason
         };
@@ -307,20 +452,44 @@ public sealed class UpdateAutomationTaskCommandHandler(
     }
 }
 
-public sealed class DeleteAutomationTaskCommandHandler(IAutomationTaskService svc) : IRequestHandler<DeleteAutomationTaskCommand, Result<VoidResult>>
+public sealed class DeleteAutomationTaskCommandHandler(
+    IAutomationTaskService svc,
+    IScopeContext? scopeContext = null) : IRequestHandler<DeleteAutomationTaskCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteAutomationTaskCommand cmd, CancellationToken ct)
     {
+        var current = await svc.GetByIdAsync(cmd.Id, includeInactive: true, ct);
+        if (current is null)
+            return Result<VoidResult>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
+
+        var denied = await AutomationTaskScopeGuard.CheckScopeAccessAsync(
+            scopeContext, ActionType.Delete, current.ScopeType, current.ScopeId, current.ScopeClientId, current.ScopeSiteId);
+        if (denied is not null)
+            return Result<VoidResult>.Failure(denied);
+
         var ok = await svc.DeleteAsync(cmd.Id, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", cmd.Reason, ct);
         return ok ? Result<VoidResult>.Success(VoidResult.Value) : Result<VoidResult>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
     }
 }
 
-public sealed class RestoreAutomationTaskCommandHandler(IAutomationTaskService svc) : IRequestHandler<RestoreAutomationTaskCommand, Result<AutomationTaskDetailDto>>
+public sealed class RestoreAutomationTaskCommandHandler(
+    IAutomationTaskService svc,
+    IScopeContext? scopeContext = null) : IRequestHandler<RestoreAutomationTaskCommand, Result<AutomationTaskDetailDto>>
 {
     public async Task<Result<AutomationTaskDetailDto>> Handle(RestoreAutomationTaskCommand cmd, CancellationToken ct)
     {
-        var result = await svc.RestoreAsync(cmd.Id, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", cmd.Reason, ct);
+        var current = await svc.GetByIdAsync(cmd.Id, includeInactive: true, ct);
+        if (current is null)
+            return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
+
+        var denied = await AutomationTaskScopeGuard.CheckScopeAccessAsync(
+            scopeContext, ActionType.Edit, current.ScopeType, current.ScopeId, current.ScopeClientId, current.ScopeSiteId);
+        if (denied is not null)
+            return Result<AutomationTaskDetailDto>.Failure(denied);
+
+        var (result, restoreError) = await AutomationTaskValidationGuard.TryAsync(async () =>
+            await svc.RestoreAsync(cmd.Id, cmd.ChangedBy, cmd.IpAddress, cmd.CorrelationId ?? "api", cmd.Reason, ct));
+        if (restoreError is not null) return Result<AutomationTaskDetailDto>.Failure(restoreError);
         if (result is null) return Result<AutomationTaskDetailDto>.Failure(Error.NotFound($"Task {cmd.Id} not found"));
         return Result<AutomationTaskDetailDto>.Success(result);
     }

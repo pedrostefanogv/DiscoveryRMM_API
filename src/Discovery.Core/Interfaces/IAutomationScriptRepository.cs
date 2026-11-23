@@ -1,4 +1,5 @@
 using Discovery.Core.Entities;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Interfaces;
 
@@ -20,8 +21,18 @@ public interface IAutomationScriptRepository
     Task<IReadOnlyDictionary<Guid, AutomationScriptDefinition>> GetByIdsAsync(
         IReadOnlyCollection<Guid> ids,
         bool includeInactive = false);
-    Task<IReadOnlyList<AutomationScriptDefinition>> GetListPageAsync(Guid? clientId, bool activeOnly, string? cursor, int limit);
-    Task<int> CountAsync(Guid? clientId, bool activeOnly);
+    Task<IReadOnlyList<AutomationScriptDefinition>> GetListPageAsync(
+        Guid? clientId,
+        bool activeOnly,
+        string? cursor,
+        int limit,
+        string? search = null,
+        AutomationScriptType? scriptType = null);
+    Task<int> CountAsync(
+        Guid? clientId,
+        bool activeOnly,
+        string? search = null,
+        AutomationScriptType? scriptType = null);
     Task UpdateAsync(AutomationScriptDefinition script);
     Task DeleteAsync(Guid id);
 }
