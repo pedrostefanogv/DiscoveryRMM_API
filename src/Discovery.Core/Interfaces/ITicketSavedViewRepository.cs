@@ -4,7 +4,7 @@ namespace Discovery.Core.Interfaces;
 
 public interface ITicketSavedViewRepository
 {
-    Task<IEnumerable<TicketSavedView>> GetByUserAsync(Guid? userId);
+    Task<IEnumerable<TicketSavedView>> GetByUserAsync(Guid? userId, bool hasGlobalAccess = true, IReadOnlyCollection<Guid>? allowedClientIds = null);
     Task<TicketSavedView?> GetByIdAsync(Guid id);
     Task<TicketSavedView> CreateAsync(TicketSavedView view);
     Task UpdateAsync(TicketSavedView view);

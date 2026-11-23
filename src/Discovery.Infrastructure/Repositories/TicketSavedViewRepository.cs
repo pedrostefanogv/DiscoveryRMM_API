@@ -15,11 +15,26 @@ public class TicketSavedViewRepository : ITicketSavedViewRepository
         _db = db;
     }
 
-    public async Task<IEnumerable<TicketSavedView>> GetByUserAsync(Guid? userId)
+    public async Task<IEnumerable<TicketSavedView>> GetByUserAsync(
+        Guid? userId,
+        bool hasGlobalAccess = true,
+        IReadOnlyCollection<Guid>? allowedClientIds = null)
     {
-        return await _db.TicketSavedViews
-            .AsNoTracking()
-            .Where(v => v.UserId == userId || v.IsShared)
+        var query = _db.TicketSavedViews.AsNoTracking();
+
+        if (hasGlobalAccess)
+        {
+            query = query.Where(v => v.UserId == userId || v.IsShared);
+        }
+        else
+        {
+            var clients = allowedClientIds ?? Array.Empty<Guid>();
+            query = query.Where(v =>
+                v.UserId == userId ||
+                (v.IsShared && (v.ClientId == null || clients.Contains(v.ClientId.Value))));
+        }
+
+        return await query
             .OrderBy(v => v.Name)
             .ToListAsync();
     }

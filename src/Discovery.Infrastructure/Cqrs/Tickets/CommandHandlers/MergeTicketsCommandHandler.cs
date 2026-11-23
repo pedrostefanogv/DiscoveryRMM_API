@@ -72,6 +72,11 @@ public sealed class MergeTicketsCommandHandler(
                 logger.LogWarning("Source ticket {SourceId} not found, skipping merge", sourceId);
                 continue;
             }
+            if (source.ClientId != target.ClientId)
+            {
+                return Result<MergeTicketsResult>.Failure(
+                    Error.Validation("SourceTicketIds", $"O chamado de origem {source.Id} pertence a outro cliente e não pode ser mesclado."));
+            }
 
             await MoveSubResourcesAsync(source.Id, target.Id, ct);
 

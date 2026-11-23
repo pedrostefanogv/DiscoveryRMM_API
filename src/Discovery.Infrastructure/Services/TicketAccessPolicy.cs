@@ -94,11 +94,39 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
     /// indisponível, tabela ainda não migrada em ambiente novo) mantém-se o valor
     /// atual em vez de derrubar a autorização de chamados.
     /// </summary>
-    public Task RefreshShadowModeAsync(CancellationToken ct = default)
+    public async Task RefreshShadowModeAsync(CancellationToken ct = default)
     {
         InvalidateShadowModeCache();
-        _ = ResolveShadowModeCached();
-        return Task.CompletedTask;
+        await ResolveShadowModeAsync(ct);
+    }
+
+    private async Task<bool> ResolveShadowModeAsync(CancellationToken ct = default)
+    {
+        if (_resolvedShadowMode.HasValue)
+            return _resolvedShadowMode.Value;
+
+        var value = _shadowModeBootstrap;
+        try
+        {
+            var row = await _db.ServerConfigurations
+                .AsNoTracking()
+                .Select(config => (bool?)config.DepartmentAuthShadowMode)
+                .FirstOrDefaultAsync(ct);
+
+            if (row.HasValue)
+                value = row.Value;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex,
+                "Não foi possível ler DepartmentAuthShadowMode da configuração do servidor; " +
+                "mantendo o bootstrap do appsettings (ShadowMode={ShadowMode}).",
+                value);
+        }
+
+        _resolvedShadowMode = value;
+        ShadowMode = value;
+        return value;
     }
 
     /// <summary>Valor do bootstrap do appsettings, exposto para diagnóstico/testes.</summary>
@@ -186,6 +214,7 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
     public async Task<TicketAccessDecision> CanTreatAsync(
         Guid? userId, Ticket ticket, CancellationToken ct = default)
     {
+        await ResolveShadowModeAsync(ct);
         if (userId is null)
             return TicketAccessDecision.Deny("Sem usuário autenticado.", CodeOutOfScope);
 
@@ -245,12 +274,12 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
     public async Task<TicketAccessDecision> CanExecuteOnMachineAsync(
         Guid? userId, Ticket ticket, CancellationToken ct = default)
     {
+        await ResolveShadowModeAsync(ct);
         if (userId is null)
             return TicketAccessDecision.Deny("Sem usuário autenticado.", CodeOutOfScope);
 
-        // 1) Permissão explícita de execução (Tickets:Execute). Sem ela, nada roda —
-        //    inclusive para quem tem acesso global, porque a permissão é do PAPEL.
-        if (!await HasExecutePermissionAsync(userId.Value, ct))
+        // 1) Permissão explícita de execução (Tickets:Execute) no escopo do chamado.
+        if (!await HasExecutePermissionAsync(userId.Value, ticket, ct))
             return TicketAccessDecision.Deny(
                 "Sem permissão para executar automação em máquinas (Tickets:Execute).",
                 CodeNoExecutePermission);
@@ -283,20 +312,42 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
     private async Task<bool> CanDepartmentExecuteAsync(
         Guid departmentId, CancellationToken ct)
     {
-        return await _db.Departments.AsNoTracking()
-            .AnyAsync(d => d.Id == departmentId && d.CanExecuteOnMachines, ct);
+        var dept = await _db.Departments.AsNoTracking()
+            .Where(d => d.Id == departmentId)
+            .Select(d => new { d.CanExecuteOnMachines, d.InheritFromGlobalId })
+            .FirstOrDefaultAsync(ct);
+
+        if (dept is null)
+            return false;
+
+        if (dept.CanExecuteOnMachines)
+            return true;
+
+        if (dept.InheritFromGlobalId.HasValue)
+        {
+            return await _db.Departments.AsNoTracking()
+                .AnyAsync(d => d.Id == dept.InheritFromGlobalId.Value && d.CanExecuteOnMachines, ct);
+        }
+
+        return false;
     }
 
     /// <summary>
-    /// O usuário tem <c>Tickets:Execute</c> em algum escopo? Usa o acesso já
-    /// cacheado no request (o mesmo caminho do restante da política).
+    /// O usuário tem <c>Tickets:Execute</c> no escopo deste chamado?
     /// </summary>
-    private async Task<bool> HasExecutePermissionAsync(Guid userId, CancellationToken ct)
+    private async Task<bool> HasExecutePermissionAsync(Guid userId, Ticket ticket, CancellationToken ct)
     {
         var access = await _scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Execute);
-        return access.HasGlobalAccess
-            || access.AllowedClientIds.Count > 0
-            || access.AllowedSiteIds.Count > 0;
+        if (access.HasGlobalAccess)
+            return true;
+
+        if (access.AllowedClientIds.Contains(ticket.ClientId))
+            return true;
+
+        if (ticket.SiteId.HasValue && access.AllowedSiteIds.Contains(ticket.SiteId.Value))
+            return true;
+
+        return false;
     }
 
     public async Task<IReadOnlyList<Guid>> GetMemberDepartmentIdsAsync(
@@ -340,11 +391,10 @@ public sealed class TicketAccessPolicy : ITicketAccessPolicy
 
     private async Task<bool> IsFinalStateAsync(Guid clientId, Guid targetStateId, CancellationToken ct)
     {
-        // Um estado final é o que caracteriza "fechar". Restringir a transição a
-        // estados finais impede que o solicitante use a exceção para mover o
-        // chamado para qualquer outro estado (ex.: reabrir ou pular etapas).
+        // Um estado final é o que caracteriza "fechar". Inclui estados finais do
+        // cliente e estados finais globais (ClientId == null).
         return await _db.WorkflowStates.AsNoTracking()
-            .AnyAsync(s => s.Id == targetStateId && s.ClientId == clientId && s.IsFinal, ct);
+            .AnyAsync(s => s.Id == targetStateId && (s.ClientId == clientId || s.ClientId == null) && s.IsFinal, ct);
     }
 
     /// <summary>

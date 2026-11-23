@@ -278,6 +278,7 @@ public class ExceptionHandlingMiddleware
         return exception switch
         {
             ArgumentException or ArgumentNullException or InvalidOperationException => LogLevelEnum.Warn,
+            Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException => LogLevelEnum.Warn,
             TimeoutException or OperationCanceledException => LogLevelEnum.Warn,
             _ => LogLevelEnum.Error
         };
@@ -306,6 +307,8 @@ public class ExceptionHandlingMiddleware
         {
             KeyNotFoundException
                 => StatusCodes.Status404NotFound,
+            Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException
+                => StatusCodes.Status409Conflict,
             ArgumentException or ArgumentNullException or InvalidOperationException 
                 => StatusCodes.Status400BadRequest,
             UnauthorizedAccessException

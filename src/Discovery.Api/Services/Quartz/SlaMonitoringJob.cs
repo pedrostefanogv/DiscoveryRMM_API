@@ -77,6 +77,7 @@ public sealed class SlaMonitoringJob : IJob
 
                 // Reaproveita o ticket já carregado (antes recarregava 2x por ticket).
                 var breached = await slaService.CheckAndLogSlaBreachAsync(ticket);
+                var (_, percentUsed, _) = slaService.GetSlaStatus(ticket, slaContext.Calendar);
                 if (breached)
                 {
                     logger.LogWarning("SLA Breached: Ticket {TicketId} - {Title}", ticket.Id, ticket.Title);
@@ -95,8 +96,6 @@ public sealed class SlaMonitoringJob : IJob
                 }
                 else
                 {
-                    var (_, percentUsed, _) = slaService.GetSlaStatus(ticket, slaContext.Calendar);
-
                     // O cooldown Redis já evita repetição; o gatilho é o limiar do perfil.
                     if (percentUsed >= slaContext.WarningThresholdPercent)
                     {
@@ -126,15 +125,13 @@ public sealed class SlaMonitoringJob : IJob
                         // Limpar warning cooldown se voltou a ficar saudável
                         await redis.DeleteAsync($"sla:warning:{ticket.Id:N}");
                     }
+                }
 
-                    // Coletar TODOS os tickets do perfil para escalonamento: quem decide
-                    // o disparo é cada regra (percentual próprio ou horas antes do
-                    // vencimento). Filtrar aqui por 80% fixos impedia que regras com
-                    // gatilho abaixo de 80% e regras puramente por antecedência disparassem.
-                    if (ticket.WorkflowProfileId.HasValue)
-                    {
-                        ticketsNeedingEscalation.Add((ticket, percentUsed));
-                    }
+                // Coletar TODOS os tickets do perfil para escalonamento (inclusive já violados):
+                // quem decide o disparo é cada regra (percentual próprio ou horas antes do vencimento).
+                if (ticket.WorkflowProfileId.HasValue)
+                {
+                    ticketsNeedingEscalation.Add((ticket, percentUsed));
                 }
             }
 

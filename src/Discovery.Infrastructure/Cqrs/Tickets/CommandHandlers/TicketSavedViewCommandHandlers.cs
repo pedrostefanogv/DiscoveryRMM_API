@@ -10,7 +10,7 @@ public sealed class CreateTicketSavedViewCommandHandler(ITicketSavedViewReposito
 {
     public async Task<Result<TicketSavedView>> Handle(CreateTicketSavedViewCommand cmd, CancellationToken ct)
     {
-        var v = new TicketSavedView { Id = Guid.NewGuid(), UserId = cmd.UserId, Name = cmd.Name, FilterJson = cmd.FilterJson ?? "{}", IsShared = cmd.IsShared, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var v = new TicketSavedView { Id = Guid.NewGuid(), UserId = cmd.UserId, ClientId = cmd.ClientId, Name = cmd.Name, FilterJson = cmd.FilterJson ?? "{}", IsShared = cmd.IsShared, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         return Result<TicketSavedView>.Success(await repo.CreateAsync(v));
     }
 }

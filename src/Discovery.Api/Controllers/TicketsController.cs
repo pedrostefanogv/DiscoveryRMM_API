@@ -338,7 +338,7 @@ public class TicketsController(
         {
             foreach (var sourceTicketId in sourceTicketIds)
             {
-                if (!await CanAccessTicketAsync(sourceTicketId, HttpContext.RequestAborted))
+                if (!await CanAccessTicketAsync(sourceTicketId, ActionType.Edit, HttpContext.RequestAborted))
                     return NotFound();
             }
         }
@@ -461,7 +461,9 @@ public class TicketsController(
     {
         if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
             return NotFound();
-        await mediator.Send(new DeleteTicketKnowledgeLinkCommand(linkId));
+        var result = await mediator.Send(new DeleteTicketKnowledgeLinkCommand(id, linkId), HttpContext.RequestAborted);
+        if (!result.IsSuccess)
+            return NotFound();
         return NoContent();
     }
 
@@ -473,8 +475,23 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> SuggestKnowledge(Guid id, [FromQuery] string? q = null, [FromQuery] Guid? clientId = null, [FromQuery] Guid? siteId = null, [FromQuery] Guid? departmentId = null, [FromQuery] int maxResults = 5, CancellationToken ct = default)
     {
-        if (!await CanAccessTicketAsync(id, ct))
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
             return NotFound();
+
+        var accessDecision = await accessPolicy.CanViewAsync(CurrentUserId, ticket, ct);
+        if (!accessDecision.Allowed)
+            return NotFound();
+
+        var hasGlobal = await accessPolicy.HasGlobalTicketAccessAsync(CurrentUserId, ct);
+        if (!hasGlobal)
+        {
+            // Impede sobrescrever o clientId/siteId do chamado para consultar KB de outro tenant.
+            clientId = ticket.ClientId;
+            if (ticket.SiteId.HasValue)
+                siteId = ticket.SiteId;
+        }
+
         var result = await mediator.Send(new SuggestTicketKnowledgeQuery(id, q, clientId, siteId, departmentId, maxResults), ct);
         return result.ToActionResult();
     }
@@ -547,11 +564,27 @@ public class TicketsController(
     }
 
     [HttpPost("{id:guid}/rating")]
-    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> Rate(Guid id, [FromBody] RateTicketRequest request)
     {
-        if (!await CanAccessTicketAsync(id, ActionType.Edit, HttpContext.RequestAborted))
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
             return NotFound();
+
+        var viewDecision = await accessPolicy.CanViewAsync(CurrentUserId, ticket, HttpContext.RequestAborted);
+        if (!viewDecision.Allowed)
+            return NotFound();
+
+        var isRequester = ticket.RequesterUserId.HasValue && CurrentUserId.HasValue && ticket.RequesterUserId.Value == CurrentUserId.Value;
+        if (!isRequester)
+        {
+            var treatDecision = accessPolicy.ApplyShadow(
+                await accessPolicy.CanTreatAsync(CurrentUserId, ticket, HttpContext.RequestAborted),
+                CurrentUserId, id, "Rate");
+            if (!treatDecision.Allowed)
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = treatDecision.Reason, code = treatDecision.Code });
+        }
+
         var result = await mediator.Send(
             new RateTicketCommand(id, request.Rating, request.Feedback, CurrentUserId, Username),
             HttpContext.RequestAborted);
@@ -967,15 +1000,22 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetSlaDetails(Guid id)
     {
-        if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
-            return NotFound();
-        var (slaHours, slaPercent, slaBreached) = await slaService.GetSlaStatusAsync(id);
-        var (frtHours, frtPercent, frtBreached, frtAchieved) = await slaService.GetFrtStatusAsync(id);
-
         var ticket = await ticketRepository.GetByIdAsync(id);
-        var onHold = ticket?.SlaHoldStartedAt.HasValue == true;
+        if (ticket is null)
+            return NotFound();
+
+        var viewDecision = await accessPolicy.CanViewAsync(CurrentUserId, ticket, HttpContext.RequestAborted);
+        if (!viewDecision.Allowed)
+            return NotFound();
+
+        // Carrega o contexto (WorkflowProfile + SlaCalendar) apenas uma vez para SLA e FRT.
+        var slaContext = await slaService.GetSlaContextForTicketAsync(ticket);
+        var (slaHours, slaPercent, slaBreached) = slaService.GetSlaStatus(ticket, slaContext.Calendar);
+        var (frtHours, frtPercent, frtBreached, frtAchieved) = slaService.GetFrtStatus(ticket, slaContext.Calendar);
+
+        var onHold = ticket.SlaHoldStartedAt.HasValue;
         // Chamado encerrado: o SLA é congelado no ClosedAt (não conta mais tempo).
-        var slaFrozen = ticket?.ClosedAt.HasValue == true;
+        var slaFrozen = ticket.ClosedAt.HasValue;
         var warningLevel = slaPercent >= 90 ? "critical" : slaPercent >= 75 ? "high" : slaPercent >= 50 ? "medium" : "low";
 
         // Contrato plano consumido pelo console (tipo SlaDetails): antes o endpoint
@@ -1020,8 +1060,23 @@ public class TicketsController(
     [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetCustomFields(Guid id, [FromQuery] bool includeSecrets = false)
     {
-        if (!await CanAccessTicketAsync(id, HttpContext.RequestAborted))
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
             return NotFound();
+
+        var viewDecision = await accessPolicy.CanViewAsync(CurrentUserId, ticket, HttpContext.RequestAborted);
+        if (!viewDecision.Allowed)
+            return NotFound();
+
+        if (includeSecrets)
+        {
+            var treatDecision = accessPolicy.ApplyShadow(
+                await accessPolicy.CanTreatAsync(CurrentUserId, ticket, HttpContext.RequestAborted),
+                CurrentUserId, id, "CustomFieldSecrets");
+            if (!treatDecision.Allowed)
+                includeSecrets = false;
+        }
+
         return Ok(await customFieldService.GetValuesAsync(CustomFieldScopeType.Ticket, id, includeSecrets, HttpContext.RequestAborted));
     }
 
@@ -1097,7 +1152,12 @@ public class TicketsController(
         // botões que divergem do que o endpoint correspondente aceita:
         // - Delete passa por ResolveTicketAccessAsync(Delete) => escopo de LEITURA.
         // - Editar/atribuir/merge/runbook passam por CanTreat.
-        var canDeleteByPolicy = (await ResolveTicketAccessAsync(id, ActionType.Delete, ct)).Allowed;
+        var deleteAccess = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Delete);
+        var hasDeletePermission = deleteAccess.HasGlobalAccess
+            || deleteAccess.AllowedClientIds.Contains(ticket.ClientId)
+            || (ticket.SiteId.HasValue && deleteAccess.AllowedSiteIds.Contains(ticket.SiteId.Value));
+        var canDeleteByPolicy = (await ResolveTicketAccessAsync(id, ActionType.Delete, ct)).Allowed
+            && hasDeletePermission;
 
         // "Pode fechar" depende do ESTADO DE DESTINO (só encerrar vale para o
         // solicitante), então informamos quais estados finais ele pode atingir.

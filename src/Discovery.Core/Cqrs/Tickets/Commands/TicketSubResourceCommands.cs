@@ -12,7 +12,7 @@ public sealed record CreateTicketAutomationLinkCommand(Guid TicketId, Guid Autom
 
 // ── Knowledge Links ──────────────────────────────────────────────────────
 public sealed record CreateTicketKnowledgeLinkCommand(Guid TicketId, Guid ArticleId, Guid? AddedByUserId, string? Note) : ICommand<Result<TicketKnowledgeLink>>;
-public sealed record DeleteTicketKnowledgeLinkCommand(Guid LinkId) : ICommand<Result<VoidResult>>;
+public sealed record DeleteTicketKnowledgeLinkCommand(Guid TicketId, Guid LinkId) : ICommand<Result<VoidResult>>;
 
 /// <summary>Registra feedback (útil/não útil) no vínculo ticket↔artigo. Completa a
 /// migration M103 — antes o front chamava um endpoint que não existia (404).</summary>

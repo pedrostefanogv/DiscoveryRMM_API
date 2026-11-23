@@ -10,6 +10,9 @@ public class TicketSavedView
     /// <summary>Usuário dono desta visão (null = visão global/compartilhada).</summary>
     public Guid? UserId { get; set; }
 
+    /// <summary>Cliente ao qual a visão pertence (null = visão global).</summary>
+    public Guid? ClientId { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     /// <summary>JSON serializado de TicketFilterQuery.</summary>

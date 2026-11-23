@@ -58,8 +58,10 @@ public class TicketKpiCacheService : ITicketKpiCacheService
     {
         try
         {
-            var pattern = $"{KeyPrefix}:{clientId}:*";
-            await _redis.DeleteByPrefixAsync(pattern);
+            // DeleteByPrefixAsync já acrescenta "*" ao final; não duplicar "*".
+            await _redis.DeleteByPrefixAsync($"{KeyPrefix}:{clientId}:");
+            // Invalida também a chave agregada global (clientId == null -> "all").
+            await _redis.DeleteByPrefixAsync($"{KeyPrefix}:all:");
             _logger.LogDebug("Invalidated KPI cache for client {ClientId}", clientId);
         }
         catch (Exception ex)

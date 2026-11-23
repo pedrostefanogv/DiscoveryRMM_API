@@ -7,7 +7,7 @@ using MediatR;
 namespace Discovery.Infrastructure.Cqrs.Tickets.QueryHandlers;
 
 public sealed class ListTicketSavedViewsQueryHandler(ITicketSavedViewRepository repo) : IRequestHandler<ListTicketSavedViewsQuery, Result<IReadOnlyList<TicketSavedView>>>
-{ public async Task<Result<IReadOnlyList<TicketSavedView>>> Handle(ListTicketSavedViewsQuery q, CancellationToken ct) => Result<IReadOnlyList<TicketSavedView>>.Success((await repo.GetByUserAsync(q.UserId)).ToList()); }
+{ public async Task<Result<IReadOnlyList<TicketSavedView>>> Handle(ListTicketSavedViewsQuery q, CancellationToken ct) => Result<IReadOnlyList<TicketSavedView>>.Success((await repo.GetByUserAsync(q.UserId, q.HasGlobalAccess, q.AllowedClientIds)).ToList()); }
 
 public sealed class GetTicketSavedViewByIdQueryHandler(ITicketSavedViewRepository repo) : IRequestHandler<GetTicketSavedViewByIdQuery, Result<TicketSavedView>>
 {

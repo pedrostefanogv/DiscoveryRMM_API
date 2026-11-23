@@ -493,6 +493,8 @@ public class TicketCommandServiceDepartmentTransferTests
             Task.FromResult((24, 0d, false));
         public Task<(int HoursRemaining, double PercentUsed, bool Breached, bool Achieved)> GetFrtStatusAsync(Guid ticketId) =>
             Task.FromResult((4, 0d, false, false));
+        public (int HoursRemaining, double PercentUsed, bool Breached, bool Achieved) GetFrtStatus(Ticket ticket, SlaCalendar? calendar) =>
+            (4, 0d, false, false);
         public (int HoursRemaining, double PercentUsed, bool Breached) GetSlaStatus(Ticket ticket, SlaCalendar? calendar) =>
             (24, 0d, false);
         public Task<TicketSlaContext> GetSlaContextForTicketAsync(Ticket ticket) =>

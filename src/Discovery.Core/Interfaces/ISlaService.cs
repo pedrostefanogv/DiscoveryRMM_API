@@ -41,6 +41,11 @@ public interface ISlaService
     Task<(int HoursRemaining, double PercentUsed, bool Breached, bool Achieved)> GetFrtStatusAsync(Guid ticketId);
 
     /// <summary>
+    /// Status do SLA de primeira resposta sem I/O, para quando o ticket e o calendário já foram carregados.
+    /// </summary>
+    (int HoursRemaining, double PercentUsed, bool Breached, bool Achieved) GetFrtStatus(Ticket ticket, SlaCalendar? calendar);
+
+    /// <summary>
     /// Resolve calendário e limiar de aviso do perfil do ticket. Permite ao job
     /// de monitoramento consultar uma vez por perfil e reaproveitar em memória.
     /// </summary>

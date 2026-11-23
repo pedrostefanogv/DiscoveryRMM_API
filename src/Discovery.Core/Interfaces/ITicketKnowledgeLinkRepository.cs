@@ -13,6 +13,9 @@ public interface ITicketKnowledgeLinkRepository
     /// <summary>Cria um link entre ticket e artigo KB.</summary>
     Task<TicketKnowledgeLink> CreateAsync(TicketKnowledgeLink link, CancellationToken ct = default);
 
+    /// <summary>Remove um link garantindo que pertence ao ticket.</summary>
+    Task<bool> DeleteForTicketAsync(Guid ticketId, Guid linkId, CancellationToken ct = default);
+
     /// <summary>Remove um link.</summary>
     Task DeleteAsync(Guid linkId, CancellationToken ct = default);
 

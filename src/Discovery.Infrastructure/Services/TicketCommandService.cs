@@ -4,6 +4,7 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
 using Discovery.Core.Interfaces.Identity;
 using MediatR;
 
@@ -27,6 +28,9 @@ public sealed class TicketCommandService : ITicketCommandService
     private readonly ITicketAssignmentOverrideTracker _overrideTracker;
     private readonly IDepartmentService _departmentService;
     private readonly IDepartmentTeamResolver _departmentTeamResolver;
+    private readonly IAgentRepository? _agentRepository;
+    private readonly ISiteRepository? _siteRepository;
+    private readonly ITicketAccessPolicy? _accessPolicy;
 
     public TicketCommandService(
         ITicketRepository repo,
@@ -40,7 +44,10 @@ public sealed class TicketCommandService : ITicketCommandService
         IUserRepository userRepository,
         ITicketAssignmentOverrideTracker overrideTracker,
         IDepartmentService departmentService,
-        IDepartmentTeamResolver departmentTeamResolver)
+        IDepartmentTeamResolver departmentTeamResolver,
+        IAgentRepository? agentRepository = null,
+        ISiteRepository? siteRepository = null,
+        ITicketAccessPolicy? accessPolicy = null)
     {
         _repo = repo;
         _activityLog = activityLog;
@@ -54,6 +61,9 @@ public sealed class TicketCommandService : ITicketCommandService
         _overrideTracker = overrideTracker;
         _departmentService = departmentService;
         _departmentTeamResolver = departmentTeamResolver;
+        _agentRepository = agentRepository;
+        _siteRepository = siteRepository;
+        _accessPolicy = accessPolicy;
     }
 
     public async Task<Ticket> CreateTicketAsync(
@@ -196,7 +206,7 @@ public sealed class TicketCommandService : ITicketCommandService
         {
             var oldPriority = ticket.Priority;
             ticket.Priority = priority.Value;
-            await _activityLog.LogPriorityChangeAsync(ticketId, null,
+            await _activityLog.LogPriorityChangeAsync(ticketId, changedByUserId,
                 oldPriority.ToString(), priority.Value.ToString());
         }
 
@@ -240,7 +250,7 @@ public sealed class TicketCommandService : ITicketCommandService
             await _activityLog.LogActivityAsync(
                 ticketId,
                 TicketActivityType.RequesterChanged,
-                null,
+                changedByUserId,
                 oldRequester?.ToString(),
                 newRequesterId?.ToString(),
                 "Solicitante atualizado");
@@ -252,12 +262,24 @@ public sealed class TicketCommandService : ITicketCommandService
             : (agentId.HasValue ? agentId.Value : ticket.AgentId);
         if (newAgentId != ticket.AgentId)
         {
+            if (newAgentId.HasValue && _agentRepository is not null)
+            {
+                var agent = await _agentRepository.GetByIdAsync(newAgentId.Value);
+                if (agent is null)
+                    throw new InvalidOperationException("Agent inválido.");
+                if (_siteRepository is not null)
+                {
+                    var site = await _siteRepository.GetByIdAsync(agent.SiteId);
+                    if (site is null || site.ClientId != ticket.ClientId)
+                        throw new InvalidOperationException("Agent pertencente a outro cliente.");
+                }
+            }
             var oldAgentId = ticket.AgentId;
             ticket.AgentId = newAgentId;
             await _activityLog.LogActivityAsync(
                 ticketId,
                 TicketActivityType.AgentChanged,
-                null,
+                changedByUserId,
                 oldAgentId?.ToString(),
                 newAgentId?.ToString(),
                 "Agent do chamado atualizado");
@@ -293,6 +315,11 @@ public sealed class TicketCommandService : ITicketCommandService
         else if (workflowProfileId.HasValue)
         {
             // Perfil explícito (ex.: seleção manual no console) tem precedência.
+            // Se o perfil existir e pertencer a outro cliente, bloqueia cross-tenant.
+            var profile = await _workflowProfileRepo.GetByIdAsync(workflowProfileId.Value);
+            if (profile is not null && profile.ClientId.HasValue && profile.ClientId.Value != ticket.ClientId)
+                throw new InvalidOperationException("Perfil de workflow inválido para este cliente.");
+
             newWorkflowProfileId = workflowProfileId.Value;
         }
         else if (departmentChanged)
@@ -339,16 +366,16 @@ public sealed class TicketCommandService : ITicketCommandService
                 oldDepartmentId?.ToString() ?? "none", newDepartmentId?.ToString() ?? "none");
 
         if (newWorkflowProfileId != oldWorkflowProfileId)
-            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.StateChanged, null,
+            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.StateChanged, changedByUserId,
                 oldWorkflowProfileId?.ToString(), newWorkflowProfileId?.ToString(), "Workflow profile changed");
 
         // B8: categoria e descrição passam a ser auditadas.
         if (ticket.Category != oldCategory)
-            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.CategoryChanged, null,
+            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.CategoryChanged, changedByUserId,
                 Truncate(oldCategory), Truncate(ticket.Category), "Categoria alterada");
 
         if (ticket.Description != oldDescription)
-            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.DescriptionUpdated, null,
+            await _activityLog.LogActivityAsync(ticketId, TicketActivityType.DescriptionUpdated, changedByUserId,
                 Truncate(oldDescription), Truncate(ticket.Description), "Descrição atualizada");
 
         return ticket;
@@ -430,9 +457,12 @@ public sealed class TicketCommandService : ITicketCommandService
             throw new InvalidOperationException("Departamento inválido para este cliente.");
         }
 
-        // Sem autor identificado (rotinas internas/background) a checagem de time
-        // não se aplica: não há ator a quem atribuir a transferência.
+        // Sem autor identificado (rotinas internas/background) ou com acesso global
+        // a checagem de membership no departamento destino não se aplica.
         if (changedByUserId is null)
+            return;
+
+        if (_accessPolicy is not null && await _accessPolicy.HasGlobalTicketAccessAsync(changedByUserId, ct))
             return;
 
         var members = await _departmentTeamResolver.ResolveMembersAsync(departmentId, ct);

@@ -18,10 +18,11 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
 {
     [HttpGet]
     [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
-    public async Task<IActionResult> List()
+    public async Task<IActionResult> List([FromServices] IScopeContext scopeContext)
     {
         var userId = HttpContext.Items["UserId"] as Guid?;
-        var result = await mediator.Send(new ListTicketSavedViewsQuery(userId));
+        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        var result = await mediator.Send(new ListTicketSavedViewsQuery(userId, access.HasGlobalAccess, access.AllowedClientIds));
         return result.ToActionResult();
     }
 
@@ -34,14 +35,16 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
     {
         var view = await db.TicketSavedViews.AsNoTracking()
             .Where(v => v.Id == id)
-            .Select(v => new { v.UserId, v.IsShared })
+            .Select(v => new { v.UserId, v.IsShared, v.ClientId })
             .FirstOrDefaultAsync();
         if (view is null)
             return NotFound(new { error = "Saved view not found." });
 
         var currentUserId = HttpContext.Items["UserId"] as Guid?;
         var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
-        if (!access.HasGlobalAccess && !view.IsShared && (!currentUserId.HasValue || view.UserId != currentUserId.Value))
+        var isOwner = currentUserId.HasValue && view.UserId == currentUserId.Value;
+        var isAllowedShared = view.IsShared && (view.ClientId is null || access.AllowedClientIds.Contains(view.ClientId.Value));
+        if (!access.HasGlobalAccess && !isOwner && !isAllowedShared)
             return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem acesso a esta visualização salva." });
 
         var result = await mediator.Send(new GetTicketSavedViewByIdQuery(id));
@@ -50,10 +53,31 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
 
     [HttpPost]
     [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
-    public async Task<IActionResult> Create([FromBody] CreateTicketSavedViewRequest req)
+    public async Task<IActionResult> Create(
+        [FromBody] CreateTicketSavedViewRequest req,
+        [FromServices] IScopeContext scopeContext)
     {
         var userId = HttpContext.Items["UserId"] as Guid?;
-        var result = await mediator.Send(new CreateTicketSavedViewCommand(req.Name, req.FilterJson, req.IsShared, userId));
+        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
+        Guid? resolvedClientId = req.ClientId;
+
+        if (!access.HasGlobalAccess)
+        {
+            if (resolvedClientId.HasValue)
+            {
+                if (!access.AllowedClientIds.Contains(resolvedClientId.Value))
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = "Cliente fora do escopo do usuário." });
+            }
+            else if (req.IsShared)
+            {
+                // Usuário restrito não pode criar visão compartilhada global (ClientId null).
+                if (access.AllowedClientIds.Count == 0)
+                    return StatusCode(StatusCodes.Status403Forbidden, new { error = "Sem cliente no escopo para compartilhar visualização." });
+                resolvedClientId = access.AllowedClientIds.First();
+            }
+        }
+
+        var result = await mediator.Send(new CreateTicketSavedViewCommand(req.Name, req.FilterJson, req.IsShared, userId, resolvedClientId));
         return result.Match<IActionResult>(success: v => CreatedAtAction(nameof(GetById), new { id = v.Id }, v), failure: BadRequest);
     }
 
@@ -73,9 +97,13 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
             return NotFound(new { error = "Saved view not found." });
 
         var currentUserId = HttpContext.Items["UserId"] as Guid?;
-        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
-        if (!access.HasGlobalAccess && (!currentUserId.HasValue || view.UserId != currentUserId.Value))
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas o proprietário pode editar esta visualização salva." });
+        var isOwner = currentUserId.HasValue && view.UserId == currentUserId.Value;
+        if (!isOwner)
+        {
+            var editAccess = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+            if (!editAccess.HasGlobalAccess)
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas o proprietário pode editar esta visualização salva." });
+        }
 
         var result = await mediator.Send(new UpdateTicketSavedViewCommand(id, req.Name, req.FilterJson, req.IsShared));
         return result.ToActionResult();
@@ -96,9 +124,13 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
             return NotFound(new { error = "Saved view not found." });
 
         var currentUserId = HttpContext.Items["UserId"] as Guid?;
-        var access = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.View);
-        if (!access.HasGlobalAccess && (!currentUserId.HasValue || view.UserId != currentUserId.Value))
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas o proprietário pode excluir esta visualização salva." });
+        var isOwner = currentUserId.HasValue && view.UserId == currentUserId.Value;
+        if (!isOwner)
+        {
+            var editAccess = await scopeContext.GetAccessAsync(ResourceType.Tickets, ActionType.Edit);
+            if (!editAccess.HasGlobalAccess)
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Apenas o proprietário pode excluir esta visualização salva." });
+        }
 
         await mediator.Send(new DeleteTicketSavedViewCommand(id));
         return NoContent();
@@ -106,5 +138,5 @@ public class TicketSavedViewsController(IMediator mediator) : ControllerBase
     private IActionResult BadRequest(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) });
     private IActionResult NotFound(IReadOnlyList<Discovery.Core.Cqrs.Error> errors) => errors[0].Code == "NotFound" ? NotFound() : BadRequest(errors);
 }
-public record CreateTicketSavedViewRequest(string Name, string? FilterJson, bool IsShared = false);
+public record CreateTicketSavedViewRequest(string Name, string? FilterJson, bool IsShared = false, Guid? ClientId = null);
 public record UpdateTicketSavedViewRequest(string? Name, string? FilterJson, bool? IsShared);

@@ -37,6 +37,17 @@ public class TicketKnowledgeLinkRepository : ITicketKnowledgeLinkRepository
         return link;
     }
 
+    public async Task<bool> DeleteForTicketAsync(Guid ticketId, Guid linkId, CancellationToken ct = default)
+    {
+        var link = await _db.TicketKnowledgeLinks.FirstOrDefaultAsync(l => l.Id == linkId && l.TicketId == ticketId, ct);
+        if (link is null)
+            return false;
+
+        _db.TicketKnowledgeLinks.Remove(link);
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
     public async Task DeleteAsync(Guid linkId, CancellationToken ct = default)
     {
         var link = await _db.TicketKnowledgeLinks.FindAsync([linkId], ct);

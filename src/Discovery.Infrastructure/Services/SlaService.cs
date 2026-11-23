@@ -511,6 +511,22 @@ public class SlaService : ISlaService
         if (!ticket.SlaFirstResponseExpiresAt.HasValue)
             return (0, 0, false, false);
 
+        if (ticket.FirstRespondedAt.HasValue)
+        {
+            var expiryAchieved = GetEffectiveFrtExpiry(ticket)!.Value;
+            var achieved = ticket.FirstRespondedAt.Value <= expiryAchieved;
+            return (0, 100, !achieved, achieved);
+        }
+
+        var calendar = await ResolveCalendarAsync(ticket);
+        return GetFrtStatus(ticket, calendar);
+    }
+
+    public (int HoursRemaining, double PercentUsed, bool Breached, bool Achieved) GetFrtStatus(Ticket ticket, SlaCalendar? calendar)
+    {
+        if (!ticket.SlaFirstResponseExpiresAt.HasValue)
+            return (0, 0, false, false);
+
         // Pausa do SLA (estados PausesSla) também estende o prazo do FRT.
         var expiry = GetEffectiveFrtExpiry(ticket)!.Value;
 
@@ -522,7 +538,6 @@ public class SlaService : ISlaService
         }
         // Chamado encerrado sem primeira resposta: congela o FRT no fechamento.
         var now = GetSlaClockNow(ticket);
-        var calendar = await ResolveCalendarAsync(ticket);
 
         // Base do FRT: início explícito (reiniciado na reabertura) ou a criação.
         var frtBase = ticket.FirstResponseSlaStartedAt ?? ticket.CreatedAt;

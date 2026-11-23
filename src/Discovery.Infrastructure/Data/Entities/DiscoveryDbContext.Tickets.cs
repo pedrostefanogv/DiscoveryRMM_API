@@ -231,10 +231,12 @@ public partial class DiscoveryDbContext
             entity.ToTable("ticket_saved_views");
             entity.HasKey(v => v.Id);
             entity.HasIndex(v => v.UserId).HasDatabaseName("ix_ticket_saved_views_user_id");
+            entity.HasIndex(v => v.ClientId).HasDatabaseName("ix_ticket_saved_views_client_id");
             entity.HasIndex(v => v.IsShared).HasDatabaseName("ix_ticket_saved_views_is_shared");
 
             entity.Property(v => v.Id).HasColumnName("id").ValueGeneratedNever();
             entity.Property(v => v.UserId).HasColumnName("user_id");
+            entity.Property(v => v.ClientId).HasColumnName("client_id");
             entity.Property(v => v.Name).HasColumnName("name").HasMaxLength(100);
             entity.Property(v => v.FilterJson).HasColumnName("filter_json").HasColumnType("jsonb");
             entity.Property(v => v.IsShared).HasColumnName("is_shared");

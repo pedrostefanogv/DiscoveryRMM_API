@@ -66,6 +66,12 @@ public class TicketWorkflowService : ITicketWorkflowService
             throw new InvalidOperationException(
                 $"O estado de destino {targetStateId} não existe. Atualize a página e escolha um estado válido.");
 
+        // Isolamento multi-tenant: o estado destino precisa ser global (ClientId null)
+        // ou pertencer ao mesmo cliente do ticket.
+        if (newState.ClientId.HasValue && newState.ClientId.Value != ticket.ClientId)
+            throw new InvalidOperationException(
+                $"O estado de destino {targetStateId} pertence a outro cliente e não pode ser aplicado a este chamado.");
+
         // M3: chamado com estado órfão (Guid.Empty ou estado removido) não tinha
         // nenhuma transição válida a partir da origem e ficava impossível de
         // fechar. Nesse caso adota o estado inicial do cliente como origem
@@ -200,9 +206,15 @@ public class TicketWorkflowService : ITicketWorkflowService
         switch (scopePreference)
         {
             case AlertScopeType.Agent:
-                return (AlertScopeType.Agent, ticket.AgentId, null, null);
+                if (ticket.AgentId.HasValue)
+                    return (AlertScopeType.Agent, ticket.AgentId, null, null);
+                if (ticket.SiteId.HasValue)
+                    return (AlertScopeType.Site, null, ticket.SiteId, null);
+                return (AlertScopeType.Client, null, null, ticket.ClientId);
             case AlertScopeType.Site:
-                return (AlertScopeType.Site, null, ticket.SiteId, null);
+                if (ticket.SiteId.HasValue)
+                    return (AlertScopeType.Site, null, ticket.SiteId, null);
+                return (AlertScopeType.Client, null, null, ticket.ClientId);
             case AlertScopeType.Label:
                 return (AlertScopeType.Label, null, null, null);
             default: // Client
