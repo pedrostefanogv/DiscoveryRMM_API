@@ -113,6 +113,15 @@ public class AgentPurgeService : IAgentPurgeService
         // Histórico do chat de suporte: sobrevive à exclusão do agente; a
         // sessão fica com agent_id = NULL (o registro do chamado permanece).
         "ticket_chat_sessions",
+        // Trilha de auditoria de execuções MCP (M292): é evidência de
+        // segurança/compliance — quem acionou qual tool, quando, com que status
+        // e erro. Apagar junto com o agente destruiria a evidência; desvincular
+        // preserva o histórico e o contexto de tenant (client_id/site_id
+        // continuam preenchidos). A coluna agent_id é nullable e NÃO tem FK, por
+        // isso o agente purgado sairia deixando linhas órfãs se ficássemos sem
+        // tratamento — o guard PurgeTableLists_CoverEveryMappedAgentReference
+        // existe exatamente para forçar esta decisão.
+        "mcp_tool_audit_logs",
     ];
 
     public async Task PurgeAsync(Guid agentId, CancellationToken ct = default)
