@@ -157,15 +157,19 @@ public class AgentMachineTypePersistenceTests
     }
 
     /// <summary>
-    /// Valor fora do vocabulário não vira texto livre na coluna nem chega ao
-    /// painel: vira "unknown".
+    /// Valor fora do vocabulário (ou "unknown") é NÃO REPORTADO: não vira texto
+    /// livre na coluna e NÃO sobrescreve o último tipo conhecido — agentes
+    /// antigos enviam "unknown" quando o WMI falha, e gravar isso apagava o
+    /// "notebook" já identificado (o painel mostrava "—").
     /// </summary>
-    [Test]
-    public async Task PayloadNovo_MachineTypeForaDoVocabulario_ViraUnknown()
+    [TestCase("geladeira-inteligente")]
+    [TestCase("unknown")]
+    [TestCase("UNKNOWN")]
+    public async Task PayloadNovo_MachineTypeForaDoVocabulario_NaoEhReportado(string machineType)
     {
-        var info = await IngestAsync(new { machineType = "geladeira-inteligente" });
+        var info = await IngestAsync(new { machineType });
 
-        Assert.That(info.MachineType, Is.EqualTo("unknown"));
+        Assert.That(info.MachineType, Is.Null);
     }
 
     [Test]
@@ -212,12 +216,15 @@ public class AgentMachineTypePersistenceTests
         });
     }
 
-    /// <summary>MachineType é cortado no limite da coluna, não derruba o INSERT.</summary>
+    /// <summary>
+    /// MachineType absurdo não estoura a coluna nem vira texto livre: é não
+    /// reportado (null), então a linha anterior permanece intacta.
+    /// </summary>
     [Test]
     public async Task PayloadNovo_MachineTypeLongo_NaoEstouraColuna()
     {
         var info = await IngestAsync(new { machineType = new string('X', 200) });
 
-        Assert.That(info.MachineType, Is.EqualTo("unknown"));
+        Assert.That(info.MachineType, Is.Null);
     }
 }

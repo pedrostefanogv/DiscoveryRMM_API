@@ -222,7 +222,16 @@ public sealed class ReportAgentHardwareCommandHandler(
 
             var reportedMachineType = ReadOsString(hw, "machineType", ["machine_type", "deviceType"]);
             if (reportedMachineType is not null)
-                hardwareInfo.MachineType = NormalizeMachineType(reportedMachineType);
+            {
+                // "unknown" (ou valor fora do vocabulário) é NÃO REPORTADO e não
+                // sobrescreve o último tipo conhecido: agentes ANTIGOS enviam
+                // "unknown" quando a leitura de WMI falha, e gravar isso apagava
+                // o "notebook" já identificado — o painel passava a mostrar "—"
+                // no tipo de máquina (e o ícone perdia a distinção visual).
+                var normalizedMachineType = NormalizeMachineType(reportedMachineType);
+                if (normalizedMachineType != "unknown")
+                    hardwareInfo.MachineType = normalizedMachineType;
+            }
 
             var reportedChassisType = ReadInt(hw, "chassisType", ["chassis_type"]);
             if (reportedChassisType is not null) hardwareInfo.ChassisType = reportedChassisType;
@@ -395,8 +404,20 @@ public sealed class ReportAgentHardwareCommandHandler(
         target.PartOfDomain ??= source.PartOfDomain;
 
         // Formato físico da máquina.
+        //
+        // MachineType NÃO é copiado cru: este caminho (fallback de desserialização
+        // do objeto "hardware") não passa pela normalização do parse explícito, e
+        // copiar o valor bruto gravava texto livre na coluna (inclusive acima de
+        // varchar(20), o que derrubaria o sync no banco real) e reescrevia
+        // "unknown" por cima de um tipo já conhecido.
         target.IsLaptop ??= source.IsLaptop;
-        target.MachineType ??= source.MachineType;
+        if (target.MachineType is null && source.MachineType is not null)
+        {
+            var normalizedMachineType = NormalizeMachineType(source.MachineType);
+            if (normalizedMachineType != "unknown")
+                target.MachineType = normalizedMachineType;
+        }
+
         target.ChassisType ??= source.ChassisType;
         target.PcSystemType ??= source.PcSystemType;
     }
