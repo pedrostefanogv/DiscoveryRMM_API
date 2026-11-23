@@ -584,6 +584,62 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
         await Task.WhenAll(heartbeatTask, resultTask, hardwareTask, globalPongTask, supportChatTask);
     }
 
+    /// <summary>
+    /// Payload do evento de dashboard "AgentHeartbeat" — o caminho de TEMPO REAL
+    /// do painel (a lista e o detalhe assinam esse evento).
+    ///
+    /// ATENÇÃO: esta projeção é uma WHITELIST de campos. Campo novo no
+    /// <see cref="AgentHeartbeat"/> que não seja adicionado aqui continua indo
+    /// para o Redis/HTTP (polling), mas NÃO chega ao tempo real — e como o
+    /// refetch das queries de agente é de 5 minutos, a UI fica presa no valor
+    /// antigo até o próximo poll. Foi exatamente o que aconteceu com a bateria:
+    /// o notebook era desplugado e o painel seguia mostrando "Na tomada".
+    ///
+    /// O teste AgentHeartbeatEventPayloadTests percorre por REFLEXÃO as
+    /// propriedades de AgentHeartbeat e falha se alguma ficar de fora — exceto
+    /// as listadas como responsabilidade de outro evento (PeerId/Addrs/Port, que
+    /// viajam no peer.online).
+    /// </summary>
+    internal static object BuildHeartbeatEventPayload(
+        AgentHeartbeat heartbeat,
+        Guid agentId,
+        Guid clientId,
+        Guid siteId) => new
+    {
+        AgentId = agentId,
+        Status = "Online",
+        ClientId = clientId,
+        SiteId = siteId,
+        heartbeat.IpAddress,
+        heartbeat.Hostname,
+        heartbeat.AgentVersion,
+        heartbeat.TimestampUtc,
+        heartbeat.CpuPercent,
+        heartbeat.CpuTemperatureCelsius,
+        heartbeat.MemoryPercent,
+        heartbeat.MemoryTotalGb,
+        heartbeat.MemoryUsedGb,
+        heartbeat.DiskPercent,
+        heartbeat.DiskTotalGb,
+        heartbeat.DiskUsedGb,
+        heartbeat.DiskReadPercent,
+        heartbeat.DiskWritePercent,
+        heartbeat.DiskResponseMs,
+        heartbeat.P2pPeers,
+        heartbeat.UptimeSeconds,
+        heartbeat.ProcessCount,
+        heartbeat.UiOnline,
+        heartbeat.LoggedUser,
+        heartbeat.LoggedUserSince,
+        heartbeat.UiOnlineCount,
+        // Energia (bateria × tomada): alimenta o chip da listagem e o painel do
+        // detalhe em tempo real (Na tomada / Na bateria).
+        heartbeat.HasBattery,
+        heartbeat.BatteryPercent,
+        heartbeat.BatteryOnAc,
+        heartbeat.BatteryCharging
+    };
+
     internal async Task HandleHeartbeatMessageAsync(string subject, string? data, CancellationToken cancellationToken)
     {
         if (!NatsSubjectBuilder.TryParseAgentSubject(subject, out var subjectClientId, out var subjectSiteId, out var subjectAgentId))
@@ -677,35 +733,8 @@ public class NatsAgentMessaging : IAgentMessaging, IAsyncDisposable
             }
         }
 
-        var eventPayload = new
-        {
-            AgentId = subjectAgentId,
-            Status = "Online",
-            ClientId = subjectClientId,
-            SiteId = subjectSiteId,
-            heartbeat.IpAddress,
-            heartbeat.Hostname,
-            heartbeat.AgentVersion,
-            heartbeat.TimestampUtc,
-            heartbeat.CpuPercent,
-            heartbeat.CpuTemperatureCelsius,
-            heartbeat.MemoryPercent,
-            heartbeat.MemoryTotalGb,
-            heartbeat.MemoryUsedGb,
-            heartbeat.DiskPercent,
-            heartbeat.DiskTotalGb,
-            heartbeat.DiskUsedGb,
-            heartbeat.DiskReadPercent,
-            heartbeat.DiskWritePercent,
-            heartbeat.DiskResponseMs,
-            heartbeat.P2pPeers,
-            heartbeat.UptimeSeconds,
-            heartbeat.ProcessCount,
-            heartbeat.UiOnline,
-            heartbeat.LoggedUser,
-            heartbeat.LoggedUserSince,
-            heartbeat.UiOnlineCount
-        };
+        var eventPayload = BuildHeartbeatEventPayload(
+            heartbeat, subjectAgentId, subjectClientId, subjectSiteId);
 
         var dashboardMessage = DashboardEventMessage.Create(
             "AgentHeartbeat", eventPayload,

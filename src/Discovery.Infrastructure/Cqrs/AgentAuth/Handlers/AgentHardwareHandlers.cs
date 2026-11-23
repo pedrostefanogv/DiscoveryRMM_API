@@ -304,7 +304,11 @@ public sealed class ReportAgentHardwareCommandHandler(
         // NÃO trouxe com o estado atual: um sync parcial nunca apaga hardware.
         // Um sync completo continua autoritativo (só campos nulos são
         // preenchidos), inclusive para refletir mudanças legítimas.
-        if (cmd.Hardware is null && IsMissingInventoryRaw(cmd.InventoryRaw))
+        // A condição é só "não veio o objeto hardware". O inventoryRaw, sozinho,
+        // NÃO é fonte dos campos escalares (o handler nunca derivou escalar do
+        // raw — só componentes), então qualquer payload sem `hardware` é
+        // parcial para fins de hardware e não pode apagar o que está gravado.
+        if (cmd.Hardware is null)
         {
             var current = await hardwareRepo.GetByAgentIdAsync(cmd.AgentId);
             if (current is not null)
