@@ -20,17 +20,20 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
     private readonly RemoteAccessOptions _options;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<RecordingStorageCleanupService> _logger;
+    private readonly IObjectStorageProviderFactory? _storageFactory;
 
     public RecordingStorageCleanupService(
         DiscoveryDbContext db,
         IOptions<RemoteAccessOptions> options,
         IHttpClientFactory httpClientFactory,
-        ILogger<RecordingStorageCleanupService> logger)
+        ILogger<RecordingStorageCleanupService> logger,
+        IObjectStorageProviderFactory? storageFactory = null)
     {
         _db = db;
         _options = options.Value;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _storageFactory = storageFactory;
     }
 
     /// <summary>
@@ -187,10 +190,22 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
 
             try
             {
-                var storage = new TerminalRecordingS3Storage(_options, _logger, _httpClientFactory);
-                await storage.DeleteAsync(
-                    TerminalRecordingS3Storage.BuildKey(recording.RemoteSessionId),
-                    ct);
+                if (string.IsNullOrWhiteSpace(_options.Recording.S3.AccessKey)
+                    && _storageFactory is not null
+                    && (await _storageFactory.ValidateConfigurationAsync()).Count == 0)
+                {
+                    var centralStorage = await _storageFactory.CreateObjectStorageServiceAsync(ct);
+                    await centralStorage.DeleteAsync(
+                        $"recordings/{TerminalRecordingS3Storage.BuildKey(recording.RemoteSessionId)}",
+                        ct);
+                }
+                else
+                {
+                    var storage = new TerminalRecordingS3Storage(_options, _logger, _httpClientFactory);
+                    await storage.DeleteAsync(
+                        TerminalRecordingS3Storage.BuildKey(recording.RemoteSessionId),
+                        ct);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -222,9 +237,20 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
 
         if (recording.StorageProvider == RecordingStorageProvider.S3)
         {
+            if (!target.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(_options.Recording.S3.AccessKey)
+                && _storageFactory is not null
+                && (await _storageFactory.ValidateConfigurationAsync()).Count == 0)
+            {
+                var centralStorage = await _storageFactory.CreateObjectStorageServiceAsync(ct);
+                await centralStorage.DeleteAsync(target.TrimStart('/'), ct);
+                _logger.LogInformation("Gravação S3 removida via storage central: {Key}", target);
+                return;
+            }
+
             var url = target.StartsWith("http", StringComparison.OrdinalIgnoreCase)
                 ? target
-                : BuildS3Url(target);
+                : S3RecordingStorage.BuildRequestUrl(_options.Recording.S3, "DELETE", target);
 
             using var response = await _httpClientFactory.CreateClient("S3Recording").DeleteAsync(url, ct);
             if (response.IsSuccessStatusCode)
@@ -244,13 +270,5 @@ public class RecordingStorageCleanupService : IRecordingStorageCleanupService
             File.Delete(fullPath);
             _logger.LogInformation("Gravação local removida: {Path}", fullPath);
         }
-    }
-
-    private string BuildS3Url(string key)
-    {
-        var s3 = _options.Recording.S3;
-        return s3.UsePathStyle
-            ? $"{s3.Endpoint}/{s3.Bucket}/{key}"
-            : $"https://{s3.Bucket}.{s3.Endpoint}/{key}";
     }
 }

@@ -73,6 +73,19 @@ public interface IObjectStorageService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gerar URL pré-assinada privada para download com validade em <see cref="TimeSpan"/>
+    /// (útil para downloads interativos de curta duração, ex.: 5 minutos).
+    /// </summary>
+    Task<string> GetPresignedDownloadUrlAsync(
+        string objectKey,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default)
+        => GetPresignedDownloadUrlAsync(
+            objectKey,
+            Math.Max(1, (int)Math.Ceiling(ttl.TotalHours)),
+            cancellationToken);
+
+    /// <summary>
     /// Gerar URL pré-assinada privada para upload direto no storage.
     /// </summary>
     /// <param name="objectKey">Chave do objeto</param>

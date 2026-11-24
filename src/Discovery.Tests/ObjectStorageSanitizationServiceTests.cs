@@ -172,9 +172,58 @@ public class ObjectStorageSanitizationServiceTests
         Assert.That(service.IsRunning, Is.False);
     }
 
+    [Test]
+    public async Task Execucao_concorrente_entre_instancias_scoped_com_mesmo_gate_e_bloqueada()
+    {
+        var gate = new TaskCompletionSource();
+        var storage = new FakeStorage(Item("app-store/custom/installers/a/Setup.zip", 10, Now.AddDays(-3)))
+        {
+            ListGate = gate.Task,
+        };
+        var sharedGate = new ObjectStorageSanitizationGate();
+        var firstService = new ObjectStorageSanitizationService(
+            new FakeStorageFactory(storage), new FakeAppPackageRepository([]), NullLogger<ObjectStorageSanitizationService>.Instance, sharedGate);
+        var secondService = new ObjectStorageSanitizationService(
+            new FakeStorageFactory(storage), new FakeAppPackageRepository([]), NullLogger<ObjectStorageSanitizationService>.Instance, sharedGate);
+
+        var first = firstService.RunAsync(dryRun: true, checks: null, minAgeHours: 24);
+        await storage.ListStarted.Task;
+
+        await Assert.ThrowsAsync<ObjectStorageSanitizationBusyException>(
+            () => secondService.RunAsync(dryRun: true, checks: null, minAgeHours: 24));
+
+        gate.SetResult();
+        await first;
+    }
+
+    [Test]
+    public async Task Varredura_seletiva_evita_listar_bucket_inteiro_quando_nao_ha_inventario()
+    {
+        var storage = new FakeStorage(
+            Item("app-store/custom/icons/orfao/logo.png", 2, Now.AddDays(-2)),
+            Item("clients/1/reports/x/r.csv", 5, Now.AddDays(-10)));
+        var service = NewService(storage, new FakeAppPackageRepository([]));
+
+        var orphanOnly = await service.RunAsync(
+            dryRun: true,
+            checks: [ObjectStorageSanitizationChecks.OrphanCustomAssets],
+            minAgeHours: 24);
+        Assert.That(storage.ListPrefixes, Is.EqualTo(new[] { ObjectStorageSanitizationService.CustomAssetsPrefix }));
+        Assert.That(orphanOnly.Checks, Has.Count.EqualTo(1));
+
+        storage.ListPrefixes.Clear();
+        var multipartOnly = await service.RunAsync(
+            dryRun: true,
+            checks: [ObjectStorageSanitizationChecks.IncompleteMultipartUploads],
+            minAgeHours: 24);
+        Assert.That(storage.ListPrefixes, Is.Empty);
+        Assert.That(multipartOnly.Checks, Has.Count.EqualTo(1));
+    }
+
     private sealed class FakeStorage(params StorageObjectInfo[] items) : IObjectStorageService
     {
         public List<string> Deleted { get; } = [];
+        public List<string?> ListPrefixes { get; } = [];
 
         public string? FailOnDelete { get; init; }
 
@@ -187,6 +236,7 @@ public class ObjectStorageSanitizationServiceTests
             int maxObjects,
             CancellationToken cancellationToken = default)
         {
+            ListPrefixes.Add(prefix);
             ListStarted.TrySetResult();
 
             if (ListGate is not null)

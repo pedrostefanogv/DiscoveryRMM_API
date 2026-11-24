@@ -25,6 +25,8 @@ public class ConfigurationService : IConfigurationService
     private readonly ISecretProtector _secretProtector;
     private readonly IRedisService _redisService;
     private readonly INatsConnectionValidator _natsConnectionValidator;
+    private readonly IObjectStorageProviderFactory? _objectStorageFactory;
+    private readonly ObjectStorage.ObjectStorageHealthService? _objectStorageHealth;
 
     public ConfigurationService(
         IServerConfigurationRepository serverRepo,
@@ -35,7 +37,9 @@ public class ConfigurationService : IConfigurationService
         IConfigurationResolver resolver,
         ISecretProtector secretProtector,
         IRedisService redisService,
-        INatsConnectionValidator natsConnectionValidator)
+        INatsConnectionValidator natsConnectionValidator,
+        IObjectStorageProviderFactory? objectStorageFactory = null,
+        ObjectStorage.ObjectStorageHealthService? objectStorageHealth = null)
     {
         _serverRepo = serverRepo;
         _clientRepo = clientRepo;
@@ -46,6 +50,8 @@ public class ConfigurationService : IConfigurationService
         _secretProtector = secretProtector;
         _redisService = redisService;
         _natsConnectionValidator = natsConnectionValidator;
+        _objectStorageFactory = objectStorageFactory;
+        _objectStorageHealth = objectStorageHealth;
     }
 
     // ============ Server ============
@@ -142,6 +148,8 @@ public class ConfigurationService : IConfigurationService
             await ApplyServerLockCascadeAsync(addedLocks, updatedBy);
 
         _resolver.ClearCache();
+        _objectStorageFactory?.InvalidateCache();
+        _objectStorageHealth?.Invalidate();
         await _redisService.DeleteAsync(ServerConfigCacheKey);
         return config;
     }
@@ -159,6 +167,8 @@ public class ConfigurationService : IConfigurationService
         };
         await _serverRepo.UpdateAsync(reset);
         _resolver.ClearCache();
+        _objectStorageFactory?.InvalidateCache();
+        _objectStorageHealth?.Invalidate();
         await _redisService.DeleteAsync(ServerConfigCacheKey);
         await _audit.LogChangeAsync("Server", existing.Id, "*", null, null, "Reset to defaults", resetBy);
         return reset;

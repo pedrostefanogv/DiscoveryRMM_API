@@ -120,12 +120,21 @@ public static class AwsSigV4Signer
         string secretKey,
         string region,
         DateTimeOffset now,
-        int expiresSeconds)
+        int expiresSeconds,
+        bool usePathStyle = true)
     {
         if (string.IsNullOrWhiteSpace(bucket))
             throw new ArgumentException("bucket is required", nameof(bucket));
 
-        var path = "/" + EncodePathSegment(bucket) + "/" + EncodePath(objectKey);
+        var encodedKey = string.IsNullOrEmpty(objectKey) ? string.Empty : EncodePath(objectKey);
+        if (!usePathStyle)
+        {
+            var virtualHost = new UriBuilder(endpoint.Scheme, $"{bucket}.{endpoint.Host}", endpoint.IsDefaultPort ? -1 : endpoint.Port).Uri;
+            var virtualPath = string.IsNullOrEmpty(encodedKey) ? "/" : "/" + encodedKey;
+            return CreatePresignedUrl(method, virtualHost, virtualPath, query, accessKey, secretKey, region, now, expiresSeconds);
+        }
+
+        var path = "/" + EncodePathSegment(bucket) + "/" + encodedKey;
         return CreatePresignedUrl(method, endpoint, path, query, accessKey, secretKey, region, now, expiresSeconds);
     }
 
@@ -140,7 +149,8 @@ public static class AwsSigV4Signer
         string secretKey,
         string region,
         DateTimeOffset now,
-        int expiresSeconds)
+        int expiresSeconds,
+        bool usePathStyle = true)
     {
         if (partNumber is < 1 or > 10000)
             throw new ArgumentOutOfRangeException(nameof(partNumber));
@@ -151,7 +161,7 @@ public static class AwsSigV4Signer
             ["uploadId"] = uploadId,
         };
 
-        return CreatePresignedObjectUrl("PUT", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds);
+        return CreatePresignedObjectUrl("PUT", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds, usePathStyle);
     }
 
     /// <summary>
@@ -168,7 +178,8 @@ public static class AwsSigV4Signer
         string secretKey,
         string region,
         DateTimeOffset now,
-        int expiresSeconds)
+        int expiresSeconds,
+        bool usePathStyle = true)
     {
         if (string.IsNullOrWhiteSpace(uploadId))
             throw new ArgumentException("uploadId is required", nameof(uploadId));
@@ -178,7 +189,7 @@ public static class AwsSigV4Signer
             ["uploadId"] = uploadId,
         };
 
-        return CreatePresignedObjectUrl("GET", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds);
+        return CreatePresignedObjectUrl("GET", endpoint, bucket, objectKey, query, accessKey, secretKey, region, now, expiresSeconds, usePathStyle);
     }
 
     /// <summary>

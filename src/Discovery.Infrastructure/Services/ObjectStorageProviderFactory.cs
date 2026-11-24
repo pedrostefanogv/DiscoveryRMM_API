@@ -189,8 +189,23 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
 
         _logger.LogInformation("Creating ObjectStorageService using MinIO S3-compatible provider");
         var service = CreateMinioStorageService(settings);
-        _cache.Set(CacheKey, service, TimeSpan.FromSeconds(30));
+        _cache.Set(CacheKey, service, TimeSpan.FromMinutes(5));
         return service;
+    }
+
+    public void InvalidateCache()
+    {
+        _cache.Remove(CacheKey);
+    }
+
+    public async Task<ObjectStorageEffectiveSettings> ResolveEffectiveSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var config = await _serverConfigRepository.GetOrCreateDefaultAsync();
+        var options = _objectStorageOptions.Value;
+        var internalMode = IsEffectiveInternal(config, options);
+        var settings = ResolveSettings(config);
+        return new ObjectStorageEffectiveSettings(settings, internalMode, settings.IsConfigured());
     }
 
     /// <summary>
@@ -230,8 +245,49 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
                 LatencyMs: 0);
         }
 
-        var childLogger = _loggerFactory.CreateLogger<MinioObjectStorageProvider>();
-        var service = new MinioObjectStorageProvider(settings, childLogger);
+        using var childLoggerScope = new MinioObjectStorageProvider(settings, _loggerFactory.CreateLogger<MinioObjectStorageProvider>());
+        return await childLoggerScope.TestConnectionAsync(cancellationToken);
+    }
+
+    public async Task<ObjectStorageTestResult> TestDraftConnectionAsync(
+        ObjectStorageDraftInput draft,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+
+        var current = await _serverConfigRepository.GetOrCreateDefaultAsync();
+        var draftConfig = new ServerConfiguration
+        {
+            ObjectStorageInternal = draft.Internal ?? current.ObjectStorageInternal,
+            ObjectStorageEndpoint = draft.Endpoint ?? current.ObjectStorageEndpoint,
+            ObjectStorageBucketName = draft.BucketName ?? current.ObjectStorageBucketName,
+            ObjectStorageRegion = draft.Region ?? current.ObjectStorageRegion,
+            ObjectStorageAccessKey = draft.AccessKey ?? current.ObjectStorageAccessKey,
+            ObjectStorageSecretKey = string.IsNullOrWhiteSpace(draft.SecretKey)
+                ? current.ObjectStorageSecretKey
+                : draft.SecretKey,
+            ObjectStorageUrlTtlHours = draft.UrlTtlHours ?? current.ObjectStorageUrlTtlHours,
+            ObjectStorageUsePathStyle = draft.UsePathStyle ?? current.ObjectStorageUsePathStyle,
+            ObjectStorageSslVerify = draft.SslVerify ?? current.ObjectStorageSslVerify,
+        };
+
+        var settings = ResolveSettings(draftConfig);
+        var validationErrors = settings.Validate();
+        var internalErrors = InternalModeMissingCredentialsErrors(draftConfig);
+        if (internalErrors.Count > 0)
+            validationErrors = internalErrors;
+
+        if (validationErrors.Count > 0)
+        {
+            return new ObjectStorageTestResult(
+                Success: false,
+                ConfigurationValid: false,
+                BucketReachable: false,
+                Errors: validationErrors.ToArray(),
+                LatencyMs: 0);
+        }
+
+        using var service = new MinioObjectStorageProvider(settings, _loggerFactory.CreateLogger<MinioObjectStorageProvider>());
         return await service.TestConnectionAsync(cancellationToken);
     }
 
@@ -313,6 +369,9 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
     public Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
+    public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
     public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
@@ -335,6 +394,9 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
         => throw NotConfigured();
 
     public Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<IReadOnlyList<MultipartUploadSessionInfo>> ListMultipartUploadSessionsAsync(string? prefix, int maxSessions, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
     public Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default) =>
@@ -378,6 +440,9 @@ file sealed class DeferredObjectStorageProvider : IObjectStorageService
     public async Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetPresignedDownloadUrlAsync(objectKey, ttlHours, cancellationToken);
 
+    public async Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).GetPresignedDownloadUrlAsync(objectKey, ttl, cancellationToken);
+
     public async Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, cancellationToken);
 
@@ -401,6 +466,9 @@ file sealed class DeferredObjectStorageProvider : IObjectStorageService
 
     public async Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).ListMultipartUploadPartsAsync(objectKey, uploadId, cancellationToken);
+
+    public async Task<IReadOnlyList<MultipartUploadSessionInfo>> ListMultipartUploadSessionsAsync(string? prefix, int maxSessions, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).ListMultipartUploadSessionsAsync(prefix, maxSessions, cancellationToken);
 
     public async Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).TestConnectionAsync(cancellationToken);

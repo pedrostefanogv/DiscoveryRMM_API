@@ -117,3 +117,21 @@ public class ObjectStorageSettings
         return Uri.CheckHostName(trimmed.Split(':')[0]) != UriHostNameType.Unknown;
     }
 }
+
+/// <summary>Configuração efetiva resolvida (banco + env de modo interno).</summary>
+public sealed record ObjectStorageEffectiveSettings(
+    ObjectStorageSettings Settings,
+    bool InternalMode,
+    bool Configured);
+
+/// <summary>Rascunho opcional para testar conectividade antes de salvar.</summary>
+public sealed record ObjectStorageDraftInput(
+    bool? Internal = null,
+    string? Endpoint = null,
+    string? BucketName = null,
+    string? Region = null,
+    string? AccessKey = null,
+    string? SecretKey = null,
+    int? UrlTtlHours = null,
+    bool? UsePathStyle = null,
+    bool? SslVerify = null);

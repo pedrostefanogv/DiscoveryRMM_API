@@ -613,6 +613,27 @@ public sealed class TerminalRecordingCoordinator : IAsyncDisposable
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
+            var storageFactory = scope.ServiceProvider.GetService<Discovery.Core.Interfaces.IObjectStorageProviderFactory>();
+            if (string.IsNullOrWhiteSpace(options.Recording.S3.AccessKey)
+                && storageFactory is not null
+                && (await storageFactory.ValidateConfigurationAsync()).Count == 0)
+            {
+                var centralStorage = await storageFactory.CreateObjectStorageServiceAsync(ct);
+                await using var stream = new FileStream(
+                    fullPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete,
+                    bufferSize: 64 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await centralStorage.UploadAsync(
+                    $"recordings/{TerminalRecordingS3Storage.BuildKey(sessionId)}",
+                    stream,
+                    TerminalRecordingS3Storage.ContentType,
+                    ct);
+                return (true, null);
+            }
+
             var httpClientFactory = scope.ServiceProvider.GetService<IHttpClientFactory>();
             if (httpClientFactory is null)
             {

@@ -67,17 +67,22 @@ public sealed class ObjectStorageTelemetry
                 Interlocked.Increment(ref _uploads);
                 Interlocked.Add(ref _bytesIn, Math.Max(0, bytes));
                 break;
+            case "multipart-complete":
+                Interlocked.Increment(ref _uploads);
+                break;
             case "download":
                 Interlocked.Increment(ref _downloads);
                 Interlocked.Add(ref _bytesOut, Math.Max(0, bytes));
                 break;
             case "presign":
+            case "multipart-presign":
                 Interlocked.Increment(ref _presigns);
                 break;
             case "head":
                 Interlocked.Increment(ref _heads);
                 break;
             case "delete":
+            case "multipart-abort":
                 Interlocked.Increment(ref _deletes);
                 break;
         }
@@ -108,6 +113,9 @@ public sealed class ObjectStorageTelemetry
     {
         double p95;
         double max;
+        DateTime? lastSuccess;
+        DateTime? lastFailure;
+        string? lastError;
         lock (_sync)
         {
             if (_latencySamplesMs.Count == 0)
@@ -122,6 +130,10 @@ public sealed class ObjectStorageTelemetry
                 var index = (int)Math.Ceiling(0.95 * sorted.Length) - 1;
                 p95 = sorted[Math.Max(0, Math.Min(index, sorted.Length - 1))];
             }
+
+            lastSuccess = _lastSuccessAtUtc;
+            lastFailure = _lastFailureAtUtc;
+            lastError = _lastError;
         }
 
         var operations = Interlocked.Read(ref _operations);
@@ -142,9 +154,9 @@ public sealed class ObjectStorageTelemetry
             P95LatencyMs: Math.Round(p95, 1),
             MaxLatencyMs: Math.Round(max, 1),
             InFlight: Volatile.Read(ref _inFlight),
-            LastSuccessAtUtc: _lastSuccessAtUtc,
-            LastFailureAtUtc: _lastFailureAtUtc,
-            LastError: _lastError);
+            LastSuccessAtUtc: lastSuccess,
+            LastFailureAtUtc: lastFailure,
+            LastError: lastError);
     }
 
     private static string? Truncate(string? value)
@@ -172,8 +184,30 @@ public sealed class InstrumentedObjectStorageProvider(
     public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
         => MeasureAsync("download", () => inner.DownloadAsync(objectKey, cancellationToken));
 
-    public Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
-        => MeasureAsync("download", () => inner.DownloadToAsync(objectKey, destination, cancellationToken));
+    public async Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+
+        telemetry.OperationStarted();
+        var sw = Stopwatch.StartNew();
+        using var counting = new CountingWriteStream(destination);
+        try
+        {
+            await inner.DownloadToAsync(objectKey, counting, cancellationToken).ConfigureAwait(false);
+            sw.Stop();
+            telemetry.Record("download", counting.BytesWritten, sw.Elapsed, true);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            telemetry.Record("download", counting.BytesWritten, sw.Elapsed, false, ex.Message);
+            throw;
+        }
+        finally
+        {
+            telemetry.OperationFinished();
+        }
+    }
 
     public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default)
         => MeasureAsync("head", () => inner.ExistsAsync(objectKey, cancellationToken));
@@ -186,6 +220,9 @@ public sealed class InstrumentedObjectStorageProvider(
 
     public Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
         => MeasureAsync("presign", () => inner.GetPresignedDownloadUrlAsync(objectKey, ttlHours, cancellationToken));
+
+    public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
+        => MeasureAsync("presign", () => inner.GetPresignedDownloadUrlAsync(objectKey, ttl, cancellationToken));
 
     public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
         => MeasureAsync("presign", () => inner.GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, cancellationToken));
@@ -214,6 +251,12 @@ public sealed class InstrumentedObjectStorageProvider(
 
     public Task<IReadOnlyList<Discovery.Core.ValueObjects.MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
         => MeasureAsync("multipart-list", () => inner.ListMultipartUploadPartsAsync(objectKey, uploadId, cancellationToken));
+
+    public Task<IReadOnlyList<Discovery.Core.Interfaces.MultipartUploadSessionInfo>> ListMultipartUploadSessionsAsync(
+        string? prefix,
+        int maxSessions,
+        CancellationToken cancellationToken = default)
+        => MeasureAsync("list-objects", () => inner.ListMultipartUploadSessionsAsync(prefix, maxSessions, cancellationToken));
 
     private async Task<T> MeasureAsync<T>(string operation, Func<Task<T>> action)
     {
@@ -266,4 +309,51 @@ public sealed class InstrumentedObjectStorageProvider(
         Stream stream when stream.CanSeek => stream.Length,
         _ => 0
     };
+
+    private sealed class CountingWriteStream(Stream innerStream) : Stream
+    {
+        private long _bytesWritten;
+
+        public long BytesWritten => Interlocked.Read(ref _bytesWritten);
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => innerStream.CanWrite;
+        public override long Length => innerStream.Length;
+        public override long Position
+        {
+            get => innerStream.Position;
+            set => innerStream.Position = value;
+        }
+
+        public override void Flush() => innerStream.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => innerStream.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => innerStream.SetLength(value);
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            innerStream.Write(buffer, offset, count);
+            Interlocked.Add(ref _bytesWritten, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            innerStream.Write(buffer);
+            Interlocked.Add(ref _bytesWritten, buffer.Length);
+        }
+
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            await innerStream.WriteAsync(buffer.AsMemory(offset, count), cancellationToken).ConfigureAwait(false);
+            Interlocked.Add(ref _bytesWritten, count);
+        }
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await innerStream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            Interlocked.Add(ref _bytesWritten, buffer.Length);
+        }
+    }
 }

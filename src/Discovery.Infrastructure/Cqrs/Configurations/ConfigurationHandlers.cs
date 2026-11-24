@@ -190,11 +190,21 @@ public sealed class DeleteAiCredentialCommandHandler(IAiProviderCredentialReposi
     }
 }
 
-public sealed class TestObjectStorageCommandHandler(IObjectStorageProviderFactory factory)
+public sealed class TestObjectStorageCommandHandler(
+    IObjectStorageProviderFactory factory,
+    Services.ObjectStorage.ObjectStorageHealthService? healthService = null)
     : IRequestHandler<TestObjectStorageCommand, Result<object>>
 {
     public async Task<Result<object>> Handle(TestObjectStorageCommand cmd, CancellationToken ct)
-        => Result<object>.Success(await factory.TestConnectionAsync(ct));
+    {
+        if (cmd.Draft is not null)
+            return Result<object>.Success(await factory.TestDraftConnectionAsync(cmd.Draft, ct));
+
+        var result = await factory.TestConnectionAsync(ct);
+        if (result.Success)
+            healthService?.Invalidate();
+        return Result<object>.Success(result);
+    }
 }
 
 public sealed class TestNatsConnectionCommandHandler(

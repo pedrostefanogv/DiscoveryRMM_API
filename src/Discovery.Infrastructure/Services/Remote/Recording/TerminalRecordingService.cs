@@ -21,19 +21,22 @@ public sealed class TerminalRecordingService : ITerminalRecordingService
     private readonly TerminalRecordingCoordinator _coordinator;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TerminalRecordingService> _logger;
+    private readonly IObjectStorageProviderFactory? _storageFactory;
 
     public TerminalRecordingService(
         DiscoveryDbContext db,
         IOptions<RemoteAccessOptions> options,
         TerminalRecordingCoordinator coordinator,
         IHttpClientFactory httpClientFactory,
-        ILogger<TerminalRecordingService> logger)
+        ILogger<TerminalRecordingService> logger,
+        IObjectStorageProviderFactory? storageFactory = null)
     {
         _db = db;
         _options = options.Value;
         _coordinator = coordinator;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _storageFactory = storageFactory;
     }
 
     public async Task<TerminalRecordingDto?> GetAsync(Guid agentId, Guid sessionId, CancellationToken ct = default)
@@ -119,6 +122,25 @@ public sealed class TerminalRecordingService : ITerminalRecordingService
         // não mudam; o modo Local segue exatamente como antes (stream).
         if (IsS3DownloadEnabled(row.StorageProvider))
         {
+            if (string.IsNullOrWhiteSpace(_options.Recording.S3.AccessKey)
+                && _storageFactory is not null
+                && (await _storageFactory.ValidateConfigurationAsync()).Count == 0)
+            {
+                var ttlMinutes = _options.Recording.S3.PresignTtlMinutes > 0
+                    ? Math.Min(_options.Recording.S3.PresignTtlMinutes, TerminalRecordingS3Storage.ShortPresignTtlMinutes)
+                    : TerminalRecordingS3Storage.ShortPresignTtlMinutes;
+                var centralStorage = await _storageFactory.CreateObjectStorageServiceAsync(ct);
+                var centralUrl = await centralStorage.GetPresignedDownloadUrlAsync(
+                    $"recordings/{TerminalRecordingS3Storage.BuildKey(sessionId)}",
+                    TimeSpan.FromMinutes(ttlMinutes),
+                    ct);
+                return new TerminalRecordingDownloadDto(
+                    null,
+                    $"terminal-{sessionId:N}.ndjson",
+                    0,
+                    centralUrl);
+            }
+
             return new TerminalRecordingDownloadDto(
                 null,
                 $"terminal-{sessionId:N}.ndjson",
@@ -190,8 +212,18 @@ public sealed class TerminalRecordingService : ITerminalRecordingService
         {
             try
             {
-                var storage = new TerminalRecordingS3Storage(_options, _logger, _httpClientFactory);
-                await storage.DeleteAsync(TerminalRecordingS3Storage.BuildKey(sessionId), ct);
+                if (string.IsNullOrWhiteSpace(_options.Recording.S3.AccessKey)
+                    && _storageFactory is not null
+                    && (await _storageFactory.ValidateConfigurationAsync()).Count == 0)
+                {
+                    var centralStorage = await _storageFactory.CreateObjectStorageServiceAsync(ct);
+                    await centralStorage.DeleteAsync($"recordings/{TerminalRecordingS3Storage.BuildKey(sessionId)}", ct);
+                }
+                else
+                {
+                    var storage = new TerminalRecordingS3Storage(_options, _logger, _httpClientFactory);
+                    await storage.DeleteAsync(TerminalRecordingS3Storage.BuildKey(sessionId), ct);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

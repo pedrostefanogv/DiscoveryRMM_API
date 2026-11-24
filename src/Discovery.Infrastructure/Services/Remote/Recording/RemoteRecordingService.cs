@@ -16,6 +16,7 @@ public class RemoteRecordingService : IRemoteRecordingService
     private readonly ITerminalRecordingService _terminalRecordings;
     private readonly RemoteAccessOptions _options;
     private readonly IConfigurationResolver? _configurationResolver;
+    private readonly IObjectStorageProviderFactory? _storageFactory;
     private readonly ILogger<RemoteRecordingService> _logger;
 
     public RemoteRecordingService(
@@ -23,7 +24,8 @@ public class RemoteRecordingService : IRemoteRecordingService
         ITerminalRecordingService terminalRecordings,
         IOptions<RemoteAccessOptions> options,
         ILogger<RemoteRecordingService> logger,
-        IConfigurationResolver? configurationResolver = null)
+        IConfigurationResolver? configurationResolver = null,
+        IObjectStorageProviderFactory? storageFactory = null)
     {
         _sessionRepo = sessionRepo;
         _terminalRecordings = terminalRecordings;
@@ -32,6 +34,7 @@ public class RemoteRecordingService : IRemoteRecordingService
         // Opcional para não quebrar as construções diretas já existentes (testes e
         // o registro antigo de DI): sem resolvedor vale o default true.
         _configurationResolver = configurationResolver;
+        _storageFactory = storageFactory;
     }
 
     public async Task<RemoteSessionRecording> StartRecordingAsync(Guid sessionId, Guid userId, CancellationToken ct = default)
@@ -156,22 +159,65 @@ public class RemoteRecordingService : IRemoteRecordingService
         return recording;
     }
 
-    public Task<string> GetDownloadUrlAsync(Guid recordingId, CancellationToken ct = default)
+    public async Task<string> GetDownloadUrlAsync(Guid recordingId, CancellationToken ct = default)
     {
         // Retorna URL presigned S3 ou path local
         var provider = ResolveStorageProvider();
-        var path = $"/recordings/{recordingId:N}.webm";
+        var key = $"recordings/{recordingId:N}.webm";
 
         if (provider == RecordingStorageProvider.S3)
-            return Task.FromResult($"{_options.Recording.S3.Endpoint}/{_options.Recording.S3.Bucket}{path}");
+        {
+            var s3 = _options.Recording.S3;
+            if (!string.IsNullOrWhiteSpace(s3.AccessKey) && !string.IsNullOrWhiteSpace(s3.SecretKey))
+            {
+                var ttlSeconds = Math.Clamp((s3.PresignTtlMinutes > 0 ? s3.PresignTtlMinutes : 15) * 60, 1, 604800);
+                return S3RecordingStorage.BuildRequestUrl(s3, "GET", key, ttlSeconds);
+            }
 
-        return Task.FromResult($"/api/v1/remote-sessions/recording/{recordingId}/download");
+            if (_storageFactory is not null && (await _storageFactory.ValidateConfigurationAsync()).Count == 0)
+            {
+                var ttlMinutes = s3.PresignTtlMinutes > 0 ? s3.PresignTtlMinutes : 15;
+                var centralStorage = await _storageFactory.CreateObjectStorageServiceAsync(ct);
+                return await centralStorage.GetPresignedDownloadUrlAsync(key, TimeSpan.FromMinutes(ttlMinutes), ct);
+            }
+
+            return $"{S3RecordingStorage.BuildObjectUrl(s3, key)}?X-Amz-Expires={Math.Clamp((s3.PresignTtlMinutes > 0 ? s3.PresignTtlMinutes : 15) * 60, 1, 604800)}";
+        }
+
+        return $"/api/v1/remote-sessions/recording/{recordingId}/download";
     }
 
-    public Task DeleteRecordingAsync(Guid recordingId, CancellationToken ct = default)
+    public async Task DeleteRecordingAsync(Guid recordingId, CancellationToken ct = default)
     {
+        var provider = ResolveStorageProvider();
+        if (provider == RecordingStorageProvider.S3
+            && _storageFactory is not null
+            && (await _storageFactory.ValidateConfigurationAsync()).Count == 0)
+        {
+            var centralStorage = await _storageFactory.CreateObjectStorageServiceAsync(ct);
+            foreach (var ext in new[] { "webm", "mp4" })
+            {
+                try
+                {
+                    await centralStorage.DeleteAsync($"recordings/{recordingId:N}.{ext}", ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Falha ao remover gravação {RecordingId}.{Ext} do S3 central", recordingId, ext);
+                }
+            }
+        }
+        else if (provider == RecordingStorageProvider.Local)
+        {
+            foreach (var ext in new[] { "webm", "mp4" })
+            {
+                var path = Path.Combine(_options.Recording.Local.BasePath, "recordings", $"{recordingId:N}.{ext}");
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
         _logger.LogInformation("Recording {RecordingId} deleted (LGPD Art. 18)", recordingId);
-        return Task.CompletedTask;
     }
 
     public Task IngestFrameAsync(Guid sessionId, byte[] frameData, CancellationToken ct = default)

@@ -197,6 +197,7 @@ builder.Services.AddHostedService<Discovery.Infrastructure.Services.Realtime.Nat
 // disparada por request — inclusive quando o S3 e externo.
 builder.Services.AddSingleton<Discovery.Infrastructure.Services.ObjectStorage.ObjectStorageTelemetry>();
 builder.Services.AddSingleton<Discovery.Infrastructure.Services.ObjectStorage.ObjectStorageHealthService>();
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.ObjectStorageSanitizationGate>();
 
 builder.Services.AddHttpClient("AiChat", client =>
 {

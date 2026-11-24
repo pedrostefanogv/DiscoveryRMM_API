@@ -31,7 +31,7 @@ public sealed record ServerConfigurationImportResult(
     IReadOnlyList<string> UnknownFields,
     int Version);
 
-public sealed record TestObjectStorageCommand : ICommand<Result<object>>;
+public sealed record TestObjectStorageCommand(Discovery.Core.ValueObjects.ObjectStorageDraftInput? Draft = null) : ICommand<Result<object>>;
 /// <summary>
 /// Teste de conexão NATS. <c>User</c>/<c>Password</c> são opcionais: quando
 /// omitidos, o handler usa as credenciais configuradas no servidor.

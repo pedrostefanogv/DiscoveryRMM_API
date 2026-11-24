@@ -26,27 +26,17 @@ namespace Discovery.Api.Controllers;
 public class OpsObjectStorageController(
     ObjectStorageHealthService healthService,
     ObjectStorageTelemetry telemetry,
-    IConfigurationResolver configurationResolver,
-    IOptions<ObjectStorageOptions> objectStorageOptions,
+    IObjectStorageProviderFactory storageFactory,
     IConfiguration configuration) : ControllerBase
 {
     [HttpGet("telemetry")]
     [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetTelemetry(CancellationToken ct)
     {
-        var server = await configurationResolver.GetServerAsync();
-        var options = objectStorageOptions.Value;
-        // Espelha ObjectStorageProviderFactory: o flag do banco manda; o env
-        // (ObjectStorage__Mode=internal) so prevalece sem configuracao externa completa.
-        var internalMode = server.ObjectStorageInternal
-            || (options.IsInternal && !HasAnyExternalConfig(server));
-
-        var settings = BuildSettings(server, options, internalMode);
-        var configured = settings.IsConfigured();
-        var usageScanEnabled = configuration.GetValue("ObjectStorage:Telemetry:EnableUsageScan", false);
+        var effective = await storageFactory.ResolveEffectiveSettingsAsync(ct);
 
         ObjectStorageHealthSnapshot? health = null;
-        if (configured)
+        if (effective.Configured)
         {
             // Le do cache; com cache quente NAO gera I/O para o S3.
             health = await healthService.GetAsync(ct);
@@ -57,11 +47,33 @@ public class OpsObjectStorageController(
             : Math.Max(30, (int)Math.Ceiling((health.NextCheckAfterUtc - DateTime.UtcNow).TotalSeconds));
         Response.Headers.CacheControl = $"private, max-age={maxAgeSeconds}";
 
+        return Ok(BuildDto(effective, health));
+    }
+
+    [HttpPost("probe")]
+    [RequirePermission(ResourceType.Dashboard, ActionType.View, ScopeSource.Global)]
+    public async Task<IActionResult> ProbeTelemetry(CancellationToken ct)
+    {
+        var effective = await storageFactory.ResolveEffectiveSettingsAsync(ct);
+        var health = effective.Configured
+            ? await healthService.RefreshAsync(ct)
+            : null;
+
+        Response.Headers.CacheControl = "no-store";
+        return Ok(BuildDto(effective, health));
+    }
+
+    private ObjectStorageTelemetryDto BuildDto(
+        ObjectStorageEffectiveSettings effective,
+        ObjectStorageHealthSnapshot? health)
+    {
+        var settings = effective.Settings;
+        var usageScanEnabled = configuration.GetValue("ObjectStorage:Telemetry:EnableUsageScan", false);
         var traffic = telemetry.Snapshot();
 
-        return Ok(new ObjectStorageTelemetryDto(
-            Configured: configured,
-            Mode: configured ? (internalMode ? "internal" : "external") : "not_configured",
+        return new ObjectStorageTelemetryDto(
+            Configured: effective.Configured,
+            Mode: effective.Configured ? (effective.InternalMode ? "internal" : "external") : "not_configured",
             Provider: "S3Compatible",
             EndpointHost: HostOf(settings.Endpoint),
             Bucket: string.IsNullOrWhiteSpace(settings.BucketName) ? null : settings.BucketName,
@@ -97,54 +109,8 @@ public class OpsObjectStorageController(
                 LastSuccessAtUtc: traffic.LastSuccessAtUtc,
                 LastFailureAtUtc: traffic.LastFailureAtUtc,
                 LastError: traffic.LastError),
-            GeneratedAtUtc: DateTime.UtcNow));
+            GeneratedAtUtc: DateTime.UtcNow);
     }
-
-    /// <summary>Espelha a resolucao do ObjectStorageProviderFactory (interno vs banco).</summary>
-    private static ObjectStorageSettings BuildSettings(
-        ServerConfiguration server,
-        ObjectStorageOptions options,
-        bool internalMode)
-    {
-        if (!internalMode)
-        {
-            return new ObjectStorageSettings
-            {
-                BucketName = server.ObjectStorageBucketName,
-                Endpoint = server.ObjectStorageEndpoint,
-                Region = ObjectStorageRegionResolver.Resolve(
-                    server.ObjectStorageRegion, server.ObjectStorageEndpoint),
-                AccessKey = server.ObjectStorageAccessKey,
-                SecretKey = server.ObjectStorageSecretKey,
-                UrlTtlHours = server.ObjectStorageUrlTtlHours > 0 ? server.ObjectStorageUrlTtlHours : 24,
-                UsePathStyle = server.ObjectStorageUsePathStyle,
-                SslVerify = server.ObjectStorageSslVerify
-            };
-        }
-
-        return new ObjectStorageSettings
-        {
-            BucketName = FirstNonEmpty(server.ObjectStorageBucketName, options.Bucket),
-            Endpoint = FirstNonEmpty(options.InternalEndpoint, "http://127.0.0.1:9000"),
-            Region = ObjectStorageRegionResolver.Resolve(
-                FirstNonEmpty(server.ObjectStorageRegion, options.Region),
-                FirstNonEmpty(options.PublicEndpoint, options.InternalEndpoint)),
-            AccessKey = options.AccessKey,
-            SecretKey = options.SecretKey,
-            UrlTtlHours = server.ObjectStorageUrlTtlHours > 0
-                ? server.ObjectStorageUrlTtlHours
-                : (options.UrlTtlHours > 0 ? options.UrlTtlHours : 24),
-            UsePathStyle = true,
-            SslVerify = server.ObjectStorageSslVerify
-        };
-    }
-
-    /// <summary>Qualquer configuracao externa no banco (endpoint, bucket ou credenciais).</summary>
-    private static bool HasAnyExternalConfig(ServerConfiguration server)
-        => !string.IsNullOrWhiteSpace(server.ObjectStorageEndpoint)
-           || !string.IsNullOrWhiteSpace(server.ObjectStorageBucketName)
-           || !string.IsNullOrWhiteSpace(server.ObjectStorageAccessKey)
-           || !string.IsNullOrWhiteSpace(server.ObjectStorageSecretKey);
 
     /// <summary>Extrai somente o host do endpoint (sem credenciais, path ou query).</summary>
     private static string? HostOf(string? endpoint)
@@ -158,16 +124,5 @@ public class OpsObjectStorageController(
         return Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host)
             ? uri.Host
             : null;
-    }
-
-    private static string FirstNonEmpty(params string?[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
-        }
-
-        return string.Empty;
     }
 }

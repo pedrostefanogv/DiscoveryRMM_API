@@ -45,14 +45,12 @@ public sealed class TerminalRecordingS3Storage
 
     /// <summary>URL do objeto no S3 (mesmo padrão do S3RecordingStorage).</summary>
     public static string BuildObjectUrl(RemoteAccessRecordingS3Options s3, string key)
-        => s3.UsePathStyle
-            ? $"{s3.Endpoint.TrimEnd('/')}/{s3.Bucket}/{key}"
-            : $"https://{s3.Bucket}.{s3.Endpoint.TrimEnd('/')}/{key}";
+        => S3RecordingStorage.BuildObjectUrl(s3, key);
 
     /// <summary>
     /// URL pré-assinada de download, com TTL curto (mínimo entre
     /// <c>Recording:S3:PresignTtlMinutes</c> e <see cref="ShortPresignTtlMinutes"/>).
-    /// Mantém o formato do presign já usado em <see cref="S3RecordingStorage"/>.
+    /// Assina com AWS SigV4 quando há credenciais configuradas.
     /// </summary>
     public static string PresignUrl(RemoteAccessRecordingS3Options s3, string key)
     {
@@ -60,8 +58,12 @@ public sealed class TerminalRecordingS3Storage
             ? Math.Min(s3.PresignTtlMinutes, ShortPresignTtlMinutes)
             : ShortPresignTtlMinutes;
 
-        var expiry = DateTimeOffset.UtcNow.AddMinutes(ttlMinutes).ToUnixTimeSeconds();
-        return $"{BuildObjectUrl(s3, key)}?X-Amz-Expires={expiry}";
+        var ttlSeconds = Math.Clamp(ttlMinutes * 60, 1, ShortPresignTtlMinutes * 60);
+
+        if (!string.IsNullOrWhiteSpace(s3.AccessKey) && !string.IsNullOrWhiteSpace(s3.SecretKey))
+            return S3RecordingStorage.BuildRequestUrl(s3, "GET", key, ttlSeconds);
+
+        return $"{BuildObjectUrl(s3, key)}?X-Amz-Expires={ttlSeconds}";
     }
 
     /// <summary>
@@ -80,7 +82,7 @@ public sealed class TerminalRecordingS3Storage
             1,
             600);
 
-        var url = BuildObjectUrl(_options.Recording.S3, key);
+        var url = S3RecordingStorage.BuildRequestUrl(_options.Recording.S3, "PUT", key, timeoutSeconds);
         Exception? lastError = null;
 
         for (var attempt = 1; attempt <= attempts; attempt++)
@@ -159,7 +161,7 @@ public sealed class TerminalRecordingS3Storage
     /// </summary>
     public async Task<bool> DeleteAsync(string key, CancellationToken ct = default)
     {
-        var url = BuildObjectUrl(_options.Recording.S3, key);
+        var url = S3RecordingStorage.BuildRequestUrl(_options.Recording.S3, "DELETE", key);
 
         var client = _httpClientFactory.CreateClient("S3Recording");
         using var response = await client.DeleteAsync(url, ct);

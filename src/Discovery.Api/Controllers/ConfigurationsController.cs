@@ -363,10 +363,66 @@ public class ConfigurationsController(
 
     [HttpPost("server/object-storage/test")]
     [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
-    public async Task<IActionResult> TestObjectStorage(CancellationToken ct)
+    public async Task<IActionResult> TestObjectStorage(
+        [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)]
+        Discovery.Core.ValueObjects.ObjectStorageDraftInput? draft,
+        CancellationToken ct)
     {
-        var result = await mediator.Send(new TestObjectStorageCommand(), ct);
+        var result = await mediator.Send(new TestObjectStorageCommand(draft), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    [HttpPost("server/object-storage/cors-probe")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
+    public async Task<IActionResult> CreateObjectStorageCorsProbe(
+        [FromServices] IObjectStorageProviderFactory storageFactory,
+        CancellationToken ct)
+    {
+        try
+        {
+            var effective = await storageFactory.ResolveEffectiveSettingsAsync(ct);
+            if (!effective.Configured)
+                return BadRequest(new { errors = new[] { new { Code = "NotConfigured", Message = "Configure e salve o Object Storage antes de testar o CORS." } } });
+
+            var objectKey = $"diagnostics/cors-probe-{Guid.NewGuid():N}.txt";
+            var storage = await storageFactory.CreateObjectStorageServiceAsync(ct);
+            var uploadUrl = await storage.GetPresignedUploadUrlAsync(objectKey, ttlMinutes: 2, "text/plain", ct);
+            return Ok(new { objectKey, uploadUrl });
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+            or Discovery.Core.ValueObjects.ObjectStorageNotConfiguredException
+            or NotSupportedException)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "StorageError", Message = ex.Message } } });
+        }
+    }
+
+    [HttpDelete("server/object-storage/cors-probe")]
+    [RequirePermission(ResourceType.ServerConfig, ActionType.Execute, ScopeSource.Global)]
+    public async Task<IActionResult> DeleteObjectStorageCorsProbe(
+        [FromQuery] string objectKey,
+        [FromServices] IObjectStorageProviderFactory storageFactory,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(objectKey)
+            || !objectKey.StartsWith("diagnostics/cors-probe-", StringComparison.Ordinal)
+            || objectKey.Contains("..", StringComparison.Ordinal))
+        {
+            return BadRequest(new { errors = new[] { new { Code = "Validation", Message = "Chave de diagnóstico inválida." } } });
+        }
+
+        try
+        {
+            var storage = await storageFactory.CreateObjectStorageServiceAsync(ct);
+            await storage.DeleteAsync(objectKey, ct);
+            return NoContent();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+            or Discovery.Core.ValueObjects.ObjectStorageNotConfiguredException
+            or NotSupportedException)
+        {
+            return BadRequest(new { errors = new[] { new { Code = "StorageError", Message = ex.Message } } });
+        }
     }
 
     [HttpPost("server/nats/test")]

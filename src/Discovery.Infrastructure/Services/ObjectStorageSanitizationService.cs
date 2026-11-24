@@ -5,6 +5,21 @@ using Microsoft.Extensions.Logging;
 namespace Discovery.Infrastructure.Services;
 
 /// <summary>
+/// Trava de processo único (Singleton) para impedir duas varreduras simultâneas
+/// de sanitização do object storage mesmo com o serviço registrado como Scoped.
+/// </summary>
+public sealed class ObjectStorageSanitizationGate
+{
+    private int _running;
+
+    public bool IsRunning => Volatile.Read(ref _running) == 1;
+
+    public bool TryAcquire() => Interlocked.CompareExchange(ref _running, 1, 0) == 0;
+
+    public void Release() => Interlocked.Exchange(ref _running, 0);
+}
+
+/// <summary>
 /// Sanitização do object storage: varre o bucket, mede o que está publicado e
 /// remove os assets da LOJA que ficaram sem vínculo com nenhum pacote.
 ///
@@ -16,7 +31,8 @@ namespace Discovery.Infrastructure.Services;
 public sealed class ObjectStorageSanitizationService(
     IObjectStorageProviderFactory storageFactory,
     IAppPackageRepository packages,
-    ILogger<ObjectStorageSanitizationService> logger) : IObjectStorageSanitizationService
+    ILogger<ObjectStorageSanitizationService> logger,
+    ObjectStorageSanitizationGate? gate = null) : IObjectStorageSanitizationService
 {
     /// <summary>Teto de objetos varridos por execução (proteção de memória/tempo).</summary>
     public const int MaxScanObjects = 200_000;
@@ -29,9 +45,9 @@ public sealed class ObjectStorageSanitizationService(
 
     private const int SampleLimit = 25;
 
-    private int _running;
+    private readonly ObjectStorageSanitizationGate _gate = gate ?? new ObjectStorageSanitizationGate();
 
-    public bool IsRunning => Volatile.Read(ref _running) == 1;
+    public bool IsRunning => _gate.IsRunning;
 
     public async Task<ObjectStorageSanitizationReport> RunAsync(
         bool dryRun,
@@ -41,7 +57,7 @@ public sealed class ObjectStorageSanitizationService(
     {
         // Uma execução por vez: duas varreduras simultâneas dobrariam a carga no
         // bucket e poderiam apagar/contar o mesmo objeto duas vezes.
-        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+        if (!_gate.TryAcquire())
             throw new ObjectStorageSanitizationBusyException();
 
         try
@@ -50,7 +66,7 @@ public sealed class ObjectStorageSanitizationService(
         }
         finally
         {
-            Interlocked.Exchange(ref _running, 0);
+            _gate.Release();
         }
     }
 
@@ -63,22 +79,29 @@ public sealed class ObjectStorageSanitizationService(
         var startedAt = DateTime.UtcNow;
         var minAge = Math.Clamp(minAgeHours ?? DefaultMinAgeHours, 0, 24 * 365);
 
-        var storage = await storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
-        var listing = await storage.ListObjectsAsync(null, MaxScanObjects, cancellationToken);
-
-        var inventory = BuildInventory(listing.Items);
-        var totalBytes = listing.Items.Sum(item => item.SizeBytes);
-
         var wanted = checks is { Count: > 0 }
             ? new HashSet<string>(checks, StringComparer.OrdinalIgnoreCase)
             : null;
 
+        var needsFullInventory = wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.BucketInventory);
+        var needsOrphanSweep = wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.OrphanCustomAssets);
+
+        var storage = await storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        var listing = needsFullInventory
+            ? await storage.ListObjectsAsync(null, MaxScanObjects, cancellationToken)
+            : needsOrphanSweep
+                ? await storage.ListObjectsAsync(CustomAssetsPrefix, MaxScanObjects, cancellationToken)
+                : ObjectStorageListing.Empty;
+
+        var inventory = needsFullInventory ? BuildInventory(listing.Items) : [];
+        var totalBytes = listing.Items.Sum(item => item.SizeBytes);
+
         var results = new List<ObjectStorageSanitizationCheckResult>();
 
-        if (wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.BucketInventory))
+        if (needsFullInventory)
             results.Add(BuildInventoryCheck(listing, inventory));
 
-        if (wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.OrphanCustomAssets))
+        if (needsOrphanSweep)
         {
             results.Add(await SweepOrphanCustomAssetsAsync(
                 storage, listing.Items, minAge, dryRun, cancellationToken));

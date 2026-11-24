@@ -31,4 +31,15 @@ public interface IObjectStorageProviderFactory
     /// Não lança exceção — retorna resultado estruturado mesmo em caso de falha.
     /// </summary>
     Task<ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Invalida o cache em memória da instância de storage ativa.</summary>
+    void InvalidateCache() { }
+
+    /// <summary>Resolve a configuração efetiva (banco + env no modo interno).</summary>
+    Task<ObjectStorageEffectiveSettings> ResolveEffectiveSettingsAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(new ObjectStorageEffectiveSettings(new ObjectStorageSettings(), false, false));
+
+    /// <summary>Testa conectividade usando um rascunho ainda não salvo (ou a config salva se nulo).</summary>
+    Task<ObjectStorageTestResult> TestDraftConnectionAsync(ObjectStorageDraftInput draft, CancellationToken cancellationToken = default)
+        => TestConnectionAsync(cancellationToken);
 }

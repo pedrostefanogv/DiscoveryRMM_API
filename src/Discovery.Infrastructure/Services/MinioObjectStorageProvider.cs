@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Security;
 using System.Text;
 using System.Xml.Linq;
 using Discovery.Core.Enums;
@@ -17,7 +18,7 @@ namespace Discovery.Infrastructure.Services;
 /// Implementação de Object Storage com SDK MinIO para qualquer provedor S3-compatível.
 /// Funciona para AWS S3, MinIO, Cloudflare R2, Oracle S3 e endpoints compatíveis.
 /// </summary>
-public class MinioObjectStorageProvider : IObjectStorageService
+public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
 {
     private readonly IMinioClient _client;
     // Cliente extra usado SO para assinar URLs (endpoint publico). No modo
@@ -27,6 +28,7 @@ public class MinioObjectStorageProvider : IObjectStorageService
     // Host efetivo das URLs pre-assinadas: se for loopback, agentes/navegadores
     // nao alcancam (cada um tentaria o SEU proprio localhost).
     private readonly bool _presignEndpointIsLoopback;
+    private readonly bool _usePathStyle;
     private readonly string _bucketName;
     private readonly string _region;
     private readonly ILogger<MinioObjectStorageProvider> _logger;
@@ -40,10 +42,11 @@ public class MinioObjectStorageProvider : IObjectStorageService
     // Endpoint PUBLICO: usado SO para as URLs pre-assinadas entregues ao cliente.
     private readonly Uri _presignBaseUri;
     // Cliente HTTP das operacoes multipart assinadas localmente (initiate/
-    // complete/abort/list) e do calculo de checksum. Respeita SslVerify=false,
-    // senao um endpoint interno HTTPS com certificado proprio quebraria aqui
-    // enquanto Upload/Download pelo SDK continuariam funcionando.
+    // complete/abort/list) e do calculo de checksum. Compartilhado para evitar
+    // vazamento de sockets quando o provider é recriado pelo cache.
     private readonly HttpClient _presignHttpClient;
+    private volatile bool _bucketVerified;
+
     /// <summary>
     /// Timeout das operações assinadas. O complete de um objeto montado no
     /// storage pode demorar (join + cópia interna): 5 min bastava para objetos
@@ -52,7 +55,26 @@ public class MinioObjectStorageProvider : IObjectStorageService
     /// </summary>
     private static readonly TimeSpan PresignHttpTimeout = TimeSpan.FromMinutes(15);
 
-    private static readonly HttpClient DefaultPresignHttpClient = new()
+    private static readonly SocketsHttpHandler DefaultSharedHandler = new()
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    };
+
+    private static readonly SocketsHttpHandler InsecureSharedHandler = new()
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        SslOptions = new SslClientAuthenticationOptions
+        {
+            RemoteCertificateValidationCallback = (_, _, _, _) => true
+        }
+    };
+
+    private static readonly HttpClient DefaultSharedHttpClient = new(DefaultSharedHandler, disposeHandler: false)
+    {
+        Timeout = PresignHttpTimeout
+    };
+
+    private static readonly HttpClient InsecureSharedHttpClient = new(InsecureSharedHandler, disposeHandler: false)
     {
         Timeout = PresignHttpTimeout
     };
@@ -77,26 +99,22 @@ public class MinioObjectStorageProvider : IObjectStorageService
 
         _bucketName = settings.BucketName;
         _region = string.IsNullOrWhiteSpace(settings.Region) ? "us-east-1" : settings.Region;
+        _usePathStyle = settings.UsePathStyle;
 
         // UsePathStyle: o SDK MinIO escolhe path-style para endpoints nao-Amazon
         // (MinIO/RustFS/R2/Oracle) e virtual-hosted para *.amazonaws.com — o
         // settings.UsePathStyle apenas documenta a intencao.
-        _client = BuildClient(settings.Endpoint, settings, _logger);
+        _client = BuildClient(settings.Endpoint, settings, _region, _logger);
         // Modo interno (RustFS local): o servidor opera por loopback e assina as
         // URLs com o endpoint publico, que e o host alcancavel pelo agente.
         _presignClient = string.IsNullOrWhiteSpace(settings.PresignEndpoint)
             || string.Equals(settings.PresignEndpoint, settings.Endpoint, StringComparison.OrdinalIgnoreCase)
             ? _client
-            : BuildClient(settings.PresignEndpoint!, settings, _logger);
+            : BuildClient(settings.PresignEndpoint!, settings, _region, _logger);
         _presignEndpointIsLoopback = IsLoopbackEndpoint(settings.PresignEndpoint ?? settings.Endpoint);
         _presignHttpClient = !settings.SslVerify
-            ? new HttpClient(new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback =
-                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-            })
-            { Timeout = PresignHttpTimeout }
-            : DefaultPresignHttpClient;
+            ? InsecureSharedHttpClient
+            : DefaultSharedHttpClient;
         _accessKey = settings.AccessKey;
         _secretKey = settings.SecretKey;
         _internalBaseUri = BuildPresignBaseUri(settings.Endpoint);
@@ -119,37 +137,47 @@ public class MinioObjectStorageProvider : IObjectStorageService
 
         await EnsureBucketExistsAsync(cancellationToken);
 
-        Stream uploadStream = content;
-        if (!uploadStream.CanSeek)
+        MemoryStream? buffered = null;
+        try
         {
-            var buffered = new MemoryStream();
-            await uploadStream.CopyToAsync(buffered, cancellationToken);
-            buffered.Seek(0, SeekOrigin.Begin);
-            uploadStream = buffered;
+            Stream uploadStream = content;
+            if (!uploadStream.CanSeek)
+            {
+                buffered = new MemoryStream();
+                await uploadStream.CopyToAsync(buffered, cancellationToken);
+                buffered.Seek(0, SeekOrigin.Begin);
+                uploadStream = buffered;
+            }
+            else
+            {
+                uploadStream.Seek(0, SeekOrigin.Begin);
+            }
+
+            var putArgs = new PutObjectArgs()
+                .WithBucket(_bucketName)
+                .WithObject(objectKey)
+                .WithStreamData(uploadStream)
+                .WithObjectSize(uploadStream.Length)
+                .WithContentType(contentType);
+
+            var result = await _client.PutObjectAsync(putArgs, cancellationToken);
+
+            return new StorageObject
+            {
+                ObjectKey = objectKey,
+                Bucket = _bucketName,
+                ContentType = contentType,
+                SizeBytes = uploadStream.Length,
+                Checksum = result?.Etag,
+                StorageProvider = ObjectStorageProviderType.S3Compatible,
+                StoredAt = DateTime.UtcNow
+            };
         }
-
-        if (uploadStream.CanSeek)
-            uploadStream.Seek(0, SeekOrigin.Begin);
-
-        var putArgs = new PutObjectArgs()
-            .WithBucket(_bucketName)
-            .WithObject(objectKey)
-            .WithStreamData(uploadStream)
-            .WithObjectSize(uploadStream.Length)
-            .WithContentType(contentType);
-
-        var result = await _client.PutObjectAsync(putArgs, cancellationToken);
-
-        return new StorageObject
+        finally
         {
-            ObjectKey = objectKey,
-            Bucket = _bucketName,
-            ContentType = contentType,
-            SizeBytes = uploadStream.Length,
-            Checksum = result?.Etag,
-            StorageProvider = ObjectStorageProviderType.S3Compatible,
-            StoredAt = DateTime.UtcNow
-        };
+            if (buffered is not null)
+                await buffered.DisposeAsync();
+        }
     }
 
     public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default)
@@ -203,13 +231,39 @@ public class MinioObjectStorageProvider : IObjectStorageService
             .WithPrefix(prefix)
             .WithRecursive(true);
 
+        var batch = new List<string>(1000);
         await foreach (var obj in _client.ListObjectsEnumAsync(listArgs, cancellationToken))
         {
-            var removeArgs = new RemoveObjectArgs()
-                .WithBucket(_bucketName)
-                .WithObject(obj.Key);
+            if (string.IsNullOrEmpty(obj.Key))
+                continue;
 
-            await _client.RemoveObjectAsync(removeArgs, cancellationToken);
+            batch.Add(obj.Key);
+            if (batch.Count >= 1000)
+            {
+                await RemoveBatchAsync(batch, cancellationToken);
+                batch.Clear();
+            }
+        }
+
+        if (batch.Count > 0)
+            await RemoveBatchAsync(batch, cancellationToken);
+    }
+
+    private async Task RemoveBatchAsync(List<string> keys, CancellationToken cancellationToken)
+    {
+        var args = new RemoveObjectsArgs()
+            .WithBucket(_bucketName)
+            .WithObjects(keys);
+
+        var errors = await _client.RemoveObjectsAsync(args, cancellationToken);
+        if (errors is not null)
+        {
+            foreach (var err in errors)
+            {
+                _logger.LogWarning(
+                    "Falha ao remover objeto {ObjectKey} em lote do bucket {Bucket}: {Message}",
+                    err.Key, _bucketName, err.Message);
+            }
         }
     }
 
@@ -255,12 +309,23 @@ public class MinioObjectStorageProvider : IObjectStorageService
         if (ttlHours <= 0)
             throw new ArgumentException("ttlHours must be positive", nameof(ttlHours));
 
+        return GetPresignedDownloadUrlAsync(objectKey, TimeSpan.FromHours(ttlHours), cancellationToken);
+    }
+
+    public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
+    {
+        ValidateObjectKey(objectKey);
+
+        if (ttl <= TimeSpan.Zero)
+            throw new ArgumentException("ttl must be positive", nameof(ttl));
+
         AssertPresignEndpointReachable();
 
+        var expirySeconds = Math.Clamp((int)Math.Ceiling(ttl.TotalSeconds), 1, 7 * 24 * 3600);
         var args = new PresignedGetObjectArgs()
             .WithBucket(_bucketName)
             .WithObject(objectKey)
-            .WithExpiry(ttlHours * 3600);
+            .WithExpiry(expirySeconds);
 
         return _presignClient.PresignedGetObjectAsync(args);
     }
@@ -334,7 +399,8 @@ public class MinioObjectStorageProvider : IObjectStorageService
 
         var url = AwsSigV4Signer.CreatePresignedPartUrl(
             _presignBaseUri, _bucketName, objectKey, uploadId, partNumber,
-            _accessKey, _secretKey, _region, DateTimeOffset.UtcNow, ttlMinutes * 60);
+            _accessKey, _secretKey, _region, DateTimeOffset.UtcNow, ttlMinutes * 60,
+            usePathStyle: EffectivePathStyle(_presignBaseUri));
 
         return Task.FromResult(url);
     }
@@ -620,13 +686,20 @@ public class MinioObjectStorageProvider : IObjectStorageService
 
     private async Task EnsureBucketExistsAsync(CancellationToken cancellationToken)
     {
+        if (_bucketVerified)
+            return;
+
         var existsArgs = new BucketExistsArgs().WithBucket(_bucketName);
         var exists = await _client.BucketExistsAsync(existsArgs, cancellationToken);
         if (exists)
+        {
+            _bucketVerified = true;
             return;
+        }
 
         var makeArgs = new MakeBucketArgs().WithBucket(_bucketName).WithLocation(_region);
         await _client.MakeBucketAsync(makeArgs, cancellationToken);
+        _bucketVerified = true;
     }
 
     private static void ValidateObjectKey(string objectKey)
@@ -639,19 +712,19 @@ public class MinioObjectStorageProvider : IObjectStorageService
     /// Constroi um cliente MinIO para o endpoint informado (operacoes ou
     /// assinatura de URL). SslVerify=false vale apenas para HTTPS.
     /// </summary>
-    private static IMinioClient BuildClient(string rawEndpoint, ObjectStorageSettings settings, ILogger logger)
+    private static IMinioClient BuildClient(string rawEndpoint, ObjectStorageSettings settings, string region, ILogger logger)
     {
         var (endpoint, secure) = NormalizeEndpoint(rawEndpoint);
 
         HttpClient? httpClient = null;
         if (secure && !settings.SslVerify)
         {
-            var handler = new System.Net.Http.HttpClientHandler
+            // Usa o mesmo handler compartilhado mas sem deixar o MinioClient.Dispose()
+            // descartar o HttpClient estatico compartilhado.
+            httpClient = new HttpClient(InsecureSharedHandler, disposeHandler: false)
             {
-                ServerCertificateCustomValidationCallback =
-                    System.Net.Http.HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                Timeout = PresignHttpTimeout
             };
-            httpClient = new HttpClient(handler);
             logger.LogWarning(
                 "SSL certificate verification is DISABLED for object storage endpoint {Endpoint}. " +
                 "Enable SslVerify in production environments.",
@@ -661,12 +734,31 @@ public class MinioObjectStorageProvider : IObjectStorageService
         var builder = new MinioClient()
             .WithEndpoint(endpoint)
             .WithCredentials(settings.AccessKey, settings.SecretKey)
+            .WithRegion(region)
             .WithSSL(secure);
 
         if (httpClient is not null)
             builder = builder.WithHttpClient(httpClient);
 
         return builder.Build();
+    }
+
+    private bool EffectivePathStyle(Uri baseUri)
+    {
+        if (_usePathStyle)
+            return true;
+
+        var host = baseUri.Host;
+        var isAmazon = host.EndsWith(".amazonaws.com", StringComparison.OrdinalIgnoreCase);
+        return !isAmazon || _bucketName.Contains('.', StringComparison.Ordinal);
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        if (!ReferenceEquals(_presignClient, _client))
+            _presignClient.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>Loopback nao e alcancavel por agentes/navegadores — presign nele quebra o upload.</summary>
@@ -686,7 +778,7 @@ public class MinioObjectStorageProvider : IObjectStorageService
         throw new InvalidOperationException(
             "O endpoint do object storage aponta para loopback (localhost/127.0.0.1). " +
             "Agentes e navegadores nao alcancam o loopback do servidor: configure a URL PUBLICA " +
-            "(ex.: https://tngplacas.com.br) no Endpoint S3 do console — no modo interno o servidor " +
+            "(ex.: https://portal.suaempresa.com.br) no Endpoint S3 do console — no modo interno o servidor " +
             "fala com o RustFS por loopback, mas as URLs pre-assinadas usam a URL publica.");
     }
 
@@ -724,7 +816,8 @@ public class MinioObjectStorageProvider : IObjectStorageService
     {
         var url = AwsSigV4Signer.CreatePresignedObjectUrl(
             method.Method, baseUri, _bucketName, objectKey, query,
-            _accessKey, _secretKey, _region, DateTimeOffset.UtcNow, 300);
+            _accessKey, _secretKey, _region, DateTimeOffset.UtcNow, 300,
+            usePathStyle: EffectivePathStyle(baseUri));
 
         using var request = new HttpRequestMessage(method, url) { Content = content };
 

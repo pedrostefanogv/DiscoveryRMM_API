@@ -44,6 +44,45 @@ public sealed class ObjectStorageHealthService(
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private int _consecutiveFailures;
+    private long _lastManualRefreshTicks;
+
+    public void Invalidate()
+    {
+        cache.Remove(CacheKey);
+        Interlocked.Exchange(ref _consecutiveFailures, 0);
+    }
+
+    public async Task<ObjectStorageHealthSnapshot> RefreshAsync(CancellationToken ct = default)
+    {
+        var nowTicks = DateTime.UtcNow.Ticks;
+        var prevTicks = Interlocked.Read(ref _lastManualRefreshTicks);
+        if (prevTicks > 0 && TimeSpan.FromTicks(nowTicks - prevTicks) < TimeSpan.FromSeconds(5))
+            return await GetAsync(ct).ConfigureAwait(false);
+
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            nowTicks = DateTime.UtcNow.Ticks;
+            prevTicks = Interlocked.Read(ref _lastManualRefreshTicks);
+            if (prevTicks > 0 && TimeSpan.FromTicks(nowTicks - prevTicks) < TimeSpan.FromSeconds(5)
+                && cache.TryGetValue<ObjectStorageHealthSnapshot>(CacheKey, out var recent) && recent is not null)
+            {
+                return recent;
+            }
+
+            Interlocked.Exchange(ref _lastManualRefreshTicks, nowTicks);
+            cache.Remove(CacheKey);
+
+            var snapshot = await ProbeAsync(ct).ConfigureAwait(false);
+            var ttl = snapshot.NextCheckAfterUtc - DateTime.UtcNow;
+            cache.Set(CacheKey, snapshot, ttl > TimeSpan.Zero ? ttl : TimeSpan.FromSeconds(5));
+            return snapshot;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public async Task<ObjectStorageHealthSnapshot> GetAsync(CancellationToken ct = default)
     {

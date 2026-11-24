@@ -426,14 +426,138 @@ public class TerminalRecordingS3Tests
             Assert.That(download.S3Url, Is.Not.Null.And.Contain($"terminal/{session.Id:N}.ndjson"));
             Assert.That(download.S3Url, Does.Contain("X-Amz-Expires="));
 
-            // TTL curto: o presign usa no máximo 5 minutos (mesmo com
-            // PresignTtlMinutes=15 configurado).
-            var expires = long.Parse(download.S3Url!.Split("X-Amz-Expires=")[1]);
-            var ttl = DateTimeOffset.FromUnixTimeSeconds(expires) - DateTimeOffset.UtcNow;
-            Assert.That(ttl, Is.LessThanOrEqualTo(TimeSpan.FromMinutes(5)).And.GreaterThan(TimeSpan.Zero));
+            // TTL curto: o presign usa no máximo 5 minutos (300 segundos, mesmo
+            // com PresignTtlMinutes=15 configurado).
+            var expiresSeconds = long.Parse(download.S3Url!.Split("X-Amz-Expires=")[1]);
+            Assert.That(expiresSeconds, Is.LessThanOrEqualTo(300).And.GreaterThan(0));
             Assert.That(download.S3Url, Does.StartWith("https://s3.example.test/recordings/"));
             Assert.That(download.FileName, Is.EqualTo($"terminal-{session.Id:N}.ndjson"));
         });
+    }
+
+    [Test]
+    public async Task Presign_and_requests_use_sigv4_when_credentials_are_present()
+    {
+        await using var harness = await BuildAsync();
+        var s3 = harness.AccessOptions.Recording.S3;
+        s3.AccessKey = "AKIAIOSFODNN7EXAMPLE";
+        s3.SecretKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+        s3.UsePathStyle = false;
+        s3.Endpoint = "https://s3.us-east-1.amazonaws.com";
+
+        var presigned = TerminalRecordingS3Storage.PresignUrl(s3, TerminalRecordingS3Storage.BuildKey(harness.Session.Id));
+        Assert.Multiple(() =>
+        {
+            Assert.That(presigned, Does.StartWith($"https://recordings.s3.us-east-1.amazonaws.com/terminal/{harness.Session.Id:N}.ndjson?"));
+            Assert.That(presigned, Does.Contain("X-Amz-Algorithm=AWS4-HMAC-SHA256"));
+            Assert.That(presigned, Does.Contain("X-Amz-Signature="));
+            Assert.That(presigned, Does.Not.Contain("https://recordings.https://"));
+        });
+    }
+
+    [Test]
+    public async Task Central_object_storage_factory_is_used_when_recording_s3_access_key_is_empty()
+    {
+        var centralStorage = new StubCentralStorage();
+        var options = BuildOptions(s3: true);
+        options.Recording.S3.AccessKey = string.Empty;
+        options.Recording.S3.SecretKey = string.Empty;
+
+        var dbOptions = new DbContextOptionsBuilder<DiscoveryDbContext>()
+            .UseInMemoryDatabase($"terminal-central-{Guid.NewGuid():N}")
+            .Options;
+        await using var db = new S3TestDbContext(dbOptions);
+        var session = new RemoteSession
+        {
+            Id = Guid.NewGuid(),
+            AgentId = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            TenantId = Guid.NewGuid(),
+            SiteId = Guid.NewGuid(),
+            Status = "active",
+            StartedAt = DateTime.UtcNow.AddMinutes(-5),
+            ExpiresAt = DateTime.UtcNow.AddHours(1)
+        };
+        db.RemoteSessions.Add(session);
+        await db.SaveChangesAsync();
+
+        var monitor = new TestOptionsMonitor<RemoteAccessOptions>(options);
+        var services = new ServiceCollection();
+        services.AddSingleton<IOptionsMonitor<RemoteAccessOptions>>(monitor);
+        services.AddSingleton<Discovery.Core.Interfaces.IObjectStorageProviderFactory>(new StubCentralFactory(centralStorage));
+        services.AddScoped<DiscoveryDbContext>(_ => new S3TestDbContext(dbOptions));
+        await using var provider = services.BuildServiceProvider(validateScopes: true);
+
+        await using var coordinator = new TerminalRecordingCoordinator(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            monitor,
+            NullLogger<TerminalRecordingCoordinator>.Instance);
+
+        await coordinator.ProcessFrameAsync(session.Id, session.AgentId, session.TenantId, Frame(), RawJson());
+        await coordinator.FinalizeAsync(session.Id, RemoteTerminalRecordingStatus.Completed);
+
+        var expectedKey = $"recordings/terminal/{session.Id:N}.ndjson";
+        Assert.That(centralStorage.UploadedKeys, Is.EquivalentTo(new[] { expectedKey }));
+
+        var service = new TerminalRecordingService(
+            db,
+            Options.Create(options),
+            coordinator,
+            new FakeHttpClientFactory(new FakeS3Handler()),
+            NullLogger<TerminalRecordingService>.Instance,
+            provider.GetRequiredService<Discovery.Core.Interfaces.IObjectStorageProviderFactory>());
+
+        var download = await service.OpenDownloadAsync(session.AgentId, session.Id);
+        Assert.That(download?.S3Url, Does.Contain(expectedKey));
+
+        var deleted = await service.DeleteAsync(session.AgentId, session.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(deleted, Is.True);
+            Assert.That(centralStorage.DeletedKeys, Is.EquivalentTo(new[] { expectedKey }));
+        });
+    }
+
+    private sealed class StubCentralFactory(Discovery.Core.Interfaces.IObjectStorageService storage)
+        : Discovery.Core.Interfaces.IObjectStorageProviderFactory
+    {
+        public Discovery.Core.Interfaces.IObjectStorageService CreateObjectStorageService() => storage;
+        public Task<Discovery.Core.Interfaces.IObjectStorageService> CreateObjectStorageServiceAsync(CancellationToken cancellationToken = default) => Task.FromResult(storage);
+        public Task<List<string>> ValidateConfigurationAsync() => Task.FromResult(new List<string>());
+        public Task<Discovery.Core.ValueObjects.ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new Discovery.Core.ValueObjects.ObjectStorageTestResult(true, true, true, [], 0));
+    }
+
+    private sealed class StubCentralStorage : Discovery.Core.Interfaces.IObjectStorageService
+    {
+        public List<string> UploadedKeys { get; } = [];
+        public List<string> DeletedKeys { get; } = [];
+
+        public Task<Discovery.Core.ValueObjects.StorageObject> UploadAsync(string objectKey, Stream content, string contentType, CancellationToken cancellationToken = default)
+        {
+            UploadedKeys.Add(objectKey);
+            return Task.FromResult(new Discovery.Core.ValueObjects.StorageObject { ObjectKey = objectKey, Bucket = "central", ContentType = contentType, SizeBytes = content.CanSeek ? content.Length : 1 });
+        }
+
+        public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
+        {
+            DeletedKeys.Add(objectKey);
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
+            => Task.FromResult($"https://central.example.test/discovery/{objectKey}?X-Amz-Expires={(int)ttl.TotalSeconds}");
+
+        public Task<string> GetPresignedDownloadUrlAsync(string objectKey, int ttlHours, CancellationToken cancellationToken = default)
+            => Task.FromResult($"https://central.example.test/discovery/{objectKey}?ttl={ttlHours}");
+
+        public Task<Stream> DownloadAsync(string objectKey, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task DownloadToAsync(string objectKey, Stream destination, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<bool> ExistsAsync(string objectKey, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task DeleteByPrefixAsync(string prefix, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<Discovery.Core.ValueObjects.StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<Discovery.Core.ValueObjects.ObjectStorageTestResult> TestConnectionAsync(CancellationToken cancellationToken = default) => throw new NotImplementedException();
     }
 
     [Test]

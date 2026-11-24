@@ -190,15 +190,25 @@ public class AttachmentService : IAttachmentService
             throw new InvalidOperationException("ObjectKey não pertence a esta entidade.");
 
         var storageService = await GetStorageServiceAsync(cancellationToken);
-        var exists = await storageService.ExistsAsync(objectKey, cancellationToken);
-        if (!exists)
+        var metadata = await storageService.GetMetadataAsync(objectKey, cancellationToken);
+        if (metadata is null)
             throw new InvalidOperationException("Arquivo ainda não encontrado no object storage.");
 
-        var metadata = await storageService.GetMetadataAsync(objectKey, cancellationToken);
-        var sizeBytes = metadata?.SizeBytes ?? expectedSizeBytes;
+        var sizeBytes = metadata.SizeBytes;
+        if (sizeBytes <= 0 || sizeBytes > MaxSinglePutBytes || sizeBytes > expectedSizeBytes)
+        {
+            try
+            {
+                await storageService.DeleteAsync(objectKey, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Falha ao remover objeto excedente {ObjectKey} após validação de tamanho.", objectKey);
+            }
 
-        if (sizeBytes <= 0)
-            throw new InvalidOperationException("Tamanho inválido para arquivo no object storage.");
+            throw new InvalidOperationException(
+                $"Tamanho real do arquivo ({sizeBytes} bytes) diverge ou excede o limite autorizado ({expectedSizeBytes} bytes).");
+        }
 
         var attachment = new Attachment
         {
@@ -553,26 +563,29 @@ public class AttachmentService : IAttachmentService
 
             int deleted = 0;
 
-            foreach (var attachment in expiredAttachments)
+            if (expiredAttachments.Count > 0)
             {
-                try
+                var storageService = await GetStorageServiceAsync(cancellationToken);
+                foreach (var attachment in expiredAttachments)
                 {
-                    // Deletar do storage primeiro
-                    var storageService = await GetStorageServiceAsync(cancellationToken);
-                    await storageService.DeleteAsync(
-                        attachment.StorageObjectKey,
-                        cancellationToken);
+                    try
+                    {
+                        // Deletar do storage primeiro
+                        await storageService.DeleteAsync(
+                            attachment.StorageObjectKey,
+                            cancellationToken);
 
-                    // Depois do BD
-                    await _attachmentRepository.HardDeleteAsync(attachment.Id, cancellationToken);
-                    deleted++;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex,
-                        "Error permanently deleting attachment {AttachmentId}",
-                        attachment.Id);
-                    // Continuar com próximos em vez de falhar todo o batch
+                        // Depois do BD
+                        await _attachmentRepository.HardDeleteAsync(attachment.Id, cancellationToken);
+                        deleted++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "Error permanently deleting attachment {AttachmentId}",
+                            attachment.Id);
+                        // Continuar com próximos em vez de falhar todo o batch
+                    }
                 }
             }
 

@@ -286,6 +286,12 @@ public class LocalObjectStorageProvider : IObjectStorageService
         return Task.FromResult(fakeUrl);
     }
 
+    public Task<string> GetPresignedDownloadUrlAsync(
+        string objectKey,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default)
+        => GetPresignedDownloadUrlAsync(objectKey, Math.Max(1, (int)Math.Ceiling(ttl.TotalHours)), cancellationToken);
+
     /// <summary>
     /// Gerar URL "pré-assinada" de upload (local: URL fake para simulação em desenvolvimento).
     /// </summary>
@@ -375,6 +381,12 @@ public class LocalObjectStorageProvider : IObjectStorageService
 
     public Task<IReadOnlyList<MultipartUploadPart>> ListMultipartUploadPartsAsync(string objectKey, string uploadId, CancellationToken cancellationToken = default)
         => throw MultipartNotSupported();
+
+    public Task<IReadOnlyList<MultipartUploadSessionInfo>> ListMultipartUploadSessionsAsync(
+        string? prefix,
+        int maxSessions,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<MultipartUploadSessionInfo>>([]);
 
     /// <summary>
     /// Normalizar object key para caminho local seguro.
