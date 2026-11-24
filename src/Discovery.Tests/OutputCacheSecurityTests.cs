@@ -527,6 +527,7 @@ public class OutputCacheSecurityTests
         public Task<UserSession?> GetByRefreshTokenHashAsync(string refreshTokenHash) => throw new NotSupportedException();
         public Task<UserSession?> GetByRefreshTokenHashWithGracePeriodAsync(string refreshTokenHash) => throw new NotSupportedException();
         public Task<IEnumerable<UserSession>> GetActiveByUserIdAsync(Guid userId) => throw new NotSupportedException();
+        public Task<IReadOnlyList<UserSession>> GetRecentByUserIdAsync(Guid userId, int limit = 30) => throw new NotSupportedException();
         public Task<UserSession> CreateAsync(UserSession session) => throw new NotSupportedException();
         public Task<bool> RevokeAsync(Guid sessionId) => throw new NotSupportedException();
         public Task<bool> RevokeWithGracePeriodAsync(Guid sessionId, TimeSpan gracePeriod) => throw new NotSupportedException();

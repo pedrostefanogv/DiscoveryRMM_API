@@ -4,6 +4,7 @@ using Discovery.Core.DTOs.Mfa;
 
 // Alias: Discovery.Core.DTOs.Users define um UserDto com o mesmo nome do record do CQRS.
 using MySecurityProfileDto = Discovery.Core.DTOs.Users.MySecurityProfileDto;
+using UserActivityResponseDto = Discovery.Core.DTOs.Users.UserActivityResponseDto;
 using UserSecurityStateDto = Discovery.Core.DTOs.Users.UserSecurityStateDto;
 
 namespace Discovery.Core.Cqrs.Users.Queries;
@@ -39,6 +40,16 @@ public sealed record ListUserMfaKeysQuery(Guid UserId) : IQuery<Result<IReadOnly
 /// Restrito a quem tem Users.Edit — não vai no UserDto geral.
 /// </summary>
 public sealed record GetUserSecurityStateQuery(Guid Id) : IQuery<Result<UserSecurityStateDto>>;
+
+/// <summary>
+/// Consolida logs de autenticação, auditoria de identidade, sessões remotas,
+/// chamados, alterações de configuração, automação, aprovações e relatórios de um usuário.
+/// </summary>
+public sealed record GetUserActivityQuery(
+    Guid UserId,
+    string? Category = null,
+    int Limit = 100
+) : IQuery<Result<UserActivityResponseDto>>;
 
 public sealed record UsersPageDto(
     IReadOnlyList<UserDto> Items, string? NextCursor, bool HasMore, int Total

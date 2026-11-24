@@ -305,6 +305,7 @@ public class IdentityUserHandlersTests
         public Task<UserSession?> GetByRefreshTokenHashAsync(string refreshTokenHash) => Task.FromResult<UserSession?>(null);
         public Task<UserSession?> GetByRefreshTokenHashWithGracePeriodAsync(string refreshTokenHash) => Task.FromResult<UserSession?>(null);
         public Task<IEnumerable<UserSession>> GetActiveByUserIdAsync(Guid userId) => Task.FromResult<IEnumerable<UserSession>>([]);
+        public Task<IReadOnlyList<UserSession>> GetRecentByUserIdAsync(Guid userId, int limit = 30) => Task.FromResult<IReadOnlyList<UserSession>>([]);
         public Task<UserSession> CreateAsync(UserSession session) => Task.FromResult(session);
         public Task<bool> RevokeAsync(Guid sessionId) => Task.FromResult(true);
         public Task<bool> RevokeWithGracePeriodAsync(Guid sessionId, TimeSpan gracePeriod) => Task.FromResult(true);

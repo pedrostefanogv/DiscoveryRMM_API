@@ -14,6 +14,7 @@ public interface IUserSessionRepository
     Task<UserSession?> GetByRefreshTokenHashWithGracePeriodAsync(string refreshTokenHash);
 
     Task<IEnumerable<UserSession>> GetActiveByUserIdAsync(Guid userId);
+    Task<IReadOnlyList<UserSession>> GetRecentByUserIdAsync(Guid userId, int limit = 30);
     Task<UserSession> CreateAsync(UserSession session);
     Task<bool> RevokeAsync(Guid sessionId);
 

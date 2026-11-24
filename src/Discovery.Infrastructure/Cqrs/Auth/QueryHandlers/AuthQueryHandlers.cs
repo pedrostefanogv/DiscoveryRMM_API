@@ -27,7 +27,8 @@ public sealed class LoginQueryHandler(
                 FirstAccessRequired: response.FirstAccessRequired,
                 MustChangePassword: response.MustChangePassword,
                 MustChangeProfile: response.MustChangeProfile,
-                SessionEstablished: response.SessionEstablished
+                SessionEstablished: response.SessionEstablished,
+                ExpiresInSeconds: response.ExpiresInSeconds
             ));
         }
         catch (UnauthorizedAccessException ex)
@@ -46,7 +47,11 @@ public sealed class RefreshTokenQueryHandler(
         try
         {
             var pair = await userAuthService.RefreshAsync(q.RefreshToken, q.IpAddress, q.UserAgent);
-            return Result<RefreshResultDto>.Success(new RefreshResultDto(pair.AccessToken, pair.RefreshToken, DateTime.UtcNow.AddSeconds(pair.ExpiresInSeconds)));
+            return Result<RefreshResultDto>.Success(new RefreshResultDto(
+                pair.AccessToken,
+                pair.RefreshToken,
+                DateTime.UtcNow.AddSeconds(pair.ExpiresInSeconds),
+                pair.ExpiresInSeconds));
         }
         catch (UnauthorizedAccessException ex)
         {

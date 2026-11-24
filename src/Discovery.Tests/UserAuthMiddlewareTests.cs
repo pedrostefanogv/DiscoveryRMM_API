@@ -150,6 +150,9 @@ public class UserAuthMiddlewareTests
         public Task<IEnumerable<UserSession>> GetActiveByUserIdAsync(Guid userId)
             => Task.FromResult<IEnumerable<UserSession>>([]);
 
+        public Task<IReadOnlyList<UserSession>> GetRecentByUserIdAsync(Guid userId, int limit = 30)
+            => Task.FromResult<IReadOnlyList<UserSession>>([]);
+
         public Task<UserSession> CreateAsync(UserSession newSession) => Task.FromResult(newSession);
 
         public Task<bool> RevokeAsync(Guid sessionId) => Task.FromResult(false);

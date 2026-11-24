@@ -20,12 +20,14 @@ public class UsersController(
     IUserAuthService userAuth,
     Discovery.Core.Interfaces.Security.IIdentityAuditService audit,
     IScopeContext scopeContext,
-    IUserScopedQueryRepository scopedUsers) : ControllerBase
+    IUserScopedQueryRepository scopedUsers,
+    Discovery.Core.Interfaces.Security.IUserSessionRepository sessions) : ControllerBase
 {
     private readonly IUserAuthService _userAuth = userAuth;
     private readonly Discovery.Core.Interfaces.Security.IIdentityAuditService _audit = audit;
     private readonly IScopeContext _scopeContext = scopeContext;
     private readonly IUserScopedQueryRepository _scopedUsers = scopedUsers;
+    private readonly Discovery.Core.Interfaces.Security.IUserSessionRepository _sessions = sessions;
 
     /// <summary>
     /// Garante que o ALVO de uma operação direcionada está no escopo do ator.
@@ -304,9 +306,10 @@ public class UsersController(
 
         var rows = await _audit.GetByTargetAsync("User", id, limit);
         var bySubject = await _audit.GetByUserAsyncForAuditView(id, limit);
+        var byActor = await _audit.GetByActorAsync(id, limit);
 
-        // Une as duas visões (alvo direto + sujeito) sem duplicar, mais recente primeiro.
-        var merged = rows.Concat(bySubject)
+        // Une as três visões (alvo direto + sujeito + ator) sem duplicar, mais recente primeiro.
+        var merged = rows.Concat(bySubject).Concat(byActor)
             .GroupBy(r => r.Id)
             .Select(g => g.First())
             .OrderByDescending(r => r.OccurredAt)
@@ -317,12 +320,112 @@ public class UsersController(
         return Ok(new { items = merged });
     }
 
+    /// <summary>
+    /// Linha do tempo consolidada de acessos e ações do usuário no sistema.
+    /// </summary>
+    [HttpGet("{id:guid}/activity")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetUserActivity(
+        Guid id,
+        [FromQuery] string? category = null,
+        [FromQuery] int limit = 100)
+    {
+        if (await EnsureTargetInScopeAsync(id, ActionType.Edit) is { } denied) return denied;
+
+        var result = await mediator.Send(new GetUserActivityQuery(id, category, limit));
+        return result.ToActionResult();
+    }
+
+    /// <summary>
+    /// Lista sessões recentes (ativas, revogadas e expiradas) do usuário sem expor hashes de tokens.
+    /// </summary>
+    [HttpGet("{id:guid}/sessions")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetUserSessions(Guid id, [FromQuery] int limit = 30)
+    {
+        if (await EnsureTargetInScopeAsync(id, ActionType.Edit) is { } denied) return denied;
+
+        var rows = await _sessions.GetRecentByUserIdAsync(id, limit);
+        var items = rows.Select(s => new UserSessionSummaryDto
+        {
+            Id = s.Id,
+            CreatedAt = s.CreatedAt,
+            ExpiresAt = s.ExpiresAt,
+            RevokedAt = s.RevokedAt,
+            IsActive = s.IsValid,
+            IsExpired = s.IsExpired,
+            IsRevoked = s.IsRevoked,
+            MfaVerified = s.MfaVerified,
+            IpAddress = s.IpAddress,
+            UserAgent = s.UserAgent,
+        }).ToList();
+
+        return Ok(new { items });
+    }
+
+    /// <summary>
+    /// Revoga uma sessão específica de um usuário.
+    /// </summary>
+    [HttpDelete("{id:guid}/sessions/{sessionId:guid}")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> RevokeUserSession(Guid id, Guid sessionId)
+    {
+        if (await EnsureTargetInScopeAsync(id, ActionType.Edit) is { } denied) return denied;
+
+        var session = await _sessions.GetByIdAsync(sessionId);
+        if (session is null || session.UserId != id)
+            return NotFound(new { message = "Sessão não encontrada." });
+
+        await _sessions.RevokeAsync(sessionId);
+
+        var actorId = HttpContext.Items["UserId"] is Guid uid ? uid : Guid.Empty;
+        var actorLogin = HttpContext.Items["Username"] as string;
+        await _audit.RecordAsync(
+            "identity.user_session_revoked",
+            actorId,
+            actorLogin,
+            "User",
+            id,
+            id,
+            after: new { SessionId = sessionId });
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Revoga todas as sessões ativas de um usuário.
+    /// </summary>
+    [HttpDelete("{id:guid}/sessions")]
+    [RequirePermission(ResourceType.Users, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> RevokeAllUserSessions(Guid id)
+    {
+        if (await EnsureTargetInScopeAsync(id, ActionType.Edit) is { } denied) return denied;
+
+        await _sessions.RevokeAllByUserIdAsync(id);
+
+        var actorId = HttpContext.Items["UserId"] is Guid uid ? uid : Guid.Empty;
+        var actorLogin = HttpContext.Items["Username"] as string;
+        await _audit.RecordAsync(
+            "identity.user_sessions_revoked_all",
+            actorId,
+            actorLogin,
+            "User",
+            id,
+            id);
+
+        return NoContent();
+    }
+
     private static object ToAuditDto(Discovery.Core.Entities.Security.AuthAuditLog l) => new
     {
         l.Id,
+        l.UserId,
         l.EventType,
         l.Success,
         l.FailureReason,
+        l.IpAddress,
+        l.UserAgent,
+        l.Detail,
         l.ActorUserId,
         l.ActorLogin,
         l.TargetType,

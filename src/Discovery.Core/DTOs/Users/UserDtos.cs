@@ -70,5 +70,55 @@ public class UserSecurityStateDto
     public DateTime? LastLoginAt { get; set; }
 }
 
+/// <summary>
+/// Resumo seguro de uma sessão do usuário (nunca expõe AccessTokenHash nem RefreshTokenHash).
+/// </summary>
+public class UserSessionSummaryDto
+{
+    public Guid Id { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? RevokedAt { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsExpired { get; set; }
+    public bool IsRevoked { get; set; }
+    public bool MfaVerified { get; set; }
+    public string? IpAddress { get; set; }
+    public string? UserAgent { get; set; }
+}
+
+/// <summary>
+/// Item consolidado de atividade/auditoria de um usuário no sistema.
+/// </summary>
+public class UserActivityItemDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string EventType { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? Summary { get; set; }
+    public bool Success { get; set; } = true;
+    public string? FailureReason { get; set; }
+    public string? IpAddress { get; set; }
+    public string? UserAgent { get; set; }
+    public string? ActorLogin { get; set; }
+    public string Role { get; set; } = "self";
+    public string? TargetType { get; set; }
+    public string? TargetId { get; set; }
+    public string? LinkPath { get; set; }
+    public string? Details { get; set; }
+    public DateTime OccurredAt { get; set; }
+}
+
+/// <summary>
+/// Resposta consolidada de atividades de um usuário por categoria.
+/// </summary>
+public class UserActivityResponseDto
+{
+    public IReadOnlyList<UserActivityItemDto> Items { get; set; } = [];
+    public Dictionary<string, int> CategoryCounts { get; set; } = new();
+    public int TotalReturned { get; set; }
+}
+
 // UserDto/UserSummaryDto/UserGroupSummaryDto foram removidos: eram duplicatas sem
 // nenhuma referência (o contrato real vive em Discovery.Core.Cqrs.Users.Commands).

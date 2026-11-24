@@ -14,14 +14,20 @@ public sealed record LoginResultDto(
     bool FirstAccessRequired = false,
     bool MustChangePassword = false,
     bool MustChangeProfile = false,
-    bool SessionEstablished = false
+    bool SessionEstablished = false,
+    int? ExpiresInSeconds = null
 );
 public sealed record RefreshTokenQuery(
     string RefreshToken,
     string? IpAddress = null,
     string? UserAgent = null
 ) : IQuery<Result<RefreshResultDto>>;
-public sealed record RefreshResultDto(string AccessToken, string RefreshToken, DateTime ExpiresAt);
+public sealed record RefreshResultDto(
+    string AccessToken,
+    string RefreshToken,
+    DateTime ExpiresAt,
+    int ExpiresInSeconds = 0
+);
 public sealed record LogoutCommand(string RefreshToken) : ICommand<Result<VoidResult>>;
 public sealed record ListUsersQuery(string? SearchTerm, string? Cursor, int Limit = 50) : IQuery<Result<ListUsersResult>>;
 public sealed record ListUsersResult(IReadOnlyList<UserDto> Users, string? NextCursor, bool HasMore);

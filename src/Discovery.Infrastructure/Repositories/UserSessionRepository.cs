@@ -36,6 +36,13 @@ public class UserSessionRepository : IUserSessionRepository
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<UserSession>> GetRecentByUserIdAsync(Guid userId, int limit = 30)
+        => await _db.UserSessions.AsNoTracking()
+            .Where(s => s.UserId == userId)
+            .OrderByDescending(s => s.CreatedAt)
+            .Take(Math.Clamp(limit, 1, 100))
+            .ToListAsync();
+
     public async Task<UserSession> CreateAsync(UserSession session)
     {
         if (session.Id == Guid.Empty) session.Id = IdGenerator.NewId();
