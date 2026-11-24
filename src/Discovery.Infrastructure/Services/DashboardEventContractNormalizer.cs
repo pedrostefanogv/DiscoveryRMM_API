@@ -18,6 +18,12 @@ public sealed class DashboardEventContractNormalizer
         "AgentConnected",
         "AgentDisconnected",
         "AgentTransferred",
+        "AgentRegistered",
+        "AgentCreated",
+        "AgentApproved",
+        "AgentDeleted",
+        "AgentRestored",
+        "AgentPurged",
         "LogCreated",
         // Chat de suporte vinculado ao chamado: sinal SEM corpo (metadados apenas).
         // O conteúdo das mensagens nunca trafega pelo canal de dashboard — o

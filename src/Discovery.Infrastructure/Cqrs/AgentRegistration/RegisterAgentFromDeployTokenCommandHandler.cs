@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentRegistration;
+using Discovery.Core.DTOs;
 using Discovery.Core.Entities;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
@@ -20,7 +21,8 @@ public sealed class RegisterAgentFromDeployTokenCommandHandler(
     ISiteRepository siteRepo,
     IConfigurationService configService,
     IRedisService redis,
-    ILogger<RegisterAgentFromDeployTokenCommandHandler> logger
+    ILogger<RegisterAgentFromDeployTokenCommandHandler> logger,
+    IAgentMessaging? messaging = null
 ) : IRequestHandler<RegisterAgentFromDeployTokenCommand, Result<AgentRegistrationResult>>
 {
     private const string RecoveryLockKeyPrefix = "device-recovery:lock:";
@@ -130,6 +132,45 @@ public sealed class RegisterAgentFromDeployTokenCommandHandler(
             logger.LogInformation(
                 "Token de agente gerado para AgentId={AgentId}, TokenId={TokenId}",
                 agent.Id, agentToken.Id);
+
+            // Best-effort: invalida caches de listagem e notifica o dashboard em tempo real
+            // para que novos agentes (inclusive ZeroTouchPending=true) apareçam sem F5.
+            try
+            {
+                await redis.DeleteAsync("agents:all-ids");
+                await redis.DeleteAsync($"agents:by-site:{agent.SiteId:N}");
+                await redis.DeleteAsync($"agents:by-client:{clientId:N}");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Falha ao invalidar cache de listagem após registro do agente {AgentId}.", agent.Id);
+            }
+
+            if (messaging is not null)
+            {
+                try
+                {
+                    var dashboardEvent = DashboardEventMessage.Create(
+                        "AgentRegistered",
+                        new
+                        {
+                            AgentId = agent.Id,
+                            ClientId = clientId,
+                            SiteId = agent.SiteId,
+                            Hostname = agent.Hostname,
+                            DisplayName = agent.DisplayName,
+                            ZeroTouchPending = agent.ZeroTouchPending,
+                            Recovered = recovered,
+                        },
+                        clientId: clientId,
+                        siteId: agent.SiteId);
+                    await messaging.PublishDashboardEventAsync(dashboardEvent, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogWarning(ex, "Falha ao publicar evento AgentRegistered para o agente {AgentId}.", agent.Id);
+                }
+            }
 
             // 6. Retornar credenciais
             return Result<AgentRegistrationResult>.Success(new AgentRegistrationResult(

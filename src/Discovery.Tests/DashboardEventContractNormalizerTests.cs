@@ -142,6 +142,42 @@ public class DashboardEventContractNormalizerTests
         Assert.That(normalized!.ClientId, Is.Null);
     }
 
+    [TestCase("AgentRegistered")]
+    [TestCase("AgentCreated")]
+    [TestCase("AgentApproved")]
+    [TestCase("AgentDeleted")]
+    [TestCase("AgentRestored")]
+    [TestCase("AgentPurged")]
+    public void ShouldAcceptAgentLifecycleEventsInStrictMode(string eventType)
+    {
+        var normalizer = CreateNormalizer(mode: "strict");
+        var clientId = Guid.NewGuid();
+        var siteId = Guid.NewGuid();
+        var agentId = Guid.NewGuid();
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            eventType,
+            timestampUtc = "2026-05-05T10:00:00Z",
+            clientId,
+            siteId,
+            data = new
+            {
+                agentId,
+                clientId,
+                siteId,
+            }
+        });
+
+        var ok = normalizer.TryNormalize(payload, "nats", out var normalized);
+
+        Assert.That(ok, Is.True);
+        Assert.That(normalized, Is.Not.Null);
+        Assert.That(normalized!.EventType, Is.EqualTo(eventType));
+        Assert.That(normalized.ClientId, Is.EqualTo(clientId));
+        Assert.That(normalized.SiteId, Is.EqualTo(siteId));
+    }
+
     private static DashboardEventContractNormalizer CreateNormalizer(string mode)
     {
         var options = Options.Create(new RealtimeContractOptions

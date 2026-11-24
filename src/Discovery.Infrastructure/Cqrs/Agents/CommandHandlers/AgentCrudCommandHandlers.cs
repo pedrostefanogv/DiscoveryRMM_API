@@ -53,6 +53,26 @@ public sealed class ApproveZeroTouchCommandHandler(
         };
         await messaging.PublishSyncPingAsync(cmd.AgentId, SyncInvalidationPingMessage.FromDto(ping), ct);
 
+        try
+        {
+            var dashboardEvent = DashboardEventMessage.Create(
+                "AgentApproved",
+                new
+                {
+                    AgentId = cmd.AgentId,
+                    ClientId = site?.ClientId,
+                    SiteId = agent.SiteId,
+                    ZeroTouchPending = false,
+                },
+                clientId: site?.ClientId,
+                siteId: agent.SiteId);
+            await messaging.PublishDashboardEventAsync(dashboardEvent, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Best-effort: aprovação já foi persistida no banco.
+        }
+
         return Result<AgentDto>.Success(MapToDto(agent));
     }
 
@@ -63,7 +83,8 @@ public sealed class CreateAgentCommandHandler(
     IAgentRepository agentRepo,
     IRedisService redis,
     ISiteRepository siteRepo,
-    IScopeContext scopeContext
+    IScopeContext scopeContext,
+    IAgentMessaging? messaging = null
 ) : IRequestHandler<CreateAgentCommand, Result<AgentDto>>
 {
     public async Task<Result<AgentDto>> Handle(CreateAgentCommand cmd, CancellationToken ct)
@@ -82,6 +103,32 @@ public sealed class CreateAgentCommandHandler(
         };
         var created = await agentRepo.CreateAsync(agent);
         await InvalidateCachesAsync(redis, siteRepo, created.SiteId, null);
+
+        if (messaging is not null)
+        {
+            try
+            {
+                var dashboardEvent = DashboardEventMessage.Create(
+                    "AgentCreated",
+                    new
+                    {
+                        AgentId = created.Id,
+                        ClientId = site?.ClientId,
+                        SiteId = created.SiteId,
+                        Hostname = created.Hostname,
+                        DisplayName = created.DisplayName,
+                        ZeroTouchPending = created.ZeroTouchPending,
+                    },
+                    clientId: site?.ClientId,
+                    siteId: created.SiteId);
+                await messaging.PublishDashboardEventAsync(dashboardEvent, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: criação já foi persistida no banco.
+            }
+        }
+
         return Result<AgentDto>.Success(MapToDto(created));
     }
 
@@ -205,7 +252,8 @@ public sealed class DeleteAgentCommandHandler(
     IAgentRepository agentRepo,
     IRedisService redis,
     ISiteRepository siteRepo,
-    IScopeContext scopeContext
+    IScopeContext scopeContext,
+    IAgentMessaging? messaging = null
 ) : IRequestHandler<DeleteAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(DeleteAgentCommand cmd, CancellationToken ct)
@@ -237,6 +285,29 @@ public sealed class DeleteAgentCommandHandler(
         // definitiva), que é quando o agente já deixou a máquina.
         await agentRepo.DeleteAsync(cmd.Id);
         await CreateAgentCommandHandler.InvalidateCachesAsync(redis, siteRepo, agent.SiteId, null, cmd.Id);
+
+        if (messaging is not null)
+        {
+            try
+            {
+                var dashboardEvent = DashboardEventMessage.Create(
+                    "AgentDeleted",
+                    new
+                    {
+                        AgentId = cmd.Id,
+                        ClientId = site?.ClientId,
+                        SiteId = agent.SiteId,
+                    },
+                    clientId: site?.ClientId,
+                    siteId: agent.SiteId);
+                await messaging.PublishDashboardEventAsync(dashboardEvent, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: soft-delete já foi persistido no banco.
+            }
+        }
+
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
@@ -304,7 +375,8 @@ public sealed class PurgeAgentCommandHandler(
     ISiteRepository siteRepo,
     IAgentAuthService authService,
     IScopeContext scopeContext,
-    ILogger<PurgeAgentCommandHandler> logger
+    ILogger<PurgeAgentCommandHandler> logger,
+    IAgentMessaging? messaging = null
 ) : IRequestHandler<PurgeAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(PurgeAgentCommand cmd, CancellationToken ct)
@@ -378,6 +450,28 @@ public sealed class PurgeAgentCommandHandler(
             // O agente já foi removido; a limpeza de cache é best-effort (TTL curto).
         }
 
+        if (messaging is not null)
+        {
+            try
+            {
+                var dashboardEvent = DashboardEventMessage.Create(
+                    "AgentPurged",
+                    new
+                    {
+                        AgentId = cmd.Id,
+                        ClientId = site?.ClientId,
+                        SiteId = agent.SiteId,
+                    },
+                    clientId: site?.ClientId,
+                    siteId: agent.SiteId);
+                await messaging.PublishDashboardEventAsync(dashboardEvent, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Falha ao publicar evento AgentPurged para o agente {AgentId}.", cmd.Id);
+            }
+        }
+
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }
@@ -389,7 +483,8 @@ public sealed class RestoreAgentCommandHandler(
     ISiteRepository siteRepo,
     ICommandRepository commandRepo,
     IScopeContext scopeContext,
-    ILogger<RestoreAgentCommandHandler> logger
+    ILogger<RestoreAgentCommandHandler> logger,
+    IAgentMessaging? messaging = null
 ) : IRequestHandler<RestoreAgentCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(RestoreAgentCommand cmd, CancellationToken ct)
@@ -442,6 +537,28 @@ public sealed class RestoreAgentCommandHandler(
             logger.LogError(ex,
                 "Agente {AgentId} restaurado, mas FALHOU o cancelamento dos comandos de descomissionamento pendentes — risco de desinstalação indevida.",
                 cmd.Id);
+        }
+
+        if (messaging is not null)
+        {
+            try
+            {
+                var dashboardEvent = DashboardEventMessage.Create(
+                    "AgentRestored",
+                    new
+                    {
+                        AgentId = cmd.Id,
+                        ClientId = site?.ClientId,
+                        SiteId = agent.SiteId,
+                    },
+                    clientId: site?.ClientId,
+                    siteId: agent.SiteId);
+                await messaging.PublishDashboardEventAsync(dashboardEvent, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Falha ao publicar evento AgentRestored para o agente {AgentId}.", cmd.Id);
+            }
         }
 
         return Result<VoidResult>.Success(VoidResult.Value);
