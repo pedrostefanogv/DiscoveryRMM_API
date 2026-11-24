@@ -250,17 +250,24 @@ public class IdentityUserHandlersTests
 
     private sealed class GlobalScopeContextStub : IScopeContext
     {
-        public Guid UserId { get; private set; }
+        public Guid? UserId { get; private set; }
+        public Guid? ResolvedClientId { get; set; }
+        public Guid? ResolvedSiteId { get; set; }
         public void SetUserId(Guid userId) => UserId = userId;
-        public Task<EffectiveAccess> GetAccessAsync(ResourceType resource, ActionType action)
-            => Task.FromResult(new EffectiveAccess(true, [], [], []));
+        public Task<UserScopeAccess> GetAccessAsync(ResourceType resource, ActionType action)
+            => Task.FromResult(new UserScopeAccess { HasGlobalAccess = true });
+        public Task<bool> HasGlobalAccessAsync(ResourceType resource, ActionType action)
+            => Task.FromResult(true);
     }
 
     private sealed class StubPermissionService : IPermissionService
     {
-        public Task<bool> HasPermissionAsync(Guid userId, ResourceType resource, ActionType action, Guid? scopeId = null) => Task.FromResult(true);
-        public Task<EffectiveAccess> GetEffectiveAccessAsync(Guid userId, ResourceType resource, ActionType action) => Task.FromResult(new EffectiveAccess(true, [], [], []));
-        public Task<IReadOnlyList<UserPermissionSummary>> GetAllPermissionsAsync(Guid userId) => Task.FromResult<IReadOnlyList<UserPermissionSummary>>([]);
+        public Task<bool> HasPermissionAsync(
+            Guid userId, ResourceType resource, ActionType action,
+            ScopeLevel scopeLevel = ScopeLevel.Global, Guid? scopeId = null, Guid? parentScopeId = null)
+            => Task.FromResult(true);
+        public Task<UserScopeAccess> GetScopeAccessAsync(Guid userId, ResourceType resource, ActionType action)
+            => Task.FromResult(new UserScopeAccess { HasGlobalAccess = true });
         public Task InvalidateUserCacheAsync(Guid userId) => Task.CompletedTask;
         public Task InvalidateAllCacheAsync() => Task.CompletedTask;
     }
@@ -268,10 +275,17 @@ public class IdentityUserHandlersTests
     private sealed class EmptySiteRepositoryStub : ISiteRepository
     {
         public Task<Site?> GetByIdAsync(Guid id) => Task.FromResult<Site?>(null);
-        public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId) => Task.FromResult<IEnumerable<Site>>([]);
+        public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId, bool includeInactive = false)
+            => Task.FromResult<IEnumerable<Site>>([]);
+        public Task<IEnumerable<Site>> GetByClientIdsAsync(IEnumerable<Guid> clientIds, bool includeInactive = false)
+            => Task.FromResult<IEnumerable<Site>>([]);
+        public Task<IEnumerable<Site>> GetAllAsync(bool includeInactive = false)
+            => Task.FromResult<IEnumerable<Site>>([]);
+        public Task<IEnumerable<Site>> GetByIdsAsync(IEnumerable<Guid> siteIds, bool includeInactive = false)
+            => Task.FromResult<IEnumerable<Site>>([]);
         public Task<Site> CreateAsync(Site site) => Task.FromResult(site);
-        public Task<Site> UpdateAsync(Site site) => Task.FromResult(site);
-        public Task<bool> DeleteAsync(Guid id) => Task.FromResult(false);
+        public Task UpdateAsync(Site site) => Task.CompletedTask;
+        public Task DeleteAsync(Guid id) => Task.CompletedTask;
     }
 
     /// <summary>Fake mínimo: só a revogação interessa para este teste.</summary>
