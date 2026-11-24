@@ -88,6 +88,7 @@ public static class RemoteSessionViewerPermissions
         var webRtcAllowed = kind is null or RemoteSessionKind.Screen or RemoteSessionKind.Rdp
             or RemoteSessionKind.Files or RemoteSessionKind.Proxy or RemoteSessionKind.All
             or RemoteSessionKind.Terminal or RemoteSessionKind.Processes;
+        var annotateAllowed = !noDesktop && (kind is null || kind is RemoteSessionKind.Screen or RemoteSessionKind.All);
 
         var pub = new List<string>
         {
@@ -132,6 +133,9 @@ public static class RemoteSessionViewerPermissions
 
         if (webRtcAllowed)
             pub.Add($"{natsSubject}.webrtc.in");
+
+        if (annotateAllowed)
+            pub.Add($"{natsSubject}.annotate");
 
         var sub = new List<string>
         {

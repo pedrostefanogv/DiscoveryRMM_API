@@ -169,4 +169,35 @@ public sealed class RemoteSessionViewerPermissionsTests
         var ttl = RemoteSessionViewerPermissions.TtlMinutes(DateTime.UtcNow.AddMinutes(-5));
         Assert.That(ttl, Is.EqualTo(30));
     }
+
+    [Test]
+    public void Build_ConcedeAnnotateApenasParaTelaSemNoDesktop()
+    {
+        var (pubScreen, _) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, RemoteSessionKind.Screen);
+        var (pubAll, _) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, RemoteSessionKind.All);
+        var (pubLegacy, _) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, null);
+        var (pubViewOnly, _) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.ViewOnly, RemoteSessionKind.Screen);
+
+        Assert.That(pubScreen, Does.Contain(Subject + ".annotate"));
+        Assert.That(pubAll, Does.Contain(Subject + ".annotate"));
+        Assert.That(pubLegacy, Does.Contain(Subject + ".annotate"));
+        Assert.That(pubViewOnly, Does.Contain(Subject + ".annotate"));
+
+        var (pubNoDesktop, _) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.NoDesktop, RemoteSessionKind.Screen);
+        Assert.That(pubNoDesktop, Does.Not.Contain(Subject + ".annotate"));
+
+        foreach (var kind in new[]
+        {
+            RemoteSessionKind.Terminal,
+            RemoteSessionKind.Files,
+            RemoteSessionKind.Proxy,
+            RemoteSessionKind.Rdp,
+            RemoteSessionKind.Registry,
+            RemoteSessionKind.Processes
+        })
+        {
+            var (pub, _) = RemoteSessionViewerPermissions.Build(Subject, RemoteSessionRights.None, kind);
+            Assert.That(pub, Does.Not.Contain(Subject + ".annotate"), $"pub não deveria ter .annotate para {kind}");
+        }
+    }
 }
