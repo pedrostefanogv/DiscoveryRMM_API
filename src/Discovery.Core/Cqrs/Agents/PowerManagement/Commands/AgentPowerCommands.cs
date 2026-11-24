@@ -20,8 +20,9 @@ public sealed record ShutdownAgentCommand(
     [property: JsonPropertyName("message")] string? Reason = null) : ICommand<Result<Guid>>;
 /// <summary>
 /// Comando genérico de energia. O verbo vai no campo <c>action</c> do payload
-/// (hoje só <c>restart-firmware</c>: reinício direto no setup do firmware —
-/// exige boot UEFI, validado no agent, que devolve falha tipada em Legacy/CSM).
+/// (<c>restart-firmware</c>, <c>restart-advanced</c>, <c>cancel</c> e
+/// <c>lock</c>). Verbos que exigem um recurso local (ex.: UEFI no /fw) são
+/// validados no agent, que devolve falha tipada quando não for suportado.
 /// Novos modos de energia entram como novos verbos, sem novo CommandType.
 /// </summary>
 public sealed record PowerActionCommand(

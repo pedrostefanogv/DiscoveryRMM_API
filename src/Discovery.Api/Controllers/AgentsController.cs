@@ -966,9 +966,11 @@ public class AgentsController : ControllerBase
     }
 
     /// <summary>
-    /// Comando genérico de energia. Hoje o único verbo exposto é
-    /// <c>restart-firmware</c>: reinicia direto no setup do firmware (BIOS/UEFI).
-    /// O agent valida a capacidade e devolve falha tipada em Legacy/CSM.
+    /// Comando genérico de energia. Verbos expostos: <c>restart-firmware</c>
+    /// (setup do firmware — exclusivo de boot UEFI), <c>restart-advanced</c>
+    /// (Opções Avançadas de inicialização / WinRE), <c>cancel</c> (cancela
+    /// desligamento/reinício pendente) e <c>lock</c> (bloqueia a sessão).
+    /// O agent valida a capacidade de cada verbo e devolve falha tipada.
     /// </summary>
     [HttpPost("{id:guid}/power")]
     [RequirePermission(ResourceType.Agents, ActionType.Execute, ScopeSource.AccessList)]

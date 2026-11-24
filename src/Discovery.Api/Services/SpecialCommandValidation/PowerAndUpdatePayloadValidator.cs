@@ -15,13 +15,21 @@ internal static class PowerAndUpdatePayloadValidator
 
     /// <summary>
     /// Verbos aceitos no comando genérico de energia (CommandType.PowerAction).
-    /// Hoje só o reinício direto no setup do firmware (BIOS/UEFI). Qualquer novo
-    /// modo precisa entrar AQUI e ser implementado no agent (verbo no
-    /// handleFirmwareRestart / executeSystemPowerAction).
+    /// Qualquer novo modo precisa entrar AQUI e ser implementado no agent
+    /// (handleDirectPowerAction / executeSystemPowerAction).
     /// </summary>
     private static readonly HashSet<string> PowerActionVerbs = new(StringComparer.Ordinal)
     {
-        "restart-firmware"
+        // Reinicia direto no setup do firmware (BIOS/UEFI) — shutdown /r /fw.
+        // Só funciona em boot UEFI: o agent valida e falha de forma tipada.
+        "restart-firmware",
+        // Reinicia nas Opções Avançadas de inicialização (menu do WinRE, onde
+        // ficam modo de segurança e reparo) — shutdown /r /o.
+        "restart-advanced",
+        // Cancela um desligamento/reinício pendente — shutdown /a.
+        "cancel",
+        // Bloqueia a sessão interativa (LockWorkStation). Reversível.
+        "lock"
     };
 
     private static readonly Regex SemVerRegex = new(

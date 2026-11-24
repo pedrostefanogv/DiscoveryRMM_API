@@ -56,8 +56,10 @@ public enum CommandType
     RunSensors = 26,
 
     // Comando genérico de energia: o verbo vai no campo "action" do payload.
-    // Hoje expõe apenas "restart-firmware" (reinício direto no setup do
-    // firmware/BIOS, exclusivo de boot UEFI). Novos modos (opções avançadas,
-    // modo de segurança, etc.) entram como novos verbos neste mesmo tipo.
+    // Expõe "restart-firmware" (setup do firmware/BIOS, exclusivo de boot UEFI),
+    // "restart-advanced" (Opções Avançadas de inicialização / WinRE), "cancel"
+    // (cancela energia pendente) e "lock" (bloqueia a sessão). Novos modos
+    // (modo de segurança, hibernar, logoff, etc.) entram como novos verbos
+    // neste mesmo tipo, sem novo CommandType.
     PowerAction = 27
 }

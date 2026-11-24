@@ -8,8 +8,10 @@ namespace Discovery.Tests;
 
 /// <summary>
 /// Comando genérico de energia (CommandType.PowerAction): contrato wire,
-/// validação do payload e classificação do resultado. Hoje expõe só o verbo
-/// "restart-firmware" (reinício direto no setup do firmware/BIOS, UEFI).
+/// validação do payload e classificação do resultado. Verbos expostos:
+/// "restart-firmware" (setup do firmware/BIOS, exclusivo de UEFI),
+/// "restart-advanced" (Opções Avançadas de inicialização / WinRE), "cancel"
+/// (cancela energia pendente) e "lock" (bloqueia a sessão).
 /// </summary>
 [TestFixture]
 public class PowerActionCommandTests
@@ -43,19 +45,40 @@ public class PowerActionCommandTests
         });
     }
 
+    [TestCase("restart-firmware")]
+    [TestCase("restart-advanced")]
+    [TestCase("cancel")]
+    [TestCase("lock")]
+    public void Validator_AcceptsEveryExposedVerb(string action)
+    {
+        var validator = new SpecialCommandPayloadValidator();
+
+        // delaySeconds: 0 é aceito (execução imediata) — o atraso dos verbos
+        // diretos é opcional e o agent decide o fluxo de cada um.
+        var payload = $$"""{ "action": "{{action}}", "delaySeconds": 0 }""";
+
+        var ok = validator.TryNormalize(CommandType.PowerAction, payload, out var normalizedPayload, out var error);
+
+        Assert.That(ok, Is.True, error);
+        using var json = JsonDocument.Parse(normalizedPayload);
+        Assert.That(json.RootElement.GetProperty("action").GetString(), Is.EqualTo(action));
+    }
+
     [Test]
     public void Validator_RejectsUnknownVerb()
     {
         var validator = new SpecialCommandPayloadValidator();
 
+        // "hibernate" ainda NÃO é um verbo exposto (Fase 2): precisa continuar
+        // sendo recusado até existir implementação no agent.
         const string payload = """
-            { "action": "restart-advanced" }
+            { "action": "hibernate" }
             """;
 
         var ok = validator.TryNormalize(CommandType.PowerAction, payload, out _, out var error);
 
         Assert.That(ok, Is.False);
-        Assert.That(error, Does.Contain("restart-firmware"));
+        Assert.That(error, Does.Contain("restart-advanced"));
     }
 
     [Test]
