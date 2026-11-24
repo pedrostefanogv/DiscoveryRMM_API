@@ -5,6 +5,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
@@ -26,6 +27,7 @@ public class ReportService : IReportService
     private readonly ILogger<ReportService> _logger;
     private readonly IMemoryCache _cache;
     private readonly ReportingOptions _options;
+    private readonly IServiceScopeFactory? _scopeFactory;
     
     // Cache key pattern for report results. O escopo do cliente faz parte da
     // chave: sem isso uma execucao cacheada por um cliente podia ser devolvida
@@ -44,7 +46,8 @@ public class ReportService : IReportService
         IMemoryCache cache,
         IOptions<ReportingOptions> options,
         ILogger<ReportService> logger,
-        IReportDatasetCatalogProvider? datasetCatalog = null)
+        IReportDatasetCatalogProvider? datasetCatalog = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _executionRepository = executionRepository;
         _serverConfigurationRepository = serverConfigurationRepository;
@@ -57,6 +60,7 @@ public class ReportService : IReportService
         _cache = cache;
         _options = options.Value;
         _logger = logger;
+        _scopeFactory = scopeFactory;
 
         _renderers = renderers.ToDictionary(renderer => renderer.Format);
     }
@@ -202,38 +206,44 @@ public class ReportService : IReportService
                         ? $"/api/v1/reports/executions/{executionId}/download?clientId={clientId}"
                         : $"/api/v1/reports/executions/{executionId}/download"
                 },
-                RecipientUserId: null,
+                RecipientUserId: ParseRecipientUserId(createdBy),
                 RecipientKey: createdBy,
                 CreatedBy: "ReportService"),
                 cancellationToken);
 
             return completed;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Report execution {ExecutionId} cancelled due to host/caller cancellation.", executionId);
+            throw;
+        }
         catch (OperationCanceledException ex)
         {
-            _logger.LogError(ex, "Report execution {ExecutionId} timed out after {TimeoutSeconds}s", 
+            _logger.LogError(ex, "Report execution {ExecutionId} timed out after {TimeoutSeconds}s",
                 executionId, effectiveOptions.ProcessingTimeoutSeconds);
 
+            var timeoutMessage = $"Report processing timed out after {effectiveOptions.ProcessingTimeoutSeconds} seconds";
             try
             {
-                await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, 
-                    $"Report processing timed out after {effectiveOptions.ProcessingTimeoutSeconds} seconds");
+                await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, timeoutMessage);
             }
             catch (Exception statusEx)
             {
-                // Nao deixar a falha ao gravar o status mascarar a causa original.
                 _logger.LogError(statusEx, "Failed to mark report execution {ExecutionId} as Failed (timeout).", executionId);
             }
 
+            await PublishFailureNotificationAsync(executionId, createdBy, timeoutMessage, CancellationToken.None);
             throw;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to process report execution {ExecutionId}", executionId);
 
+            var safeMessage = SanitizeFailureMessage(ex);
             try
             {
-                await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, ex.Message);
+                await _executionRepository.UpdateStatusAsync(executionId, clientId, ReportExecutionStatus.Failed, safeMessage);
             }
             catch (Exception statusEx)
             {
@@ -241,6 +251,24 @@ public class ReportService : IReportService
                 _logger.LogError(statusEx, "Failed to mark report execution {ExecutionId} as Failed.", executionId);
             }
 
+            await PublishFailureNotificationAsync(executionId, createdBy, safeMessage, cancellationToken);
+
+            throw;
+        }
+    }
+
+    private static Guid? ParseRecipientUserId(string? createdBy)
+        => Guid.TryParse(createdBy, out var userId) ? userId : null;
+
+    private static string SanitizeFailureMessage(Exception ex)
+        => ex is InvalidOperationException or ArgumentException
+            ? ex.Message
+            : "Erro interno ao gerar o relatorio. Consulte os logs do servidor para detalhes.";
+
+    private async Task PublishFailureNotificationAsync(Guid executionId, string? createdBy, string errorMessage, CancellationToken ct)
+    {
+        try
+        {
             await _notificationService.PublishAsync(new NotificationPublishRequest(
                 EventType: "report.failed",
                 Topic: "reports",
@@ -251,14 +279,16 @@ public class ReportService : IReportService
                 {
                     executionId,
                     status = ReportExecutionStatus.Failed,
-                    error = ex.Message
+                    error = errorMessage
                 },
-                RecipientUserId: null,
+                RecipientUserId: ParseRecipientUserId(createdBy),
                 RecipientKey: createdBy,
                 CreatedBy: "ReportService"),
-                cancellationToken);
-
-            throw;
+                ct);
+        }
+        catch (Exception notifyEx)
+        {
+            _logger.LogWarning(notifyEx, "Failed to publish failure notification for report execution {ExecutionId}.", executionId);
         }
     }
 
@@ -280,14 +310,25 @@ public class ReportService : IReportService
         if (pending.Count == 0)
             return [];
 
-        if (maxConcurrent == 1)
+        if (maxConcurrent == 1 || _scopeFactory is null)
         {
             var sequentialResults = new List<ReportExecution>(pending.Count);
             foreach (var execution in pending)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var processed = await ProcessExecutionAsync(execution.Id, execution.ClientId, cancellationToken);
-                sequentialResults.Add(processed);
+                try
+                {
+                    var processed = await ProcessExecutionAsync(execution.Id, execution.ClientId, cancellationToken);
+                    sequentialResults.Add(processed);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Report execution {ExecutionId} failed while processing the pending batch.", execution.Id);
+                }
             }
 
             return sequentialResults;
@@ -297,17 +338,17 @@ public class ReportService : IReportService
 
         var results = new ReportExecution?[pending.Count];
 
-        // Uma falha em uma execucao nao deve cancelar nem abortar as outras do
-        // lote. Antes o primeiro erro chamava workerCts.Cancel(), o
-        // Task.WhenAll lancava, o semaphore era descartado com itens ainda
-        // pendentes e esses itens estouravam ObjectDisposedException.
+        // Cada task concorrente cria seu proprio AsyncServiceScope para isolar
+        // o DbContext (EF Core nao e thread-safe).
         var tasks = pending.Select(async (execution, index) =>
         {
             await semaphore.WaitAsync(cancellationToken);
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                results[index] = await ProcessExecutionAsync(execution.Id, execution.ClientId, cancellationToken);
+                await using var workerScope = _scopeFactory.CreateAsyncScope();
+                var scopedReportService = workerScope.ServiceProvider.GetRequiredService<IReportService>();
+                results[index] = await scopedReportService.ProcessExecutionAsync(execution.Id, execution.ClientId, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -334,7 +375,8 @@ public class ReportService : IReportService
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.ProcessingTimeoutSeconds));
 
-        var data = await _datasetQueryService.QueryAsync(template, ApplyQueryScope(filtersJson, null, scope), timeoutCts.Token);
+        var previewFilters = ClampPreviewFilters(ApplyQueryScope(filtersJson, null, scope));
+        var data = await _datasetQueryService.QueryAsync(template, previewFilters, timeoutCts.Token);
         var document = await RenderDocumentAsync(template, format, data, timeoutCts.Token);
         var context = BuildRenderContext(template);
 
@@ -353,7 +395,8 @@ public class ReportService : IReportService
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.ProcessingTimeoutSeconds));
 
-        var data = await _datasetQueryService.QueryAsync(template, ApplyQueryScope(filtersJson, null, scope), timeoutCts.Token);
+        var previewFilters = ClampPreviewFilters(ApplyQueryScope(filtersJson, null, scope));
+        var data = await _datasetQueryService.QueryAsync(template, previewFilters, timeoutCts.Token);
         var context = BuildRenderContext(template);
 
         return new ReportHtmlPreviewResult
@@ -385,24 +428,15 @@ public class ReportService : IReportService
         if (execution is null)
             return null;
 
-        var storageService = await _storageProviderFactory.CreateObjectStorageServiceAsync(cancellationToken);
+        var effectiveOptions = await GetEffectiveReportingOptionsAsync();
+        using var downloadTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        downloadTimeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveOptions.FileDownloadTimeoutSeconds));
 
-        // Faz o streaming pelo proprio servidor. Necessario porque o provedor
-        // local devolve uma URL "fake" (/api/v1/storage/download/...) que nao
-        // existe — o download ficava quebrado nesse modo.
-        var content = await storageService.DownloadAsync(execution.StorageObjectKey!, cancellationToken);
+        var storageService = await _storageProviderFactory.CreateObjectStorageServiceAsync(downloadTimeoutCts.Token);
 
-        // Streams de storage remoto (ex.: resposta HTTP do MinIO) podem nao ser
-        // seekable, e o FileResult com enableRangeProcessing exige seek.
-        // Bufferiza apenas quando necessario.
-        if (!content.CanSeek)
-        {
-            var buffer = new MemoryStream();
-            await content.CopyToAsync(buffer, cancellationToken);
-            await content.DisposeAsync();
-            buffer.Position = 0;
-            content = buffer;
-        }
+        // Faz o streaming pelo proprio servidor sem bufferizar arquivos grandes na
+        // RAM: o controller habilita range processing apenas quando CanSeek == true.
+        var content = await storageService.DownloadAsync(execution.StorageObjectKey!, downloadTimeoutCts.Token);
 
         return new ReportDownloadResult
         {
@@ -459,11 +493,50 @@ public class ReportService : IReportService
     }
 
     /// <summary>
+    /// Limita o preview sincrono a no maximo 500 linhas para evitar OOM/timeout na API.
+    /// </summary>
+    private static string ClampPreviewFilters(string? filtersJson)
+    {
+        const int maxPreviewRows = 500;
+        JsonObject body;
+        if (string.IsNullOrWhiteSpace(filtersJson))
+        {
+            body = new JsonObject();
+        }
+        else
+        {
+            try
+            {
+                body = JsonNode.Parse(filtersJson) as JsonObject ?? new JsonObject();
+            }
+            catch (JsonException)
+            {
+                body = new JsonObject();
+            }
+        }
+
+        body.Remove("allRows");
+        if (body.TryGetPropertyValue("limit", out var limitNode) &&
+            limitNode is JsonValue limitValue &&
+            limitValue.TryGetValue<int>(out var requestedLimit) &&
+            requestedLimit > 0)
+        {
+            body["limit"] = Math.Min(requestedLimit, maxPreviewRows);
+        }
+        else
+        {
+            body["limit"] = maxPreviewRows;
+        }
+
+        return body.ToJsonString();
+    }
+
+    /// <summary>
     /// Mescla o escopo efetivo no FiltersJson. O escopo (execucao/usuario) SEMPRE
     /// prevalece sobre o que veio do cliente — e o que impede um relatorio de um
     /// cliente conter dados de outros.
     /// </summary>
-    private static string? ApplyQueryScope(string? filtersJson, Guid? executionClientId, ReportQueryScope? scope)
+    public static string? ApplyQueryScope(string? filtersJson, Guid? executionClientId, ReportQueryScope? scope)
     {
         var clientId = executionClientId ?? scope?.ClientId;
         var siteId = scope?.SiteId;

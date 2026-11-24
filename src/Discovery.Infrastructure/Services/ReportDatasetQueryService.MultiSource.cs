@@ -50,7 +50,9 @@ public partial class ReportDatasetQueryService
 
         foreach (var source in normalizedSources)
         {
-            var mergedFilters = MergeJsonObjects(globalFilters, ParseJsonObject(source.Filters));
+            // Scope keys (clientId/siteId) from globalFilters are authoritative and
+            // must never be overridden or cleared by per-source LayoutJson filters.
+            var mergedFilters = MergeJsonObjects(ParseJsonObject(source.Filters), globalFilters);
             var mergedFiltersJson = mergedFilters?.ToJsonString();
             var mergedFiltersElement = ParseFilters(mergedFiltersJson);
             var clientId = GetGuid(mergedFiltersElement, "clientId");
@@ -169,8 +171,11 @@ public partial class ReportDatasetQueryService
                     var merged = new Dictionary<string, object?>(left, StringComparer.OrdinalIgnoreCase);
                     foreach (var (field, value) in match)
                     {
-                        // A fonte ja traz nome puro + qualificado; copia os dois.
-                        merged[field] = value;
+                        // Preserva os campos nao-qualificados da fonte base; copia
+                        // os qualificados ("{alias}.{campo}") sempre e os puros apenas
+                        // quando ainda nao existem na linha combinada.
+                        if (field.Contains('.', StringComparison.Ordinal) || !merged.ContainsKey(field))
+                            merged[field] = value;
                     }
 
                     // Atalho para join com alias explicito no target (ex.: hw.agentId)
@@ -190,24 +195,20 @@ public partial class ReportDatasetQueryService
                     $"(limite {HardLimit}). Refine os filtros dos datasets '{joinAlias}' e '{alias}' para reduzir o cruzamento.");
             }
 
-            // B4: nenhum match entre a base e a fonte => falha acionavel, em vez
-            // de um relatorio que "parece" pronto mas sai com as colunas do join
-            // 100% nulas.
-            // Uma fonte VAZIA tambem e falha: era o caso pior, em que o relatorio
-            // saia com a coluna do join totalmente nula e nenhum aviso.
-            if (matchedLeftCount == 0 && leftCount > 0)
+            // B4: nenhum match entre a base e a fonte com linhas => falha acionavel
+            // (chave errada). Em LEFT JOIN com a fonte direita vazia (0 linhas),
+            // preserva as linhas da base com colunas da direita nulas; em INNER JOIN
+            // falha porque o resultado seria silenciosamente zerado.
+            var shouldFailNoMatch = matchedLeftCount == 0 && leftCount > 0 &&
+                (currentRows.Count > 0 || string.Equals(joinType, "inner", StringComparison.OrdinalIgnoreCase));
+
+            if (shouldFailNoMatch)
             {
                 var reason = currentRows.Count == 0
                     ? $"O join por '{targetKey}' nao casou nenhuma linha entre '{joinAlias}' e '{alias}': " +
                       $"o dataset '{alias}' nao retornou linhas para os filtros informados."
                     : $"O join por '{targetKey}' nao casou nenhuma linha entre '{joinAlias}' e '{alias}': " +
                       $"{leftCount} linha(s) na base e {currentRows.Count} na fonte, sem chave em comum.";
-                // _logger e OPCIONAL por contrato (o ctor de 2 args o deixa null de
-                // proposito, e os testes chamam assim). Sem o null-conditional,
-                // LogWarning lancava ArgumentNullException("logger") AQUI e a causa
-                // raiz (join sem chave em comum) sumia atras de um erro de logging.
-                // A chamada precisa ser tolerante a logger ausente: o throw logo
-                // abaixo e o unico dono do diagnostico.
                 _logger?.LogWarning(
                     "Report multi-source join sem correspondencia: {Reason} (sourceKey={SourceKey}, targetKey={TargetKey})",
                     reason, sourceKey, targetKey);

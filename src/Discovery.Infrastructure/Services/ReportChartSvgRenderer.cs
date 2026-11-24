@@ -249,9 +249,32 @@ internal static class ReportChartSvgRenderer
                 continue;
 
             var sweep = 360d * (value / total);
+            var titleXml = $"<title>{Escape(labels[i])}: {N(values[i])}</title>";
+            if (sweep >= 359.99d)
+            {
+                var color = ColorFor(i);
+                if (innerRadius > 0)
+                {
+                    var midRadius = (radius + innerRadius) / 2d;
+                    var strokeWidth = radius - innerRadius;
+                    sb.Append("<circle cx=\"").Append(N(cx)).Append("\" cy=\"").Append(N(cy))
+                      .Append("\" r=\"").Append(N(midRadius))
+                      .Append("\" fill=\"none\" stroke=\"").Append(color)
+                      .Append("\" stroke-width=\"").Append(N(strokeWidth)).Append("\">")
+                      .Append(titleXml).Append("</circle>");
+                }
+                else
+                {
+                    sb.Append("<circle cx=\"").Append(N(cx)).Append("\" cy=\"").Append(N(cy))
+                      .Append("\" r=\"").Append(N(radius))
+                      .Append("\" fill=\"").Append(color).Append("\" stroke=\"#ffffff\" stroke-width=\"1\">")
+                      .Append(titleXml).Append("</circle>");
+                }
+                break;
+            }
+
             var endAngle = startAngle + sweep;
-            sb.Append(Sector(cx, cy, radius, innerRadius, startAngle, endAngle, ColorFor(i)));
-            sb.Append("<title>").Append(Escape(labels[i])).Append(": ").Append(N(values[i])).Append("</title>");
+            sb.Append(Sector(cx, cy, radius, innerRadius, startAngle, endAngle, ColorFor(i), titleXml));
             startAngle = endAngle;
         }
 
@@ -282,7 +305,7 @@ internal static class ReportChartSvgRenderer
         return sb.ToString();
     }
 
-    private static string Sector(double cx, double cy, double radius, double innerRadius, double startDeg, double endDeg, string color)
+    private static string Sector(double cx, double cy, double radius, double innerRadius, double startDeg, double endDeg, string color, string titleXml)
     {
         var largeArc = (endDeg - startDeg) > 180 ? 1 : 0;
         var startOuter = Polar(cx, cy, radius, startDeg);
@@ -306,7 +329,8 @@ internal static class ReportChartSvgRenderer
             sb.Append(" L ").Append(N(cx)).Append(' ').Append(N(cy));
         }
 
-        sb.Append(" Z\" fill=\"").Append(color).Append("\" stroke=\"#ffffff\" stroke-width=\"1\" />");
+        sb.Append(" Z\" fill=\"").Append(color).Append("\" stroke=\"#ffffff\" stroke-width=\"1\">")
+          .Append(titleXml).Append("</path>");
         return sb.ToString();
     }
 

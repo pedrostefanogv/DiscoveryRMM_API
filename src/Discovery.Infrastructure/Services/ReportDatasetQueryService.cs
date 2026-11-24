@@ -61,7 +61,7 @@ public partial class ReportDatasetQueryService : IReportDatasetQueryService
         {
             ReportDatasetType.SoftwareInventory => await QuerySoftwareInventoryAsync(clientId, filters, cancellationToken),
             ReportDatasetType.Logs => await QueryLogsAsync(clientId, filters, cancellationToken),
-            ReportDatasetType.ConfigurationAudit => await QueryConfigurationAuditAsync(filters, cancellationToken),
+            ReportDatasetType.ConfigurationAudit => await QueryConfigurationAuditAsync(clientId, filters, cancellationToken),
             ReportDatasetType.Tickets => await QueryTicketsAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentHardware => await QueryAgentHardwareAsync(clientId, filters, cancellationToken),
             ReportDatasetType.AgentInventoryComposite => await QueryAgentInventoryCompositeAsync(clientId, filters, cancellationToken),

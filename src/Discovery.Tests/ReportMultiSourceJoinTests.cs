@@ -158,18 +158,89 @@ public class ReportMultiSourceJoinTests
     }
 
     [Test]
-    public async Task MultiSource_JoinWithNoMatches_FailsLoudly()
+    public async Task MultiSource_InnerJoinWithNoMatches_FailsLoudly()
     {
         var (db, service) = await BuildAsync();
         using var _ = db;
-        // Nenhum sensor cadastrado => o join nao casa NENHUMA linha.
+        // Nenhum sensor cadastrado em INNER JOIN => falha acionavel.
+
+        const string innerLayout = """
+        {
+          "dataSources": [
+            { "datasetType": 4, "alias": "hw" },
+            { "datasetType": 29, "alias": "sns", "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "inner" } }
+          ],
+          "columns": [
+            { "field": "hw.agentHostname" },
+            { "field": "hw.processor" }
+          ]
+        }
+        """;
 
         var erro = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await service.QueryAsync(Template(HardwareSensorsLayout), null, CancellationToken.None));
+            await service.QueryAsync(Template(innerLayout), null, CancellationToken.None));
 
         Assert.That(erro!.Message, Does.Contain("agentId"));
         Assert.That(erro.Message, Does.Contain("hw"));
         Assert.That(erro.Message, Does.Contain("sns"));
+    }
+
+    [Test]
+    public async Task MultiSource_LeftJoin_EmptyRightSource_KeepsBaseRowsWithNullColumns()
+    {
+        var (db, service) = await BuildAsync();
+        using var _ = db;
+        // Nenhum sensor cadastrado em LEFT JOIN => preserva a base com colunas da direita nulas.
+
+        var result = await service.QueryAsync(Template(HardwareSensorsLayout), null, CancellationToken.None);
+
+        Assert.That(result.Rows.Count, Is.EqualTo(2));
+        var pc01 = result.Rows.Single(r => (string?)r["hw.agentHostname"] == "PC-01");
+        Assert.That(pc01["sns.sensorName"], Is.Null);
+    }
+
+    [Test]
+    public async Task MultiSource_PerSourceFilters_CannotOverrideGlobalClientId()
+    {
+        var (db, service) = await BuildAsync();
+        using var _ = db;
+
+        var otherClientId = Guid.NewGuid();
+        var otherSiteId = Guid.NewGuid();
+        var otherAgentId = Guid.NewGuid();
+        db.Clients.Add(new Client { Id = otherClientId, Name = "VictimCorp", IsActive = true });
+        db.Sites.Add(new Site { Id = otherSiteId, ClientId = otherClientId, Name = "Filial", IsActive = true });
+        db.Agents.Add(new Agent
+        {
+            Id = otherAgentId, SiteId = otherSiteId, Hostname = "VICTIM-PC",
+            OperatingSystem = "Windows 11", OsVersion = "10.0", AgentVersion = "1.0",
+            Status = AgentStatus.Online, LastSeenAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        db.AgentHardwareInfos.Add(new AgentHardwareInfo
+        {
+            Id = Guid.NewGuid(), AgentId = otherAgentId, OsName = "Windows 11",
+            Processor = "Intel", TotalMemoryBytes = 8_000_000_000L, TotalDisksCount = 1,
+            CollectedAt = DateTime.UtcNow, InventoryCollectedAt = DateTime.UtcNow
+        });
+        SeedSensor(db, AgentA, "cpu.load", "Carga de CPU");
+        await db.SaveChangesAsync();
+
+        var maliciousLayout = $$"""
+        {
+          "dataSources": [
+            { "datasetType": 4, "alias": "hw", "filters": { "clientId": "{{otherClientId}}" } },
+            { "datasetType": 29, "alias": "sns", "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" } }
+          ],
+          "columns": [ { "field": "hw.agentHostname" } ]
+        }
+        """;
+
+        var globalFilters = JsonSerializer.Serialize(new { clientId = ClientId });
+        var result = await service.QueryAsync(Template(maliciousLayout), globalFilters, CancellationToken.None);
+
+        var hostnames = result.Rows.Select(r => (string?)r["hw.agentHostname"]).ToList();
+        Assert.That(hostnames, Does.Not.Contain("VICTIM-PC"));
+        Assert.That(hostnames, Does.Contain("PC-01"));
     }
 
     [Test]

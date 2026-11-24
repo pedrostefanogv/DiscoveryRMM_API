@@ -66,6 +66,7 @@ public partial class DiscoveryDbContext
             entity.Property(e => e.FinishedAt).HasColumnName("finished_at").HasColumnType("timestamptz");
             entity.Property(e => e.CreatedBy).HasColumnName("created_by").HasMaxLength(256);
             entity.Property(e => e.ScheduleId).HasColumnName("schedule_id");
+            entity.Property(e => e.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
 
             entity.HasOne<ReportTemplate>().WithMany().HasForeignKey(e => e.TemplateId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne<Client>().WithMany().HasForeignKey(e => e.ClientId).OnDelete(DeleteBehavior.SetNull);

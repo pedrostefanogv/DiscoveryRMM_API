@@ -37,7 +37,7 @@ public class ReportDatasetQueryServiceNullLoggerProbeTests
     {
       "dataSources": [
         { "datasetType": 4, "alias": "hw" },
-        { "datasetType": 29, "alias": "sns", "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "left" } }
+        { "datasetType": 29, "alias": "sns", "join": { "joinToAlias": "hw", "sourceKey": "agentId", "targetKey": "agentId", "joinType": "inner" } }
       ],
       "columns": [
         { "field": "hw.agentHostname" },

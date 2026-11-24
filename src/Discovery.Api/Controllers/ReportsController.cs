@@ -15,7 +15,8 @@ namespace Discovery.Api.Controllers;
 public class ReportsController(
     IMediator mediator,
     IReportService reportService,
-    IReportScopeResolver scopeResolver) : ControllerBase
+    IReportScopeResolver scopeResolver,
+    IReportExecutionQueue? executionQueue = null) : ControllerBase
 {
     /// <summary>
     /// Identidade do usuario autenticado para auditoria. Vem do token/contexto,
@@ -28,8 +29,8 @@ public class ReportsController(
     /// Resolve o escopo efetivo do usuario. Nenhum clientId vindo da requisicao e
     /// aceito fora do escopo permitido.
     /// </summary>
-    private Task<ReportScopeResolution> ResolveScopeAsync(ActionType action, Guid? clientId, Guid? siteId)
-        => scopeResolver.ResolveAsync(ResourceType.Reports, action, clientId, siteId);
+    private Task<ReportScopeResolution> ResolveScopeAsync(ActionType action, Guid? clientId, Guid? siteId, bool allowMultipleClients = false)
+        => scopeResolver.ResolveAsync(ResourceType.Reports, action, clientId, siteId, HttpContext.RequestAborted, allowMultipleClients);
 
     private ObjectResult AccessDenied(string? message)
         => StatusCode(StatusCodes.Status403Forbidden, new { message = message ?? "Acesso negado." });
@@ -53,7 +54,7 @@ public class ReportsController(
     [RequirePermission(ResourceType.Reports, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> GetAll([FromQuery] Guid? clientId = null)
     {
-        var scope = await ResolveScopeAsync(ActionType.View, clientId, null);
+        var scope = await ResolveScopeAsync(ActionType.View, clientId, null, allowMultipleClients: true);
         if (!scope.Allowed)
             return AccessDenied(scope.Error);
 
@@ -93,7 +94,7 @@ public class ReportsController(
         if (download is null)
             return NotFound(new { errors = new[] { new { Code = "NotFound", Message = $"No completed report file found for execution {executionId}." } } });
 
-        return File(download.Content, download.ContentType, download.FileName, enableRangeProcessing: true);
+        return File(download.Content, download.ContentType, download.FileName, enableRangeProcessing: download.Content.CanSeek);
     }
 
     // --- Dataset Catalog ---
@@ -131,17 +132,28 @@ public class ReportsController(
         [FromQuery] string? alias = null)
     {
         var result = await mediator.Send(
-            new GetReportFieldAutocompleteQuery(term, datasetType ?? 0, alias));
+            new GetReportFieldAutocompleteQuery(term, datasetType, alias));
         return result.ToActionResult();
     }
 
     // --- Template history / library ---
     [HttpGet("templates/{id:guid}/history")]
     [RequirePermission(ResourceType.Reports, ActionType.View, ScopeSource.AccessList)]
-    public async Task<IActionResult> GetTemplateHistory(Guid id, [FromQuery] int limit = 50)
+    public async Task<IActionResult> GetTemplateHistory(Guid id, [FromQuery] int limit = 50, [FromQuery] Guid? clientId = null)
     {
-        var result = await mediator.Send(new GetReportTemplateHistoryQuery(id, limit));
-        return result.ToActionResult();
+        var scope = await ResolveScopeAsync(ActionType.View, clientId, null, allowMultipleClients: true);
+        if (!scope.Allowed)
+            return AccessDenied(scope.Error);
+
+        var effectiveClientId = EffectiveClientId(scope, clientId)
+            ?? (scope.AllowedClientIds.Count == 1 ? scope.AllowedClientIds[0] : (Guid?)null);
+
+        var result = await mediator.Send(new GetReportTemplateHistoryQuery(id, limit, effectiveClientId));
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound"
+                ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
+                : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpGet("templates/library")]
@@ -180,7 +192,7 @@ public class ReportsController(
         [FromQuery] bool? isActive = null,
         [FromQuery] int? datasetType = null)
     {
-        var scope = await ResolveScopeAsync(ActionType.View, clientId, null);
+        var scope = await ResolveScopeAsync(ActionType.View, clientId, null, allowMultipleClients: true);
         if (!scope.Allowed)
             return AccessDenied(scope.Error);
 
@@ -267,7 +279,7 @@ public class ReportsController(
     [RequirePermission(ResourceType.Reports, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> ListSchedules([FromQuery] Guid? clientId = null, [FromQuery] bool? isActive = null)
     {
-        var scope = await ResolveScopeAsync(ActionType.View, clientId, null);
+        var scope = await ResolveScopeAsync(ActionType.View, clientId, null, allowMultipleClients: true);
         if (!scope.Allowed)
             return AccessDenied(scope.Error);
 
@@ -353,7 +365,7 @@ public class ReportsController(
     [RequirePermission(ResourceType.Reports, ActionType.View, ScopeSource.AccessList)]
     public async Task<IActionResult> ListExecutions([FromQuery] Guid? clientId = null, [FromQuery] int? limit = null)
     {
-        var scope = await ResolveScopeAsync(ActionType.View, clientId, null);
+        var scope = await ResolveScopeAsync(ActionType.View, clientId, null, allowMultipleClients: true);
         if (!scope.Allowed)
             return AccessDenied(scope.Error);
 
@@ -362,9 +374,15 @@ public class ReportsController(
     }
 
     private static ListReportsQuery BuildListQuery(ReportScopeResolution scope, Guid? requestedClientId, int? limit)
-        => scope.IsGlobal
-            ? new ListReportsQuery(requestedClientId, limit ?? 50)
-            : new ListReportsQuery(null, limit ?? 50, scope.AllowedClientIds);
+    {
+        if (scope.IsGlobal)
+            return new ListReportsQuery(requestedClientId, limit ?? 50);
+
+        if (requestedClientId.HasValue)
+            return new ListReportsQuery(requestedClientId.Value, limit ?? 50);
+
+        return new ListReportsQuery(null, limit ?? 50, scope.AllowedClientIds);
+    }
 
     [HttpPost("run")]
     [RequirePermission(ResourceType.Reports, ActionType.Execute, ScopeSource.AccessList)]
@@ -374,15 +392,20 @@ public class ReportsController(
         if (!scope.Allowed)
             return AccessDenied(scope.Error);
 
+        var effectiveClientId = EffectiveClientId(scope, cmd.ClientId);
         var result = await mediator.Send(cmd with
         {
-            ClientId = EffectiveClientId(scope, cmd.ClientId),
+            ClientId = effectiveClientId,
             SiteId = scope.IsGlobal ? cmd.SiteId : scope.SiteId,
             CreatedBy = CurrentUserId()
         });
 
         return result.Match<IActionResult>(
-            success: dto => AcceptedAtAction(nameof(GetById), new { executionId = dto.ExecutionId }, dto),
+            success: dto =>
+            {
+                executionQueue?.TryEnqueue(dto.ExecutionId, effectiveClientId);
+                return AcceptedAtAction(nameof(GetById), new { executionId = dto.ExecutionId }, dto);
+            },
             failure: errors => errors[0].Code == "NotFound"
                 ? NotFound(new { errors = errors.Select(e => new { e.Code, e.Message }) })
                 : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message, e.Field }) }));

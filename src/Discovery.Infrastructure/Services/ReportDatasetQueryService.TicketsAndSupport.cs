@@ -82,6 +82,7 @@ public partial class ReportDatasetQueryService
     private async Task<ReportQueryResult> QueryTicketActivityAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var ticketId = GetGuid(filters, "ticketId");
         var action = GetString(filters, "action");
         var from = GetDateTime(filters, "from");
@@ -90,6 +91,13 @@ public partial class ReportDatasetQueryService
 
         var query = _db.TicketActivityLogs.AsNoTracking().AsQueryable();
         if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
+        if (siteId.HasValue)
+        {
+            var siteTicketIds = _db.Tickets.AsNoTracking()
+                .Where(t => t.DeletedAt == null && t.SiteId == siteId.Value)
+                .Select(t => t.Id);
+            query = query.Where(x => siteTicketIds.Contains(x.TicketId));
+        }
         if (ticketId.HasValue) query = query.Where(x => x.TicketId == ticketId.Value);
         if (!string.IsNullOrWhiteSpace(action)) query = query.Where(x => x.Action == action);
         if (from.HasValue) query = query.Where(x => x.CreatedAt >= from.Value);
@@ -147,6 +155,7 @@ public partial class ReportDatasetQueryService
     private async Task<ReportQueryResult> QueryTicketAnswersAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var templateId = GetGuid(filters, "templateId");
         var questionKey = GetString(filters, "questionKey");
         var valueText = GetString(filters, "valueText");
@@ -162,6 +171,7 @@ public partial class ReportDatasetQueryService
             select new { answer, ticket };
 
         if (clientId.HasValue) joined = joined.Where(x => x.ticket.ClientId == clientId.Value);
+        if (siteId.HasValue) joined = joined.Where(x => x.ticket.SiteId == siteId.Value);
         if (templateId.HasValue) joined = joined.Where(x => x.answer.TemplateId == templateId.Value);
         if (!string.IsNullOrWhiteSpace(questionKey)) joined = joined.Where(x => x.answer.QuestionKey == questionKey);
         if (!string.IsNullOrWhiteSpace(valueText)) joined = joined.Where(x => x.answer.ValueText == valueText);
@@ -234,7 +244,11 @@ public partial class ReportDatasetQueryService
 
         var query = _db.KnowledgeArticles.AsNoTracking().AsQueryable();
         if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
-        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status.ToString() == status);
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var normalizedStatus = status.Trim().ToLowerInvariant();
+            query = query.Where(x => x.Status.ToLower() == normalizedStatus);
+        }
         if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
 
         query = descending

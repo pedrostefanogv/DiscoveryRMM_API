@@ -109,6 +109,7 @@ public class ReportExecutionRepository : IReportExecutionRepository
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(execution => execution.Status, ReportExecutionStatus.Running)
                 .SetProperty(execution => execution.StartedAt, claimedAt)
+                .SetProperty(execution => execution.AttemptCount, execution => execution.AttemptCount + 1)
                 .SetProperty(execution => execution.ErrorMessage, (string?)null));
 
         return claimed == 1;
@@ -116,29 +117,58 @@ public class ReportExecutionRepository : IReportExecutionRepository
 
     public async Task<int> RequeueStaleRunningAsync(DateTime startedBefore, int limit = 100)
     {
+        const int maxAttempts = 3;
         var safeLimit = Math.Clamp(limit, 1, 1000);
 
         // ExecuteUpdate nao aceita ORDER BY/LIMIT de forma portavel: seleciona os
         // ids primeiro e depois atualiza.
-        var staleIds = await _db.ReportExecutions
+        var stale = await _db.ReportExecutions
             .AsNoTracking()
             .Where(execution => execution.Status == ReportExecutionStatus.Running)
             .Where(execution => execution.StartedAt != null && execution.StartedAt <= startedBefore)
             .OrderBy(execution => execution.StartedAt)
             .Take(safeLimit)
-            .Select(execution => execution.Id)
+            .Select(execution => new { execution.Id, execution.AttemptCount })
             .ToListAsync();
 
-        if (staleIds.Count == 0)
+        if (stale.Count == 0)
+            return 0;
+
+        var poisonIds = stale.Where(x => x.AttemptCount >= maxAttempts).Select(x => x.Id).ToList();
+        if (poisonIds.Count > 0)
+        {
+            var finishedAt = DateTime.UtcNow;
+            await _db.ReportExecutions
+                .Where(execution => poisonIds.Contains(execution.Id))
+                .Where(execution => execution.Status == ReportExecutionStatus.Running)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(execution => execution.Status, ReportExecutionStatus.Failed)
+                    .SetProperty(execution => execution.FinishedAt, finishedAt)
+                    .SetProperty(execution => execution.ErrorMessage, "Execucao excedeu o limite maximo de tentativas apos interrompimento."));
+        }
+
+        var retryIds = stale.Where(x => x.AttemptCount < maxAttempts).Select(x => x.Id).ToList();
+        if (retryIds.Count == 0)
             return 0;
 
         return await _db.ReportExecutions
-            .Where(execution => staleIds.Contains(execution.Id))
+            .Where(execution => retryIds.Contains(execution.Id))
             .Where(execution => execution.Status == ReportExecutionStatus.Running)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(execution => execution.Status, ReportExecutionStatus.Pending)
                 .SetProperty(execution => execution.StartedAt, (DateTime?)null)
                 .SetProperty(execution => execution.ErrorMessage, (string?)null));
+    }
+
+    public async Task ClearStorageFieldsAsync(Guid id)
+    {
+        await _db.ReportExecutions
+            .Where(execution => execution.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(execution => execution.StorageObjectKey, (string?)null)
+                .SetProperty(execution => execution.StorageBucket, (string?)null)
+                .SetProperty(execution => execution.StoragePresignedUrl, (string?)null)
+                .SetProperty(execution => execution.StoragePresignedUrlGeneratedAt, (DateTime?)null));
     }
 
     public async Task UpdateStatusAsync(Guid id, Guid? clientId, ReportExecutionStatus status, string? errorMessage = null)

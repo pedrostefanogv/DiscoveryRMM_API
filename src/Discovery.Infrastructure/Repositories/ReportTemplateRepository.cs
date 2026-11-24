@@ -98,7 +98,7 @@ public class ReportTemplateRepository : IReportTemplateRepository
     public async Task<bool> DeleteAsync(Guid id, Guid? clientId = null)
     {
         var template = await _db.ReportTemplates
-            .FirstOrDefaultAsync(item => item.Id == id && (clientId == null || item.ClientId == null || item.ClientId == clientId));
+            .FirstOrDefaultAsync(item => item.Id == id && (clientId == null || item.ClientId == clientId));
 
         if (template is null)
             return false;

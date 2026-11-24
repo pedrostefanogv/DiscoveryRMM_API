@@ -19,7 +19,8 @@ public class ReportScopeResolver(IScopeContext scopeContext, ISiteRepository sit
         ActionType action,
         Guid? requestedClientId,
         Guid? requestedSiteId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool allowMultipleClients = false)
     {
         var access = await scopeContext.GetAccessAsync(resource, action);
 
@@ -34,8 +35,15 @@ public class ReportScopeResolver(IScopeContext scopeContext, ISiteRepository sit
             var clientId = requestedClientId
                 ?? (access.AllowedClientIds.Count == 1 ? access.AllowedClientIds[0] : (Guid?)null);
 
-            if (clientId is null)
+            if (clientId is null && !allowMultipleClients)
                 return Deny("Informe o cliente: o usuario tem acesso a mais de um.");
+
+            if (requestedSiteId is { } siteCheckId)
+            {
+                var site = await sites.GetByIdAsync(siteCheckId);
+                if (site is null || !access.AllowedClientIds.Contains(site.ClientId) || (clientId.HasValue && site.ClientId != clientId.Value))
+                    return Deny("O site informado esta fora do escopo do cliente permitido.");
+            }
 
             return new ReportScopeResolution(true, false, clientId, requestedSiteId, access.AllowedClientIds, null);
         }

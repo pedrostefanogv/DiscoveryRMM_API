@@ -507,8 +507,14 @@ public class ReportHtmlComposer : IReportHtmlComposer
     {
         if (op is null || left is null || right is null) return false;
 
+        var rightStr = right is System.Text.Json.JsonElement je ? je.ToString() : right.ToString();
         if (string.Equals(op, "eq", StringComparison.OrdinalIgnoreCase))
-            return string.Equals(left.ToString(), right.ToString(), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(left.ToString(), rightStr, StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(op, "ne", StringComparison.OrdinalIgnoreCase))
+            return !string.Equals(left.ToString(), rightStr, StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(op, "contains", StringComparison.OrdinalIgnoreCase))
+            return !string.IsNullOrEmpty(rightStr) &&
+                   (left.ToString()?.Contains(rightStr, StringComparison.OrdinalIgnoreCase) ?? false);
 
         if (TryConvertToDecimal(left, out var leftNum) && TryConvertToDecimal(right, out var rightNum))
         {
@@ -540,10 +546,10 @@ public class ReportHtmlComposer : IReportHtmlComposer
             case decimal currentDecimal:
                 decimalValue = currentDecimal;
                 return true;
-            case double currentDouble:
+            case double currentDouble when !double.IsNaN(currentDouble) && !double.IsInfinity(currentDouble):
                 decimalValue = Convert.ToDecimal(currentDouble);
                 return true;
-            case float currentFloat:
+            case float currentFloat when !float.IsNaN(currentFloat) && !float.IsInfinity(currentFloat):
                 decimalValue = Convert.ToDecimal(currentFloat);
                 return true;
             case int currentInt:
@@ -552,7 +558,14 @@ public class ReportHtmlComposer : IReportHtmlComposer
             case long currentLong:
                 decimalValue = currentLong;
                 return true;
-            case string currentString when decimal.TryParse(currentString, out var parsed):
+            case System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.Number && je.TryGetDecimal(out var jsonDecimal):
+                decimalValue = jsonDecimal;
+                return true;
+            case System.Text.Json.JsonElement je when je.ValueKind == System.Text.Json.JsonValueKind.String &&
+                decimal.TryParse(je.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var jsonStrDecimal):
+                decimalValue = jsonStrDecimal;
+                return true;
+            case string currentString when decimal.TryParse(currentString, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed):
                 decimalValue = parsed;
                 return true;
             default:
@@ -628,9 +641,21 @@ public class ReportHtmlComposer : IReportHtmlComposer
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
-        return value
+        var cleaned = value
             .Replace("<", string.Empty, StringComparison.Ordinal)
-            .Replace(">", string.Empty, StringComparison.Ordinal);
+            .Replace(">", string.Empty, StringComparison.Ordinal)
+            .Replace(";", string.Empty, StringComparison.Ordinal)
+            .Replace("{", string.Empty, StringComparison.Ordinal)
+            .Replace("}", string.Empty, StringComparison.Ordinal);
+
+        if (cleaned.Contains("url(", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Contains("@import", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Contains("expression(", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        return cleaned.Trim();
     }
 
     private static string ResolveAlternateRowBackground(ReportLayoutStyleDefinition style)
@@ -839,7 +864,7 @@ public class ReportHtmlComposer : IReportHtmlComposer
                 return Math.Round((decimal)matching / total * 100, 1);
             }
 
-            if (aggregate == "compliancePercent")
+            if (aggregate == "compliancepercent")
             {
                 var total = rows.Count;
                 if (total == 0) return 0;

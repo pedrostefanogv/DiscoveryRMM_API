@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using ClosedXML.Excel;
 using Discovery.Core.Enums;
 using Discovery.Core.Interfaces;
@@ -135,6 +137,7 @@ public class XlsxReportRenderer : IReportRenderer
 
     private static string FormatBytes(decimal bytes)
     {
+        if (bytes >= 1_099_511_627_776m) return $"{bytes / 1_099_511_627_776m:F1} TB";
         if (bytes >= 1_073_741_824m) return $"{bytes / 1_073_741_824m:F1} GB";
         if (bytes >= 1_048_576m) return $"{bytes / 1_048_576m:F1} MB";
         if (bytes >= 1_024m) return $"{bytes / 1_024m:F1} KB";
@@ -146,10 +149,20 @@ public class XlsxReportRenderer : IReportRenderer
         switch (value)
         {
             case decimal d: decimalValue = d; return true;
-            case double d: decimalValue = (decimal)d; return true;
-            case float f: decimalValue = (decimal)f; return true;
+            case double d when !double.IsNaN(d) && !double.IsInfinity(d): decimalValue = (decimal)d; return true;
+            case float f when !float.IsNaN(f) && !float.IsInfinity(f): decimalValue = (decimal)f; return true;
             case int i: decimalValue = i; return true;
             case long l: decimalValue = l; return true;
+            case JsonElement je when je.ValueKind == JsonValueKind.Number && je.TryGetDecimal(out var jd):
+                decimalValue = jd;
+                return true;
+            case JsonElement je when je.ValueKind == JsonValueKind.String &&
+                decimal.TryParse(je.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var js):
+                decimalValue = js;
+                return true;
+            case string s when decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed):
+                decimalValue = parsed;
+                return true;
             default: decimalValue = 0; return false;
         }
     }
@@ -157,8 +170,14 @@ public class XlsxReportRenderer : IReportRenderer
     private static bool EvaluateCondition(string? op, object? left, object? right)
     {
         if (op is null || left is null || right is null) return false;
+        var rightStr = right is JsonElement je ? je.ToString() : right.ToString();
         if (string.Equals(op, "eq", StringComparison.OrdinalIgnoreCase))
-            return string.Equals(left.ToString(), right.ToString(), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(left.ToString(), rightStr, StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(op, "ne", StringComparison.OrdinalIgnoreCase))
+            return !string.Equals(left.ToString(), rightStr, StringComparison.OrdinalIgnoreCase);
+        if (string.Equals(op, "contains", StringComparison.OrdinalIgnoreCase))
+            return !string.IsNullOrEmpty(rightStr) &&
+                   (left.ToString()?.Contains(rightStr, StringComparison.OrdinalIgnoreCase) ?? false);
         if (TryConvertToDecimal(left, out var ln) && TryConvertToDecimal(right, out var rn))
         {
             return op.ToLowerInvariant() switch

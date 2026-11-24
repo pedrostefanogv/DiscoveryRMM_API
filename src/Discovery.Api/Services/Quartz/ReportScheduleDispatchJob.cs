@@ -48,7 +48,7 @@ public sealed class ReportScheduleDispatchJob : IJob
                 // Cron invalido produziria NextTriggerAt nulo para sempre — e como
                 // "nulo" era tratado como vencido, o agendamento disparava a cada
                 // tick (60 s) criando execucoes sem parar. Desativa e avisa.
-                var nextTrigger = ComputeNextTriggerUtc(schedule.CronExpression, utcNow);
+                var nextTrigger = ComputeNextTriggerUtc(schedule.CronExpression, schedule.TimeZoneId, utcNow);
                 if (nextTrigger is null)
                 {
                     logger.LogWarning(
@@ -57,6 +57,19 @@ public sealed class ReportScheduleDispatchJob : IJob
 
                     schedule.IsActive = false;
                     schedule.NextTriggerAt = null;
+                    await scheduleRepo.UpdateAsync(schedule);
+                    continue;
+                }
+
+                var template = await templateRepo.GetByIdAsync(schedule.TemplateId, schedule.ClientId);
+                if (template is null || !template.IsActive)
+                {
+                    logger.LogWarning(
+                        "Report schedule {ScheduleId} ({Label}) skipped: template {TemplateId} not found or inactive.",
+                        schedule.Id, schedule.ScheduleLabel, schedule.TemplateId);
+
+                    schedule.LastTriggeredAt = utcNow;
+                    schedule.NextTriggerAt = nextTrigger;
                     await scheduleRepo.UpdateAsync(schedule);
                     continue;
                 }
@@ -112,22 +125,43 @@ public sealed class ReportScheduleDispatchJob : IJob
     }
 
     /// <summary>
-    /// Computes the next trigger time from a Quartz-compatible cron expression.
+    /// Computes the next trigger time from a Quartz-compatible cron expression
+    /// respecting the schedule's TimeZoneId (defaults to UTC, never OS local time).
     /// </summary>
-    private static DateTime? ComputeNextTriggerUtc(string cronExpression, DateTime utcNow)
+    private static DateTime? ComputeNextTriggerUtc(string cronExpression, string? timeZoneId, DateTime utcNow)
     {
         if (string.IsNullOrWhiteSpace(cronExpression))
             return null;
 
         try
         {
-            var cron = new CronExpression(cronExpression);
-            var next = cron.GetNextValidTimeAfter(utcNow);
+            var trigger = (ICronTrigger)TriggerBuilder.Create()
+                .WithCronSchedule(cronExpression, x => x.InTimeZone(ResolveTimeZone(timeZoneId)))
+                .Build();
+            var next = trigger.GetFireTimeAfter(new DateTimeOffset(DateTime.SpecifyKind(utcNow, DateTimeKind.Utc), TimeSpan.Zero));
             return next?.UtcDateTime;
         }
         catch
         {
             return null;
+        }
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(string? timeZoneId)
+    {
+        if (string.IsNullOrWhiteSpace(timeZoneId) ||
+            string.Equals(timeZoneId, "UTC", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeZoneInfo.Utc;
+        }
+
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch
+        {
+            return TimeZoneInfo.Utc;
         }
     }
 }

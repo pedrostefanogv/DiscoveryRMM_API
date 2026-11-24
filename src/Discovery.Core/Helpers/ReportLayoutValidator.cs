@@ -438,6 +438,7 @@ public static partial class ReportLayoutValidator
         if (watermark is null)
             return;
 
+        ValidateColor(watermark.Color, "watermark.color", errors);
         ValidateLogo(watermark.LogoUrl, "watermark.logoUrl", errors);
         ValidateLogo(watermark.ImageUrl, "watermark.imageUrl", errors);
 

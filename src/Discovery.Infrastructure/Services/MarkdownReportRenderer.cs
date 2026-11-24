@@ -44,7 +44,7 @@ public class MarkdownReportRenderer : IReportRenderer
             sb.AppendLine();
         }
 
-        // Charts placeholder (charts are rendered as images in PDF; markdown gets alt-text placeholders)
+        // Charts note (Markdown nao suporta SVG embutido; exibe resumo textual)
         if (layout.Charts is { Count: > 0 })
         {
             sb.AppendLine("## 📈 Gráficos");
@@ -52,9 +52,9 @@ public class MarkdownReportRenderer : IReportRenderer
             foreach (var chart in layout.Charts)
             {
                 var chartTitle = string.IsNullOrWhiteSpace(chart.Title) ? chart.Type ?? "Chart" : chart.Title;
-                sb.AppendLine($"![{EscapeHeading(chartTitle)}]({EscapeHeading(chartTitle)} \"{chartTitle}\")");
-                sb.AppendLine();
+                sb.AppendLine($"- **{EscapeHeading(chartTitle)}** (`{EscapeHeading(chart.Type ?? "chart")}`) — _visualização gráfica disponível no Preview HTML / PDF_.");
             }
+            sb.AppendLine();
         }
 
         // Content: grouped or ungrouped

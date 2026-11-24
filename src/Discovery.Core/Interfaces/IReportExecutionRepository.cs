@@ -26,6 +26,7 @@ public interface IReportExecutionRepository
     /// meio do processamento). Sem isso elas nunca voltam para a fila.
     /// </summary>
     Task<int> RequeueStaleRunningAsync(DateTime startedBefore, int limit = 100);
+    Task ClearStorageFieldsAsync(Guid id) => Task.CompletedTask;
     Task UpdateResultAsync(
         Guid id,
         Guid? clientId,

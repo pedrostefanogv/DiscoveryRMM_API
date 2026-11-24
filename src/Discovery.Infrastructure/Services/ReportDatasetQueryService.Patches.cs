@@ -193,8 +193,8 @@ public partial class ReportDatasetQueryService
         {
             Columns =
             [
-                "clientName", "siteName", "agentId", "agentHostname", "automaticLabels",
-                "updateKey", "kbIds", "title", "classification", "severity",
+                "clientId", "clientName", "siteId", "siteName", "agentId", "agentHostname", "automaticLabels",
+                "updateKey", "kbIds", "kbId", "title", "classification", "severity",
                 "isPending", "isInstalled", "isHidden", "requiresReboot",
                 "approvalState", "approvalSource", "status",
                 "publishedAt", "reportedAt", "installedAt",
@@ -364,7 +364,7 @@ public partial class ReportDatasetQueryService
         {
             Columns =
             [
-                "clientName", "siteName", "agentId", "agentHostname", "agentDisplayName",
+                "clientId", "clientName", "siteId", "siteName", "agentId", "agentHostname", "agentDisplayName",
                 "automaticLabels", "status", "osName", "osVersion", "agentVersion",
                 "pendingCount", "criticalCount", "deniedCount", "approvedCount", "installedCount",
                 "pendingReboot", "pendingRebootReasons", "scanStatus", "lastScanAt", "lastSeenAt"
@@ -433,6 +433,7 @@ public partial class ReportDatasetQueryService
         CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var scopeType = ParsePatchScopeType(GetString(filters, "scopeType"));
         var action = ParsePatchAction(GetString(filters, "action"));
         var updateKey = GetString(filters, "updateKey");
@@ -447,6 +448,14 @@ public partial class ReportDatasetQueryService
         {
             query = query.Where(rule =>
                 rule.ScopeType == PatchApprovalScopeType.Global || rule.ClientId == clientId.Value);
+        }
+
+        if (siteId.HasValue)
+        {
+            query = query.Where(rule =>
+                rule.ScopeType == PatchApprovalScopeType.Global ||
+                (rule.ScopeType == PatchApprovalScopeType.Client && (!clientId.HasValue || rule.ClientId == clientId.Value)) ||
+                rule.SiteId == siteId.Value);
         }
 
         if (scopeType.HasValue)
@@ -519,6 +528,7 @@ public partial class ReportDatasetQueryService
         CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var scopeType = ParsePatchScopeType(GetString(filters, "scopeType"));
         var action = ParsePatchAction(GetString(filters, "action"));
         var changeType = GetString(filters, "changeType");
@@ -534,6 +544,14 @@ public partial class ReportDatasetQueryService
         {
             query = query.Where(audit =>
                 audit.ScopeType == PatchApprovalScopeType.Global || audit.ClientId == clientId.Value);
+        }
+
+        if (siteId.HasValue)
+        {
+            query = query.Where(audit =>
+                audit.ScopeType == PatchApprovalScopeType.Global ||
+                (audit.ScopeType == PatchApprovalScopeType.Client && (!clientId.HasValue || audit.ClientId == clientId.Value)) ||
+                audit.SiteId == siteId.Value);
         }
 
         if (scopeType.HasValue)
@@ -745,7 +763,7 @@ public partial class ReportDatasetQueryService
         {
             Columns =
             [
-                "clientName", "siteName", "agentId", "hostname", "displayName",
+                "clientId", "clientName", "siteId", "siteName", "agentId", "hostname", "displayName",
                 "automaticLabels", "status", "maintenance", "maintenanceReason",
                 "osName", "osVersion", "agentVersion", "commitHash",
                 "lastIpAddress", "loggedUser", "lastSeenAt",

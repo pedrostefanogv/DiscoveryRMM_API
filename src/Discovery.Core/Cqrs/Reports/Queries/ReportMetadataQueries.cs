@@ -63,7 +63,7 @@ public sealed record ReportJoinCompatibilityDto(
 // --- Field autocomplete ---
 public sealed record GetReportFieldAutocompleteQuery(
     string? Term,
-    int DatasetType,
+    int? DatasetType,
     string? Alias = null) : IQuery<Result<ReportAutocompleteDto>>;
 
 public sealed record ReportAutocompleteItemDto(
@@ -82,7 +82,7 @@ public sealed record ReportAutocompleteDto(
     IReadOnlyList<ReportAutocompleteItemDto> Items);
 
 // --- Template history ---
-public sealed record GetReportTemplateHistoryQuery(Guid TemplateId, int Limit = 50)
+public sealed record GetReportTemplateHistoryQuery(Guid TemplateId, int Limit = 50, Guid? ClientId = null)
     : IQuery<Result<IReadOnlyList<ReportTemplateHistoryDto>>>;
 
 public sealed record ReportTemplateHistoryDto(

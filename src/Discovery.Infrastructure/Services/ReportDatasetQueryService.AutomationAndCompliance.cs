@@ -72,9 +72,10 @@ public partial class ReportDatasetQueryService
         };
     }
 
-    private async Task<ReportQueryResult> QueryConfigurationAuditAsync(JsonElement filters, CancellationToken cancellationToken)
+    private async Task<ReportQueryResult> QueryConfigurationAuditAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var from = GetDateTime(filters, "from");
         var to = GetDateTime(filters, "to");
         var changedBy = GetString(filters, "changedBy");
@@ -82,6 +83,39 @@ public partial class ReportDatasetQueryService
         var descending = GetSortDescending(filters, defaultValue: true);
 
         var query = _db.ConfigurationAudits.AsNoTracking().AsQueryable();
+
+        if (clientId.HasValue)
+        {
+            var clientConfigIds = _db.ClientConfigurations
+                .AsNoTracking()
+                .Where(c => c.ClientId == clientId.Value)
+                .Select(c => c.Id);
+
+            var siteConfigIds =
+                from sc in _db.SiteConfigurations.AsNoTracking()
+                join st in _db.Sites.AsNoTracking() on sc.SiteId equals st.Id
+                where st.ClientId == clientId.Value && (!siteId.HasValue || st.Id == siteId.Value)
+                select sc.Id;
+
+            var escalationIds = _db.TicketEscalationRules
+                .AsNoTracking()
+                .Where(r => r.ClientId == clientId.Value)
+                .Select(r => r.Id);
+
+            query = query.Where(x =>
+                (x.EntityType == ConfigurationEntityType.Client && !siteId.HasValue && clientConfigIds.Contains(x.EntityId)) ||
+                (x.EntityType == ConfigurationEntityType.Site && siteConfigIds.Contains(x.EntityId)) ||
+                (x.EntityType == ConfigurationEntityType.TicketEscalationRule && !siteId.HasValue && escalationIds.Contains(x.EntityId)));
+        }
+        else if (siteId.HasValue)
+        {
+            var siteConfigIds = _db.SiteConfigurations
+                .AsNoTracking()
+                .Where(sc => sc.SiteId == siteId.Value)
+                .Select(sc => sc.Id);
+
+            query = query.Where(x => x.EntityType == ConfigurationEntityType.Site && siteConfigIds.Contains(x.EntityId));
+        }
 
         if (from.HasValue)
             query = query.Where(x => x.ChangedAt >= from.Value);

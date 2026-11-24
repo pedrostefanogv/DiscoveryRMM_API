@@ -1,5 +1,6 @@
 using Discovery.Api.Services;
 using Discovery.Api.Services.BackgroundServices;
+using Discovery.Api.Services.Reports;
 using Discovery.Core.Interfaces;
 
 namespace Discovery.Api.DependencyInjection;
@@ -40,6 +41,10 @@ public static class BackgroundServicesCollectionExtensions
         // Limpeza periódica de uploads multipart diretos abandonados (loja custom):
         // sem isso as partes de um envio de vários GiB ficam no storage para sempre.
         services.AddHostedService<MultipartUploadJanitorService>();
+
+        // Fila assincrona para execucao imediata de relatorios (POST /reports/run).
+        services.AddSingleton<IReportExecutionQueue, ReportExecutionQueue>();
+        services.AddHostedService<ReportExecutionWorker>();
 
         // Sync ping dispatch (singleton + hosted service pattern, toggleable)
         if (config.SyncPingDispatchEnabled)

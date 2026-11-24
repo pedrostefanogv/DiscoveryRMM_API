@@ -14,5 +14,6 @@ public interface IReportScopeResolver
         ActionType action,
         Guid? requestedClientId,
         Guid? requestedSiteId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool allowMultipleClients = false);
 }

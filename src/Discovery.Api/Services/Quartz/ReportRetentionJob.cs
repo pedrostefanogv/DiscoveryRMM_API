@@ -47,13 +47,11 @@ public sealed class ReportRetentionJob : IJob
             return;
         }
 
-        // Busca UMA vez, com o menor corte, e so depois remove do banco.
-        // Antes as linhas eram apagadas primeiro e a segunda consulta (por
-        // fileCutoff) voltava vazia quando os dois prazos eram iguais — os
-        // arquivos nunca eram removidos do storage (objetos orfaos para sempre).
-        var candidateCutoff = fileCutoff <= dbCutoff ? fileCutoff : dbCutoff;
+        // Busca UMA vez com o MAIOR corte (data mais recente = menor prazo de retencao)
+        // para cobrir tanto arquivos expirados quanto linhas expiradas.
+        var candidateCutoff = fileCutoff >= dbCutoff ? fileCutoff : dbCutoff;
         var candidates = await reportRepo.GetExpiredAsync(candidateCutoff, 1000);
-        var storage = storageFactory.CreateObjectStorageService();
+        var storage = await storageFactory.CreateObjectStorageServiceAsync(ct);
 
         var filesDeleted = 0;
         var filesFailed = 0;
@@ -74,6 +72,8 @@ public sealed class ReportRetentionJob : IJob
                     await storage.DeleteAsync(execution.StorageObjectKey, ct);
                     filesDeleted++;
                     fileRemoved = true;
+                    if (!rowExpired)
+                        await reportRepo.ClearStorageFieldsAsync(execution.Id);
                 }
                 catch (Exception ex)
                 {
@@ -108,7 +108,7 @@ public sealed class ReportRetentionJob : IJob
 
         try
         {
-            var server = JsonSerializer.Deserialize<ReportingOptions>(settingsJson);
+            var server = JsonSerializer.Deserialize<ReportingOptions>(settingsJson, JsonSerializerOptions.Web);
             return server ?? fallback;
         }
         catch

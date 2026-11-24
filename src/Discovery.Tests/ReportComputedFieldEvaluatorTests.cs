@@ -37,4 +37,49 @@ public class ReportComputedFieldEvaluatorTests
         var rows = new List<IReadOnlyDictionary<string, object?>> { new Dictionary<string, object?> { ["a"] = 1 } };
         Assert.That(ReportComputedFieldEvaluator.Enrich(new ReportLayoutDefinition(), rows), Is.SameAs(rows));
     }
+
+    [Test]
+    public void Enrich_SupportsTernaryEquality_NotNull_Chained_Negative_And_DivByZero()
+    {
+        var rows = new List<IReadOnlyDictionary<string, object?>>
+        {
+            new Dictionary<string, object?>
+            {
+                ["status"] = "Online",
+                ["notes"] = "ok",
+                ["a"] = -10m,
+                ["b"] = 5m,
+                ["zero"] = 0m
+            },
+            new Dictionary<string, object?>
+            {
+                ["status"] = "Offline",
+                ["notes"] = null,
+                ["a"] = 10m,
+                ["b"] = 2m,
+                ["zero"] = 0m
+            }
+        };
+
+        var layout = Layout(
+            ("statusLabel", "status == 'Online' ? 'Ativo' : 'Inativo'"),
+            ("hasNotes", "notes != null ? 'Sim' : 'Nao'"),
+            ("sumNeg", "a + b"),
+            ("chained", "sumNeg * 2"),
+            ("divZero", "b / zero"));
+
+        var enriched = ReportComputedFieldEvaluator.Enrich(layout, rows);
+
+        Assert.That(enriched[0]["statusLabel"], Is.EqualTo("Ativo"));
+        Assert.That(enriched[0]["hasNotes"], Is.EqualTo("Sim"));
+        Assert.That(enriched[0]["sumNeg"], Is.EqualTo(-5m));
+        Assert.That(enriched[0]["chained"], Is.EqualTo(-10m));
+        Assert.That(enriched[0]["divZero"], Is.Null);
+
+        Assert.That(enriched[1]["statusLabel"], Is.EqualTo("Inativo"));
+        Assert.That(enriched[1]["hasNotes"], Is.EqualTo("Nao"));
+        Assert.That(enriched[1]["sumNeg"], Is.EqualTo(12m));
+        Assert.That(enriched[1]["chained"], Is.EqualTo(24m));
+        Assert.That(enriched[1]["divZero"], Is.Null);
+    }
 }

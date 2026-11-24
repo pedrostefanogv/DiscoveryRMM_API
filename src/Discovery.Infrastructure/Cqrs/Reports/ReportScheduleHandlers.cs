@@ -149,7 +149,7 @@ public sealed class UpdateReportScheduleCommandHandler(IReportScheduleRepository
         var scheduleChanged = cmd.Frequency.HasValue || cmd.DayOfWeek.HasValue || cmd.DayOfMonth.HasValue
             || cmd.HourUtc.HasValue || cmd.MinuteUtc.HasValue;
 
-        if (scheduleChanged)
+        if (scheduleChanged || (schedule.IsActive && schedule.NextTriggerAt is null))
         {
             schedule.CronExpression = ReportScheduleCalculator.BuildCron(frequency, dayOfWeek, dayOfMonth, hour, minute);
             schedule.NextTriggerAt = schedule.IsActive

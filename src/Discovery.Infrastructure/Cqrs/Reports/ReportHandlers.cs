@@ -181,6 +181,11 @@ public sealed class UpdateReportTemplateCommandHandler(
                 "isBuiltIn",
                 "Templates embutidos nao podem ser editados. Instale uma copia pela biblioteca."));
 
+        if (cmd.ClientId.HasValue && t.ClientId is null)
+            return Result<ReportTemplateDto>.Failure(Error.Validation(
+                "clientId",
+                "Templates globais so podem ser alterados por administradores globais."));
+
         if (cmd.LayoutJson is not null)
         {
             var layoutErrors = ReportLayoutValidator.ValidateJson(cmd.LayoutJson);
@@ -241,6 +246,11 @@ public sealed class DeleteReportTemplateCommandHandler(IReportTemplateRepository
                 "isBuiltIn",
                 "Templates embutidos nao podem ser excluidos. Instale uma copia pela biblioteca."));
 
+        if (cmd.ClientId.HasValue && template.ClientId is null)
+            return Result<VoidResult>.Failure(Error.Validation(
+                "clientId",
+                "Templates globais so podem ser excluidos por administradores globais."));
+
         var deleted = await repo.DeleteAsync(cmd.Id, cmd.ClientId);
         if (!deleted)
             return Result<VoidResult>.Failure(Error.NotFound($"ReportTemplate {cmd.Id} not found"));
@@ -249,7 +259,7 @@ public sealed class DeleteReportTemplateCommandHandler(IReportTemplateRepository
 }
 
 // new — run report now
-public sealed class RunReportNowCommandHandler(IReportService reportService, IReportTemplateRepository templateRepo, IReportExecutionRepository execRepo)
+public sealed class RunReportNowCommandHandler(IReportTemplateRepository templateRepo, IReportExecutionRepository execRepo)
     : IRequestHandler<RunReportNowCommand, Result<RunReportResultDto>>
 {
     /// <summary>
@@ -282,13 +292,26 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
                 "format",
                 $"Format {cmd.Format} is not supported. Supported formats: {string.Join(", ", Enum.GetNames<ReportFormat>())}."));
 
+        // Valida o layout na entrada para falhar rapido (400) antes de enfileirar.
+        var layoutErrors = ReportLayoutValidator.ValidateJson(template.LayoutJson);
+        if (layoutErrors.Count > 0)
+            return Result<RunReportResultDto>.Failure(Error.Validation("layoutJson", string.Join(" ", layoutErrors)));
+
+        // Grava o escopo efetivo (clientId/siteId) ja dentro de FiltersJson antes
+        // de enfileirar, garantindo que tanto o worker imediato quanto o Quartz
+        // executem com a mesma restricao de escopo.
+        var scopedFiltersJson = ReportService.ApplyQueryScope(
+            cmd.FiltersJson,
+            cmd.ClientId,
+            new ReportQueryScope(cmd.ClientId, cmd.SiteId));
+
         var execution = new ReportExecution
         {
             Id = Guid.NewGuid(),
             TemplateId = cmd.TemplateId,
             ClientId = cmd.ClientId,
             Format = resolvedFormat.Value,
-            FiltersJson = cmd.FiltersJson,
+            FiltersJson = scopedFiltersJson,
             Status = ReportExecutionStatus.Pending,
             CreatedAt = DateTime.UtcNow,
             ScheduleId = cmd.ScheduleId,
@@ -296,26 +319,6 @@ public sealed class RunReportNowCommandHandler(IReportService reportService, IRe
         };
 
         execution = await execRepo.CreateAsync(execution);
-        try
-        {
-            execution = await reportService.ProcessExecutionAsync(
-                execution.Id,
-                cmd.ClientId,
-                ct,
-                new ReportQueryScope(cmd.ClientId, cmd.SiteId));
-        }
-        catch (OperationCanceledException)
-        {
-            return Result<RunReportResultDto>.Failure(Error.Validation(
-                "report",
-                "A geracao do relatorio excedeu o tempo limite. Consulte a execucao para detalhes."));
-        }
-        catch (Exception ex)
-        {
-            // A execucao ja foi marcada como Failed e a notificacao publicada em
-            // ProcessExecutionAsync. Devolver a causa real evita um 500 opaco.
-            return Result<RunReportResultDto>.Failure(Error.Validation("report", ex.Message));
-        }
 
         var downloadPath = cmd.ClientId.HasValue && cmd.ClientId.Value != Guid.Empty
             ? $"/api/v1/reports/executions/{execution.Id}/download?clientId={cmd.ClientId}"
@@ -421,7 +424,7 @@ public sealed class PreviewReportCommandHandler(
     private async Task<ReportTemplate?> ResolveTemplateAsync(PreviewReportCommand cmd, CancellationToken ct)
     {
         if (cmd.TemplateId.HasValue)
-            return await templateRepo.GetByIdAsync(cmd.TemplateId.Value, null);
+            return await templateRepo.GetByIdAsync(cmd.TemplateId.Value, cmd.ClientId);
 
         if (cmd.Template is null)
             return null;

@@ -107,7 +107,7 @@ public sealed class GetReportFieldAutocompleteQueryHandler(IReportDatasetCatalog
 
         foreach (var item in catalog.GetAll())
         {
-            if (q.DatasetType > 0 && item.DatasetType != q.DatasetType)
+            if (q.DatasetType.HasValue && item.DatasetType != q.DatasetType.Value)
                 continue;
 
             foreach (var field in item.FieldMetadata)
@@ -156,6 +156,14 @@ public sealed class GetReportTemplateHistoryQueryHandler(IReportTemplateReposito
 {
     public async Task<Result<IReadOnlyList<ReportTemplateHistoryDto>>> Handle(GetReportTemplateHistoryQuery q, CancellationToken ct)
     {
+        if (q.ClientId.HasValue)
+        {
+            var template = await repo.GetByIdAsync(q.TemplateId, q.ClientId);
+            if (template is null)
+                return Result<IReadOnlyList<ReportTemplateHistoryDto>>.Failure(
+                    Error.NotFound($"ReportTemplate {q.TemplateId} not found"));
+        }
+
         var history = await repo.GetHistoryAsync(q.TemplateId, q.Limit);
         return Result<IReadOnlyList<ReportTemplateHistoryDto>>.Success(history.Select(Map).ToList());
     }

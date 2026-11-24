@@ -22,7 +22,7 @@ public partial class ReportDatasetQueryService
             join ag in _db.Agents.AsNoTracking() on al.AgentId equals ag.Id
             join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
             join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
-            where !clientId.HasValue || st.ClientId == clientId.Value
+            where ag.DeletedAt == null && (!clientId.HasValue || st.ClientId == clientId.Value)
             select new
             {
                 AgentId = ag.Id,
@@ -90,6 +90,7 @@ public partial class ReportDatasetQueryService
     private async Task<ReportQueryResult> QueryAutomaticLabelRulesAsync(Guid? clientId, JsonElement filters, CancellationToken cancellationToken)
     {
         var limit = GetLimit(filters);
+        var siteId = GetGuid(filters, "siteId");
         var labelName = GetString(filters, "labelName");
         var orderBy = GetEnum(filters, "orderBy", AutomaticLabelRulesOrderBy.RuleName);
         var descending = GetSortDescending(filters, defaultValue: false);
@@ -105,7 +106,8 @@ public partial class ReportDatasetQueryService
             // os clientes, mesmo em execucao com ClientId definido.
             join st in _db.Sites.AsNoTracking() on (ag != null ? ag.SiteId : Guid.Empty) equals st.Id into sitesJoin
             from st in sitesJoin.DefaultIfEmpty()
-            where !clientId.HasValue || (st != null && st.ClientId == clientId.Value)
+            where (!clientId.HasValue || (st != null && st.ClientId == clientId.Value))
+                  && (!siteId.HasValue || (st != null && st.Id == siteId.Value))
             group new { lr, ag } by new { lr.Id, lr.Name, lr.Label, lr.Description, lr.IsEnabled, lr.ExpressionJson, lr.CreatedAt } into g
             select new
             {
@@ -179,7 +181,8 @@ public partial class ReportDatasetQueryService
         if (clientId.HasValue) query = query.Where(x => x.ClientId == clientId.Value);
         if (siteId.HasValue) query = query.Where(x => x.SiteId == siteId.Value);
         if (agentId.HasValue) query = query.Where(x => x.AgentId == agentId.Value);
-        if (!string.IsNullOrWhiteSpace(severity)) query = query.Where(x => x.Severity.ToString() == severity);
+        if (!string.IsNullOrWhiteSpace(severity) && Enum.TryParse<MonitoringEventSeverity>(severity.Trim(), ignoreCase: true, out var parsedSeverity))
+            query = query.Where(x => x.Severity == parsedSeverity);
         if (from.HasValue) query = query.Where(x => x.OccurredAt >= from.Value);
         if (to.HasValue) query = query.Where(x => x.OccurredAt <= to.Value);
 

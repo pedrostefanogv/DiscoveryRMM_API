@@ -23,7 +23,7 @@ public partial class ReportDatasetQueryService
             join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
             join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
             join cat in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals cat.Id
-            where inv.IsPresent && (!clientId.HasValue || st.ClientId == clientId.Value)
+            where inv.IsPresent && ag.DeletedAt == null && (!clientId.HasValue || st.ClientId == clientId.Value)
             select new
             {
                 ClientName = cli.Name,
@@ -109,7 +109,7 @@ public partial class ReportDatasetQueryService
             join ag in _db.Agents.AsNoTracking() on hw.AgentId equals ag.Id
             join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
             join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
-            where !clientId.HasValue || st.ClientId == clientId.Value
+            where ag.DeletedAt == null && (!clientId.HasValue || st.ClientId == clientId.Value)
             select new
             {
                 SiteId = st.Id,
@@ -234,7 +234,7 @@ public partial class ReportDatasetQueryService
 
         return new ReportQueryResult
         {
-            Columns = ["clientName", "siteName", "agentId", "agentHostname", "automaticLabels", "osName", "osVersion", "osBuild", "osArchitecture", "processor", "processorCores", "processorThreads", "processorArchitecture", "processorFrequencyGhz", "processorSocket", "processorTdpWatts", "totalMemoryGB", "totalMemoryBytes", "gpuModel", "gpuMemoryGB", "gpuDriverVersion", "totalDisksCount", "motherboardManufacturer", "motherboardModel", "biosVersion", "biosManufacturer", "biosDate", "biosSerialNumber", "inventorySchemaVersion", "inventoryCollectedAt", "collectedAt"],
+            Columns = ["clientName", "siteName", "agentId", "agentHostname", "automaticLabels", "osName", "osVersion", "osBuild", "osArchitecture", "processor", "processorCores", "processorThreads", "processorArchitecture", "processorFrequencyGhz", "processorSocket", "processorTdpWatts", "totalMemoryGB", "totalMemoryBytes", "gpuModel", "gpuMemoryGB", "gpuDriverVersion", "totalDisksCount", "manufacturer", "model", "serialNumber", "motherboardManufacturer", "motherboardModel", "motherboardSerialNumber", "biosVersion", "biosManufacturer", "biosDate", "biosSerialNumber", "inventorySchemaVersion", "inventoryCollectedAt", "collectedAt"],
             Rows = rows
         };
     }
@@ -256,7 +256,7 @@ public partial class ReportDatasetQueryService
             join cat in _db.SoftwareCatalogs.AsNoTracking() on inv.SoftwareId equals cat.Id
             join hw in _db.AgentHardwareInfos.AsNoTracking() on ag.Id equals hw.AgentId into hardwareJoin
             from hw in hardwareJoin.DefaultIfEmpty()
-            where inv.IsPresent && (!clientId.HasValue || st.ClientId == clientId.Value)
+            where inv.IsPresent && ag.DeletedAt == null && (!clientId.HasValue || st.ClientId == clientId.Value)
             select new
             {
                 ClientName = cli.Name,
@@ -370,7 +370,7 @@ public partial class ReportDatasetQueryService
             join ag in _db.Agents.AsNoTracking() on hw.AgentId equals ag.Id
             join st in _db.Sites.AsNoTracking() on ag.SiteId equals st.Id
             join cli in _db.Clients.AsNoTracking() on st.ClientId equals cli.Id
-            where !clientId.HasValue || st.ClientId == clientId.Value
+            where ag.DeletedAt == null && (!clientId.HasValue || st.ClientId == clientId.Value)
             select new
             {
                 AgentId = ag.Id,
@@ -626,7 +626,11 @@ public partial class ReportDatasetQueryService
         var descending = GetSortDescending(filters, defaultValue: false);
 
         var query = _db.AppPackages.AsNoTracking().AsQueryable();
-        if (!string.IsNullOrWhiteSpace(source)) query = query.Where(x => x.Source != null && x.Source.ToLowerInvariant() == source.ToLowerInvariant());
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            var normalizedSource = source.Trim().ToLowerInvariant();
+            query = query.Where(x => x.Source != null && x.Source.ToLower() == normalizedSource);
+        }
         if (!string.IsNullOrWhiteSpace(category)) query = query.Where(x => x.Category == category);
 
         query = descending

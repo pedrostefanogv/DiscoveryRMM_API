@@ -140,7 +140,7 @@ public sealed record PreviewReportCommand(
     string? FileName = null,
     // Preenchidos pelo controller a partir do escopo resolvido (nunca confiar no body).
     Guid? ClientId = null,
-    Guid? SiteId = null) : ICommand<Result<ReportPreviewResultDto>>;
+    Guid? SiteId = null) : IQuery<Result<ReportPreviewResultDto>>;
 
 public sealed record ReportPreviewResultDto(
     string Mode,
