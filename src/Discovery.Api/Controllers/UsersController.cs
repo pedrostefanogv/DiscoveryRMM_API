@@ -226,6 +226,9 @@ public class UsersController(
         try
         {
             await _userAuth.UnlockAsync(id);
+            var actorId = HttpContext.Items["UserId"] is Guid uid ? uid : Guid.Empty;
+            var actorLogin = HttpContext.Items["Username"] as string;
+            await _audit.RecordAsync("identity.user_unlocked", actorId, actorLogin, "User", id, id);
             return NoContent();
         }
         catch (InvalidOperationException)
@@ -328,11 +331,12 @@ public class UsersController(
     public async Task<IActionResult> GetUserActivity(
         Guid id,
         [FromQuery] string? category = null,
-        [FromQuery] int limit = 100)
+        [FromQuery] int limit = 100,
+        [FromQuery] int? days = null)
     {
         if (await EnsureTargetInScopeAsync(id, ActionType.Edit) is { } denied) return denied;
 
-        var result = await mediator.Send(new GetUserActivityQuery(id, category, limit));
+        var result = await mediator.Send(new GetUserActivityQuery(id, category, limit, days));
         return result.ToActionResult();
     }
 

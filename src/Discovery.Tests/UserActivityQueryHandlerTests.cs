@@ -284,6 +284,43 @@ public class UserActivityQueryHandlerTests
     }
 
     [Test]
+    public async Task Handle_applies_Days_filter_and_describes_user_unlocked_event()
+    {
+        await using var db = CreateDb();
+        var user = new User { Id = Guid.NewGuid(), Login = "carlos", Email = "carlos@x.com", FullName = "Carlos" };
+        db.Users.Add(user);
+        db.AuthAuditLogs.AddRange(
+            new AuthAuditLog
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                EventType = "identity.user_unlocked",
+                ActorUserId = Guid.NewGuid(),
+                ActorLogin = "admin",
+                TargetType = "User",
+                TargetId = user.Id,
+                Success = true,
+                OccurredAt = DateTime.UtcNow.AddDays(-2),
+            },
+            new AuthAuditLog
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                EventType = "login_success",
+                Success = true,
+                OccurredAt = DateTime.UtcNow.AddDays(-45),
+            });
+        await db.SaveChangesAsync();
+
+        var handler = new GetUserActivityQueryHandler(db);
+        var result = await handler.Handle(new GetUserActivityQuery(user.Id, null, 100, Days: 7), CancellationToken.None);
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(result.Value!.Items.Count, Is.EqualTo(1));
+        Assert.That(result.Value.Items[0].Title, Is.EqualTo("Conta desbloqueada por administrador"));
+    }
+
+    [Test]
     public async Task SessionRepository_GetRecentByUserIdAsync_returns_active_and_revoked_ordered_desc()
     {
         await using var db = CreateDb();

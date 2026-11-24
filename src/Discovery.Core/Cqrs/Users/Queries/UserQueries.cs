@@ -48,7 +48,8 @@ public sealed record GetUserSecurityStateQuery(Guid Id) : IQuery<Result<UserSecu
 public sealed record GetUserActivityQuery(
     Guid UserId,
     string? Category = null,
-    int Limit = 100
+    int Limit = 100,
+    int? Days = null
 ) : IQuery<Result<UserActivityResponseDto>>;
 
 public sealed record UsersPageDto(

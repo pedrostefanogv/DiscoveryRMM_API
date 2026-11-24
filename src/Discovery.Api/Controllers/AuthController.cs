@@ -231,7 +231,7 @@ public class AuthController(IMediator mediator, IUserAuthService userAuth) : Con
         var cmd = new CompleteFirstAccessCommand(userId, dto);
         var result = await _mediator.Send(cmd);
         return result.Match<IActionResult>(
-            success: _ => Ok(new { message = "Primeiro acesso concluído. Finalize o cadastro do MFA para liberar o login completo." }),
+            success: _ => Ok(new { message = "Dados de primeiro acesso atualizados com sucesso." }),
             failure: errors => errors[0].Code switch
             {
                 "Unauthorized" => UnauthorizedAuth(errors[0].Message, "first_access_not_allowed"),

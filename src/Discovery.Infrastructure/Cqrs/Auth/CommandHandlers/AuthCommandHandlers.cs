@@ -86,7 +86,8 @@ public sealed class ChangeUserPasswordCommandHandler(
 }
 
 public sealed class LogoutCommandHandler(
-    IUserSessionRepository sessionRepo
+    IUserSessionRepository sessionRepo,
+    IAuthAuditLogRepository? auditLog = null
 ) : IRequestHandler<LogoutCommand, Result<VoidResult>>
 {
     public async Task<Result<VoidResult>> Handle(LogoutCommand cmd, CancellationToken ct)
@@ -114,6 +115,28 @@ public sealed class LogoutCommandHandler(
             return Result<VoidResult>.Success(VoidResult.Value); // Idempotent: já revogado ou inválido
 
         await sessionRepo.RevokeAsync(session.Id);
+
+        if (auditLog is not null)
+        {
+            try
+            {
+                await auditLog.AddAsync(new Discovery.Core.Entities.Security.AuthAuditLog
+                {
+                    Id = Discovery.Core.Helpers.IdGenerator.NewId(),
+                    UserId = session.UserId,
+                    EventType = "logout",
+                    Success = true,
+                    IpAddress = session.IpAddress,
+                    UserAgent = session.UserAgent,
+                    OccurredAt = DateTime.UtcNow,
+                });
+            }
+            catch
+            {
+                // Auditoria de logout não deve falhar o encerramento da sessão.
+            }
+        }
+
         return Result<VoidResult>.Success(VoidResult.Value);
     }
 }

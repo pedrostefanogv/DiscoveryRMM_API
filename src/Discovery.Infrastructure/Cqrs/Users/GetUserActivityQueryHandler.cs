@@ -39,14 +39,21 @@ public sealed class GetUserActivityQueryHandler(
         var includeAll = string.IsNullOrEmpty(category) || category == "all";
         var limit = Math.Clamp(q.Limit, 1, 200);
         var perSourceLimit = includeAll ? Math.Min(limit, 50) : limit;
+        DateTime? sinceUtc = q.Days is > 0
+            ? DateTime.UtcNow.AddDays(-Math.Clamp(q.Days.Value, 1, 365))
+            : null;
 
         var items = new List<UserActivityItemDto>();
 
         if (includeAll || category == "auth")
         {
-            var authLogs = await db.AuthAuditLogs
+            var authQuery = db.AuthAuditLogs
                 .AsNoTracking()
-                .Where(l => l.UserId == user.Id && !l.EventType.StartsWith("identity."))
+                .Where(l => l.UserId == user.Id && !l.EventType.StartsWith("identity."));
+            if (sinceUtc.HasValue)
+                authQuery = authQuery.Where(l => l.OccurredAt >= sinceUtc.Value);
+
+            var authLogs = await authQuery
                 .OrderByDescending(l => l.OccurredAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -76,12 +83,16 @@ public sealed class GetUserActivityQueryHandler(
 
         if (includeAll || category == "identity")
         {
-            var identityLogs = await db.AuthAuditLogs
+            var identityQuery = db.AuthAuditLogs
                 .AsNoTracking()
                 .Where(l => l.EventType.StartsWith("identity.")
                             && (l.ActorUserId == user.Id
                                 || l.UserId == user.Id
-                                || (l.TargetType == "User" && l.TargetId == user.Id)))
+                                || (l.TargetType == "User" && l.TargetId == user.Id)));
+            if (sinceUtc.HasValue)
+                identityQuery = identityQuery.Where(l => l.OccurredAt >= sinceUtc.Value);
+
+            var identityLogs = await identityQuery
                 .OrderByDescending(l => l.OccurredAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -118,7 +129,7 @@ public sealed class GetUserActivityQueryHandler(
                 from rs in db.RemoteSessions.AsNoTracking()
                 join a in db.Agents.AsNoTracking() on rs.AgentId equals a.Id into agentGroup
                 from agent in agentGroup.DefaultIfEmpty()
-                where rs.UserId == user.Id
+                where rs.UserId == user.Id && (!sinceUtc.HasValue || rs.StartedAt >= sinceUtc.Value)
                 orderby rs.StartedAt descending
                 select new
                 {
@@ -172,7 +183,7 @@ public sealed class GetUserActivityQueryHandler(
                 from t in db.TicketActivityLogs.AsNoTracking()
                 join ticket in db.Tickets.AsNoTracking() on t.TicketId equals ticket.Id into ticketGroup
                 from tk in ticketGroup.DefaultIfEmpty()
-                where t.ChangedByUserId == user.Id
+                where t.ChangedByUserId == user.Id && (!sinceUtc.HasValue || t.CreatedAt >= sinceUtc.Value)
                 orderby t.CreatedAt descending
                 select new
                 {
@@ -218,9 +229,13 @@ public sealed class GetUserActivityQueryHandler(
 
         if (includeAll || category == "configuration")
         {
-            var configRows = await db.ConfigurationAudits
+            var configQuery = db.ConfigurationAudits
                 .AsNoTracking()
-                .Where(c => c.ChangedBy != null && actorKeys.Contains(c.ChangedBy.ToLower()))
+                .Where(c => c.ChangedBy != null && actorKeys.Contains(c.ChangedBy.ToLower()));
+            if (sinceUtc.HasValue)
+                configQuery = configQuery.Where(c => c.ChangedAt >= sinceUtc.Value);
+
+            var configRows = await configQuery
                 .OrderByDescending(c => c.ChangedAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -250,9 +265,13 @@ public sealed class GetUserActivityQueryHandler(
 
         if (includeAll || category == "automation")
         {
-            var scriptRows = await db.AutomationScriptAudits
+            var scriptQuery = db.AutomationScriptAudits
                 .AsNoTracking()
-                .Where(a => a.ChangedBy != null && actorKeys.Contains(a.ChangedBy.ToLower()))
+                .Where(a => a.ChangedBy != null && actorKeys.Contains(a.ChangedBy.ToLower()));
+            if (sinceUtc.HasValue)
+                scriptQuery = scriptQuery.Where(a => a.ChangedAt >= sinceUtc.Value);
+
+            var scriptRows = await scriptQuery
                 .OrderByDescending(a => a.ChangedAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -278,9 +297,13 @@ public sealed class GetUserActivityQueryHandler(
                 });
             }
 
-            var taskRows = await db.AutomationTaskAudits
+            var taskQuery = db.AutomationTaskAudits
                 .AsNoTracking()
-                .Where(a => a.ChangedBy != null && actorKeys.Contains(a.ChangedBy.ToLower()))
+                .Where(a => a.ChangedBy != null && actorKeys.Contains(a.ChangedBy.ToLower()));
+            if (sinceUtc.HasValue)
+                taskQuery = taskQuery.Where(a => a.ChangedAt >= sinceUtc.Value);
+
+            var taskRows = await taskQuery
                 .OrderByDescending(a => a.ChangedAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -308,9 +331,13 @@ public sealed class GetUserActivityQueryHandler(
 
         if (includeAll || category == "approvals")
         {
-            var patchRows = await db.PatchApprovalAudits
+            var patchQuery = db.PatchApprovalAudits
                 .AsNoTracking()
-                .Where(p => p.ChangedBy != null && actorKeys.Contains(p.ChangedBy.ToLower()))
+                .Where(p => p.ChangedBy != null && actorKeys.Contains(p.ChangedBy.ToLower()));
+            if (sinceUtc.HasValue)
+                patchQuery = patchQuery.Where(p => p.ChangedAt >= sinceUtc.Value);
+
+            var patchRows = await patchQuery
                 .OrderByDescending(p => p.ChangedAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -339,9 +366,13 @@ public sealed class GetUserActivityQueryHandler(
                 });
             }
 
-            var appRows = await db.AppApprovalAudits
+            var appQuery = db.AppApprovalAudits
                 .AsNoTracking()
-                .Where(a => a.ChangedBy != null && actorKeys.Contains(a.ChangedBy.ToLower()))
+                .Where(a => a.ChangedBy != null && actorKeys.Contains(a.ChangedBy.ToLower()));
+            if (sinceUtc.HasValue)
+                appQuery = appQuery.Where(a => a.ChangedAt >= sinceUtc.Value);
+
+            var appRows = await appQuery
                 .OrderByDescending(a => a.ChangedAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -373,9 +404,13 @@ public sealed class GetUserActivityQueryHandler(
 
         if (includeAll || category == "reports")
         {
-            var reportRows = await db.ReportExecutions
+            var reportQuery = db.ReportExecutions
                 .AsNoTracking()
-                .Where(r => r.CreatedBy != null && actorKeys.Contains(r.CreatedBy.ToLower()))
+                .Where(r => r.CreatedBy != null && actorKeys.Contains(r.CreatedBy.ToLower()));
+            if (sinceUtc.HasValue)
+                reportQuery = reportQuery.Where(r => r.CreatedAt >= sinceUtc.Value);
+
+            var reportRows = await reportQuery
                 .OrderByDescending(r => r.CreatedAt)
                 .Take(perSourceLimit)
                 .ToListAsync(ct);
@@ -445,6 +480,7 @@ public sealed class GetUserActivityQueryHandler(
         "identity.user_force_password_reset" => "Troca de senha forçada no próximo login",
         "identity.user_mfa_revoked" => "Todas as chaves MFA revogadas",
         "identity.user_mfa_key_revoked" => "Chave MFA removida",
+        "identity.user_unlocked" => "Conta desbloqueada por administrador",
         "identity.user_session_revoked" => "Sessão encerrada por administrador",
         "identity.user_sessions_revoked_all" => "Todas as sessões encerradas por administrador",
         "identity.self_password_changed" => "Senha alterada pelo próprio usuário",

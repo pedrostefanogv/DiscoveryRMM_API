@@ -126,19 +126,8 @@ public class UserAuthService : IUserAuthService
         await _users.SetLastLoginAsync(user.Id, DateTime.UtcNow);
         await LogAuthEventAsync(user.Id, "login_success", true, null, ipAddress, userAgent);
 
-        var roleMfaRequirement = await GetEffectiveMfaRequirementAsync(user.Id);
-        var mfaKeys = (await _mfaKeys.GetActiveByUserIdAsync(user.Id)).ToList();
-
-        var roleRequirementConfigured = roleMfaRequirement switch
-        {
-            RoleMfaRequirement.Totp => HasKeyType(mfaKeys, MfaKeyType.Totp),
-            RoleMfaRequirement.Fido2 => HasKeyType(mfaKeys, MfaKeyType.Fido2),
-            _ => true
-        };
-
-        var effectiveMfaRequired = user.MfaRequired || roleMfaRequirement != RoleMfaRequirement.None;
-        var effectiveMfaConfigured = effectiveMfaRequired &&
-            (roleMfaRequirement == RoleMfaRequirement.None ? user.MfaConfigured : roleRequirementConfigured);
+        var (roleMfaRequirement, effectiveMfaRequired, effectiveMfaConfigured) =
+            await ResolveEffectiveMfaStateAsync(user);
 
         var firstAccessRequired = user.MustChangePassword || user.MustChangeProfile;
 
@@ -316,17 +305,40 @@ public class UserAuthService : IUserAuthService
         var user = await _users.GetByIdAsync(userId)
             ?? throw new UnauthorizedAccessException("Usuário não encontrado.");
 
+        var (_, effectiveMfaRequired, effectiveMfaConfigured) =
+            await ResolveEffectiveMfaStateAsync(user);
+
         return new FirstAccessStatusDto
         {
             FirstAccessRequired = user.MustChangePassword || user.MustChangeProfile,
             MustChangePassword = user.MustChangePassword,
             MustChangeProfile = user.MustChangeProfile,
-            MfaRequired = user.MfaRequired,
-            MfaConfigured = user.MfaConfigured,
+            MfaRequired = effectiveMfaRequired,
+            MfaConfigured = effectiveMfaConfigured,
             Login = user.Login,
             Email = user.Email,
             FullName = user.FullName
         };
+    }
+
+    private async Task<(RoleMfaRequirement RoleRequirement, bool EffectiveMfaRequired, bool EffectiveMfaConfigured)>
+        ResolveEffectiveMfaStateAsync(User user)
+    {
+        var roleMfaRequirement = await GetEffectiveMfaRequirementAsync(user.Id);
+        var mfaKeys = (await _mfaKeys.GetActiveByUserIdAsync(user.Id)).ToList();
+
+        var roleRequirementConfigured = roleMfaRequirement switch
+        {
+            RoleMfaRequirement.Totp => HasKeyType(mfaKeys, MfaKeyType.Totp),
+            RoleMfaRequirement.Fido2 => HasKeyType(mfaKeys, MfaKeyType.Fido2),
+            _ => true
+        };
+
+        var effectiveMfaRequired = user.MfaRequired || roleMfaRequirement != RoleMfaRequirement.None;
+        var effectiveMfaConfigured = effectiveMfaRequired &&
+            (roleMfaRequirement == RoleMfaRequirement.None ? user.MfaConfigured : roleRequirementConfigured);
+
+        return (roleMfaRequirement, effectiveMfaRequired, effectiveMfaConfigured);
     }
 
     public async Task<TokenPairDto> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)
@@ -412,7 +424,12 @@ public class UserAuthService : IUserAuthService
 
     public async Task LogoutAsync(Guid sessionId)
     {
+        var session = await _sessions.GetByIdAsync(sessionId);
         await _sessions.RevokeAsync(sessionId);
+        if (session is not null)
+        {
+            await LogAuthEventAsync(session.UserId, "logout", true, null, session.IpAddress, session.UserAgent);
+        }
     }
 
     public async Task<StepUpTokenDto> CreateStepUpTokenAsync(Guid userId, string password)
