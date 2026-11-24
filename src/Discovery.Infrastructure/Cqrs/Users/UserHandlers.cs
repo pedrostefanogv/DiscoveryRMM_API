@@ -80,10 +80,14 @@ public sealed class CreateUserCommandHandler(
 {
     public async Task<Result<UserDto>> Handle(CreateUserCommand cmd, CancellationToken ct)
     {
-        if (await repo.ExistsByLoginAsync(cmd.Login))
-            return Result<UserDto>.Failure(Error.Conflict($"Login '{cmd.Login}' already exists"));
-        if (await repo.ExistsByEmailAsync(cmd.Email))
-            return Result<UserDto>.Failure(Error.Conflict($"Email '{cmd.Email}' already exists"));
+        var login = cmd.Login.Trim();
+        var email = cmd.Email.Trim();
+        var fullName = cmd.FullName.Trim();
+
+        if (await repo.ExistsByLoginAsync(login))
+            return Result<UserDto>.Failure(Error.Conflict($"Login '{login}' already exists"));
+        if (await repo.ExistsByEmailAsync(email))
+            return Result<UserDto>.Failure(Error.Conflict($"Email '{email}' already exists"));
 
         // POLÍTICA DE SENHA ANTES DE PERSISTIR (bug de criação não-transacional):
         // antes o usuário era criado e SÓ DEPOIS a senha era aplicada. Se a política
@@ -161,9 +165,9 @@ public sealed class CreateUserCommandHandler(
         var user = new User
         {
             Id = Guid.NewGuid(),
-            Login = cmd.Login,
-            Email = cmd.Email,
-            FullName = cmd.FullName,
+            Login = login,
+            Email = email,
+            FullName = fullName,
             MustChangePassword = false,
             IsActive = true,
             // Antes o valor era fixo em true e o campo enviado pelo console web era
@@ -173,33 +177,46 @@ public sealed class CreateUserCommandHandler(
             UpdatedAt = DateTime.UtcNow
         };
 
-        // TRANSAÇÃO: usuário + credencial + vínculo entram juntos ou não entram.
-        // Sem isso, uma falha no vínculo deixava o usuário criado "sem acesso" e o
-        // chamador recebia erro — estado que o operador não conseguia reconciliar.
+        async Task<Result<UserDto>> PersistAsync()
+        {
+            var created = await repo.CreateAsync(user);
+
+            // Apply password via password management service
+            await passwordManagement.ResetPasswordAsync(created.Id, cmd.Password, "system", ct);
+
+            if (cmd.GroupId.HasValue)
+            {
+                await groups.AddMemberAsync(cmd.GroupId.Value, created.Id);
+                // As permissões efetivas mudaram — invalida o cache do usuário novo.
+                await permissions.InvalidateUserCacheAsync(created.Id);
+            }
+
+            return Result<UserDto>.Success(UserMapping.ToDto(created));
+        }
+
+        // O TransactionBehavior do pipeline MediatR já abre execution strategy e
+        // transação para este ICommand; abrir outra na mesma conexão lança
+        // InvalidOperationException ("The connection is already in a transaction...").
+        if (db.Database.CurrentTransaction is not null || !db.Database.IsRelational())
+        {
+            return await PersistAsync();
+        }
+
+        // Chamada direta ao handler fora do pipeline MediatR em banco relacional:
+        // usuário + credencial + vínculo entram juntos ou não entram.
         var strategy = db.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
             await using var transaction = await db.Database.BeginTransactionAsync(ct);
             try
             {
-                var created = await repo.CreateAsync(user);
-
-                // Apply password via password management service
-                await passwordManagement.ResetPasswordAsync(created.Id, cmd.Password, "system", ct);
-
-                if (cmd.GroupId.HasValue)
-                {
-                    await groups.AddMemberAsync(cmd.GroupId.Value, created.Id);
-                    // As permissões efetivas mudaram — invalida o cache do usuário novo.
-                    await permissions.InvalidateUserCacheAsync(created.Id);
-                }
-
+                var result = await PersistAsync();
                 await transaction.CommitAsync(ct);
-                return Result<UserDto>.Success(UserMapping.ToDto(created));
+                return result;
             }
             catch
             {
-                await transaction.RollbackAsync(ct);
+                await transaction.RollbackAsync(CancellationToken.None);
                 throw;
             }
         });

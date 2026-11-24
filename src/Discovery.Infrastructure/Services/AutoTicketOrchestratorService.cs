@@ -9,6 +9,7 @@ using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -252,7 +253,9 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         AutoTicketSignalVerdict verdict,
         CancellationToken ct)
     {
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        await using var transaction = _db.Database.IsRelational() && _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
 
         // Dedup via correlation lock. A janela vem da política quando ela define
         // explicitamente (herdada do global, sobrescrita por cliente/site);
@@ -268,7 +271,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         {
             var ex = await CreateExecutionAsync(monitoringEvent, decision.Rule, AutoTicketDecision.Deduped,
                 "Existing correlation lock found inside dedup window.", dedupResult.ExistingTicketId, dedupKey, true);
-            await transaction.CommitAsync(ct);
+            if (transaction is not null)
+                await transaction.CommitAsync(ct);
             return ex;
         }
 
@@ -278,7 +282,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         var (reused, reuseResult) = await TryReuseOpenTicketAsync(monitoringEvent, decision, ticketRequest, dedupKey, ct);
         if (reused)
         {
-            await transaction.CommitAsync(ct);
+            if (transaction is not null)
+                await transaction.CommitAsync(ct);
             return reuseResult!;
         }
 
@@ -287,7 +292,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             monitoringEvent, decision, ticketRequest, dedupKey, policy, ct);
         if (reopened)
         {
-            await transaction.CommitAsync(ct);
+            if (transaction is not null)
+                await transaction.CommitAsync(ct);
             return reopenResult!;
         }
 
@@ -295,7 +301,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
         var (rateLimited, rateLimitResult) = await CheckRateLimitAsync(monitoringEvent, decision, dedupKey, policy, ct);
         if (rateLimited)
         {
-            await transaction.CommitAsync(ct);
+            if (transaction is not null)
+                await transaction.CommitAsync(ct);
             return rateLimitResult!;
         }
 
@@ -369,7 +376,8 @@ public class AutoTicketOrchestratorService : IAutoTicketOrchestratorService
             await PersistSuggestionsAsync(monitoringEvent, execution, ticket.Id, policy, enrichment, applied, ct);
         }
 
-        await transaction.CommitAsync(ct);
+        if (transaction is not null)
+            await transaction.CommitAsync(ct);
 
         _logger.LogInformation(
             "AutoTicket created ticket {TicketId} for monitoring event {MonitoringEventId} using rule {RuleId} and dedupKey {DedupKey}.",

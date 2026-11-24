@@ -1,15 +1,24 @@
 using Discovery.Core.Cqrs.Auth.Commands;
 using Discovery.Core.Cqrs.Users.Commands;
+using Discovery.Core.Entities;
 using Discovery.Core.Entities.Identity;
 using Discovery.Core.Entities.Security;
+using Discovery.Core.Enums.Identity;
+using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Auth;
+using Discovery.Core.Interfaces.Identity;
 using Discovery.Core.Interfaces.Security;
 using Discovery.Infrastructure.Cqrs.Auth.CommandHandlers;
+using Discovery.Infrastructure.Cqrs.Behaviors;
 using Discovery.Infrastructure.Cqrs.Users;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
+using MediatR;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 
@@ -158,6 +167,113 @@ public class IdentityUserHandlersTests
         Assert.That(sessions.RevokeAllCalls, Is.EqualTo(0));
     }
 
+    [Test]
+    public async Task CreateUser_ThroughMediatRWithTransactionBehavior_SucceedsAndCommitsWithoutNestedTransactionError()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        var groupId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        services.AddScoped<DiscoveryDbContext>(_ =>
+        {
+            var options = new DbContextOptionsBuilder<DiscoveryDbContext>()
+                .UseSqlite(connection)
+                .Options;
+            var db = new IdentityTestDbContext(options);
+            db.Database.EnsureCreated();
+            return db;
+        });
+        services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IUserGroupRepository, UserGroupRepository>();
+        services.AddScoped<IPasswordService, UserPasswordService>();
+        services.AddScoped<IUserPasswordManagementService, UserPasswordManagementService>();
+        services.AddScoped<IPermissionService, StubPermissionService>();
+        services.AddScoped<IScopeContext, GlobalScopeContextStub>();
+        services.AddScoped<ISiteRepository, EmptySiteRepositoryStub>();
+        services.AddMediatR(cfg =>
+        {
+            cfg.RegisterServicesFromAssemblyContaining<CreateUserCommandHandler>();
+            cfg.AddOpenBehavior(typeof(TransactionBehavior<,>));
+        });
+
+        await using var sp = services.BuildServiceProvider();
+        await using (var seedScope = sp.CreateAsyncScope())
+        {
+            var seedDb = seedScope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
+            seedDb.UserGroups.Add(new UserGroup
+            {
+                Id = groupId,
+                Name = "Administradores",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+            await seedDb.SaveChangesAsync();
+        }
+
+        await using var scope = sp.CreateAsyncScope();
+        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+        var db = scope.ServiceProvider.GetRequiredService<DiscoveryDbContext>();
+
+        var result = await mediator.Send(new CreateUserCommand(
+            "  sektorcloud  ",
+            "  daniel@empresa.com  ",
+            "  Daniel  ",
+            "SenhaForte#2026",
+            MfaRequired: true,
+            GroupId: groupId,
+            RequestedByUserId: actorId));
+
+        Assert.That(result.IsSuccess, Is.True);
+        Assert.That(db.Database.CurrentTransaction, Is.Null);
+
+        db.ChangeTracker.Clear();
+        var created = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Login == "sektorcloud");
+        Assert.That(created, Is.Not.Null);
+        Assert.That(created!.Email, Is.EqualTo("daniel@empresa.com"));
+        Assert.That(created.FullName, Is.EqualTo("Daniel"));
+        Assert.That(created.MfaRequired, Is.True);
+        Assert.That(
+            scope.ServiceProvider.GetRequiredService<IPasswordService>()
+                .VerifyPassword("SenhaForte#2026", created.PasswordSalt, created.PasswordHash),
+            Is.True);
+
+        var membership = await db.UserGroupMemberships.AsNoTracking()
+            .SingleOrDefaultAsync(m => m.GroupId == groupId && m.UserId == created.Id);
+        Assert.That(membership, Is.Not.Null);
+    }
+
+    private sealed class GlobalScopeContextStub : IScopeContext
+    {
+        public Guid UserId { get; private set; }
+        public void SetUserId(Guid userId) => UserId = userId;
+        public Task<EffectiveAccess> GetAccessAsync(ResourceType resource, ActionType action)
+            => Task.FromResult(new EffectiveAccess(true, [], [], []));
+    }
+
+    private sealed class StubPermissionService : IPermissionService
+    {
+        public Task<bool> HasPermissionAsync(Guid userId, ResourceType resource, ActionType action, Guid? scopeId = null) => Task.FromResult(true);
+        public Task<EffectiveAccess> GetEffectiveAccessAsync(Guid userId, ResourceType resource, ActionType action) => Task.FromResult(new EffectiveAccess(true, [], [], []));
+        public Task<IReadOnlyList<UserPermissionSummary>> GetAllPermissionsAsync(Guid userId) => Task.FromResult<IReadOnlyList<UserPermissionSummary>>([]);
+        public Task InvalidateUserCacheAsync(Guid userId) => Task.CompletedTask;
+        public Task InvalidateAllCacheAsync() => Task.CompletedTask;
+    }
+
+    private sealed class EmptySiteRepositoryStub : ISiteRepository
+    {
+        public Task<Site?> GetByIdAsync(Guid id) => Task.FromResult<Site?>(null);
+        public Task<IEnumerable<Site>> GetByClientIdAsync(Guid clientId) => Task.FromResult<IEnumerable<Site>>([]);
+        public Task<Site> CreateAsync(Site site) => Task.FromResult(site);
+        public Task<Site> UpdateAsync(Site site) => Task.FromResult(site);
+        public Task<bool> DeleteAsync(Guid id) => Task.FromResult(false);
+    }
+
     /// <summary>Fake mínimo: só a revogação interessa para este teste.</summary>
     private sealed class RecordingSessionRepository : IUserSessionRepository
     {
@@ -189,7 +305,10 @@ public class IdentityUserHandlersTests
             foreach (var entityType in typeof(User).Assembly.GetTypes()
                          .Where(type => type.IsClass && type.Namespace is not null
                              && type.Namespace.StartsWith("Discovery.Core.Entities", StringComparison.Ordinal))
-                         .Where(type => type != typeof(User) && type != typeof(UserSession)))
+                         .Where(type => type != typeof(User)
+                             && type != typeof(UserSession)
+                             && type != typeof(UserGroup)
+                             && type != typeof(UserGroupMembership)))
             {
                 modelBuilder.Ignore(entityType);
             }
@@ -204,6 +323,17 @@ public class IdentityUserHandlersTests
             {
                 entity.HasKey(s => s.Id);
                 entity.Property(s => s.Id).ValueGeneratedNever();
+            });
+
+            modelBuilder.Entity<UserGroup>(entity =>
+            {
+                entity.HasKey(g => g.Id);
+                entity.Property(g => g.Id).ValueGeneratedNever();
+            });
+
+            modelBuilder.Entity<UserGroupMembership>(entity =>
+            {
+                entity.HasKey(m => new { m.GroupId, m.UserId });
             });
         }
     }
