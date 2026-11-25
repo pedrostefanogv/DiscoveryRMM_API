@@ -18,6 +18,7 @@ public class AgentSensorsController(
     ISensorOperationService operationService) : ControllerBase
 {
     public sealed record SensorRunRequest(IReadOnlyList<Guid>? SensorIds = null, bool ForceSync = false);
+    public sealed record SensorMuteRequest(int? DurationMinutes = null, string? TargetKey = null);
 
     private static async Task<IActionResult?> EnsureAgentAccessAsync(
         Guid agentId,
@@ -149,6 +150,29 @@ public class AgentSensorsController(
 
         var count = await operationService.ResetAsync(agentId, sensorId, cancellationToken);
         return Ok(new { reset = count });
+    }
+
+    [HttpPost("{sensorId:guid}/mute")]
+    [RequirePermission(ResourceType.Sensors, ActionType.Execute, ScopeSource.AccessList)]
+    public async Task<IActionResult> Mute(
+        Guid agentId,
+        Guid sensorId,
+        [FromBody] SensorMuteRequest? request,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] IAgentRepository agentRepo,
+        [FromServices] ISiteRepository siteRepo,
+        CancellationToken cancellationToken)
+    {
+        if (await EnsureAgentAccessAsync(agentId, ActionType.Execute, scopeContext, agentRepo, siteRepo) is { } denied)
+            return denied;
+
+        var mutedUntil = await operationService.MuteAsync(
+            agentId,
+            sensorId,
+            request?.DurationMinutes,
+            request?.TargetKey,
+            cancellationToken);
+        return Ok(new { mutedUntil });
     }
 
     [HttpPost("sync-now")]

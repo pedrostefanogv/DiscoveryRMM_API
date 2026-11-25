@@ -214,6 +214,7 @@ public class SensorItemDto
     public DateTime? LastRunAt { get; set; }
     public DateTime? LastStatusChangedAt { get; set; }
     public DateTime? LastAlertedAt { get; set; }
+    public DateTime? MutedUntil { get; init; }
     public int IntervalSeconds { get; set; }
     public int TimeoutSeconds { get; set; }
     public int FailsBeforeAlert { get; set; }

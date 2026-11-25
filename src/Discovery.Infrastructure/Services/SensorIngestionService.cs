@@ -402,6 +402,7 @@ public sealed class SensorIngestionService(
         if (severity.Value < definition.MinSeverityToAlert) return null;
         if (state.ConsecutiveFailures < definition.FailsBeforeAlert && !isUnknown) return null;
         if (agent.MaintenanceEnabled) return null;
+        if (state.MutedUntil is not null && state.MutedUntil.Value > occurredAt) return null;
 
         var alreadyAlerted = state.LastAlertedAt is not null;
         var escalated = state.LastAlertSeverity is not null && severity.Value > state.LastAlertSeverity.Value;

@@ -125,6 +125,7 @@ public sealed class SensorReadService(
                     LastRunAt = state.LastRunAt,
                     LastStatusChangedAt = state.LastStatusChangedAt,
                     LastAlertedAt = state.LastAlertedAt,
+                    MutedUntil = state.MutedUntil,
                     IntervalSeconds = interval,
                     TimeoutSeconds = definition.TimeoutSeconds,
                     FailsBeforeAlert = definition.FailsBeforeAlert,

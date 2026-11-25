@@ -34,6 +34,8 @@ public interface ISensorDefinitionService
 
     Task<bool> DeleteAsync(Guid id, string? actor, CancellationToken cancellationToken = default);
 
+    Task<bool> SetPinnedAsync(Guid id, bool isPinned, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Sensores aplicáveis ao agente (Global + Cliente + Site + Agente, filtro por
     /// tags, sem scripts inativos). Ponto único usado pelo sync e pela leitura.

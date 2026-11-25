@@ -38,6 +38,7 @@ public class AgentSensorState
     public DateTime? LastStatusChangedAt { get; set; }
     public DateTime? LastAlertedAt { get; set; }
     public SensorSeverity? LastAlertSeverity { get; set; }
+    public DateTime? MutedUntil { get; set; }
 
     /// <summary>Últimas amostras por canal (JSON objeto: canal -> number[]).</summary>
     public string? SparklineJson { get; set; }

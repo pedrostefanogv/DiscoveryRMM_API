@@ -237,6 +237,30 @@ public class SensorsController(
         return deleted ? NoContent() : NotFound(new { error = "Sensor não encontrado." });
     }
 
+    public sealed record SensorPinRequest(bool IsPinned);
+
+    [HttpPost("{id:guid}/pin")]
+    [RequirePermission(ResourceType.Sensors, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> SetPinned(
+        Guid id,
+        [FromBody] SensorPinRequest request,
+        [FromServices] IScopeContext scopeContext,
+        [FromServices] ISiteRepository siteRepo,
+        [FromServices] IAgentRepository agentRepo,
+        CancellationToken cancellationToken)
+    {
+        var existing = await definitions.GetAsync(id, cancellationToken);
+        if (existing is null)
+            return NotFound(new { error = "Sensor não encontrado." });
+
+        var access = await scopeContext.GetAccessAsync(ResourceType.Sensors, ActionType.Edit);
+        if (await EnsureSensorScopeAccessAsync(existing.ScopeType, existing.ClientId, existing.SiteId, existing.AgentId, access, siteRepo, agentRepo, allowGlobalRead: false) is { } denied)
+            return denied;
+
+        var updated = await definitions.SetPinnedAsync(id, request.IsPinned, cancellationToken);
+        return updated ? Ok(new { id, isPinned = request.IsPinned }) : NotFound(new { error = "Sensor não encontrado." });
+    }
+
     private async Task<IActionResult?> EnsureSensorScopeAccessAsync(
         AppApprovalScopeType scopeType,
         Guid? clientId,

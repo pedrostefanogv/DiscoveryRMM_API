@@ -102,21 +102,24 @@ public sealed class SensorSeriesService(
         if (channels is { Count: > 0 })
             channelKeys = channels.Where(c => channelKeys.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
 
-        var channelsPayload = channelKeys.Select(key => new SensorSeriesChannelDto
+        var catalogChannels = SensorChannelCatalog.Resolve(definition);
+        var channelsPayload = channelKeys.Select(key =>
         {
-            Key = key,
-            Label = declaredKeys.Contains(key, StringComparer.OrdinalIgnoreCase)
-                ? SensorJson.ParseChannels(definition.ChannelsJson).First(c => c.Key.Equals(key, StringComparison.OrdinalIgnoreCase)).Label
-                : key,
-            Unit = ResolveUnit(definition, key),
-            Points = buckets.Select(b => new SensorSeriesPointDto
+            var meta = catalogChannels.FirstOrDefault(c => c.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+            return new SensorSeriesChannelDto
             {
-                T = b.Start,
-                V = b.Values.TryGetValue(key, out var value) ? value : null,
-                Min = b.Mins.TryGetValue(key, out var min) ? min : null,
-                Max = b.Maxs.TryGetValue(key, out var max) ? max : null
-            }).ToList(),
-            Stats = BuildStats(buckets, key)
+                Key = key,
+                Label = meta?.Label ?? key,
+                Unit = ResolveUnit(catalogChannels, key),
+                Points = buckets.Select(b => new SensorSeriesPointDto
+                {
+                    T = b.Start,
+                    V = b.Values.TryGetValue(key, out var value) ? value : null,
+                    Min = b.Mins.TryGetValue(key, out var min) ? min : null,
+                    Max = b.Maxs.TryGetValue(key, out var max) ? max : null
+                }).ToList(),
+                Stats = BuildStats(buckets, key)
+            };
         }).ToList();
 
         return new SensorSeriesDto
@@ -369,9 +372,9 @@ public sealed class SensorSeriesService(
         return rollups.Select(r => r.Channel).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    private static SensorChannelUnit ResolveUnit(SensorDefinition definition, string key)
+    private static SensorChannelUnit ResolveUnit(IReadOnlyList<SensorChannelDto> catalogChannels, string key)
     {
-        var declared = SensorJson.ParseChannels(definition.ChannelsJson)
+        var declared = catalogChannels
             .FirstOrDefault(c => c.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         if (declared is not null) return declared.Unit;
 

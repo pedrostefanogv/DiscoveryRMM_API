@@ -120,4 +120,60 @@ public sealed class SensorOperationService(
         await db.SaveChangesAsync(cancellationToken);
         return states.Count;
     }
+
+    public async Task<DateTime?> MuteAsync(
+        Guid agentId,
+        Guid sensorId,
+        int? durationMinutes,
+        string? targetKey = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedTarget = targetKey?.Trim();
+        var query = db.AgentSensorStates.Where(s => s.AgentId == agentId && s.SensorId == sensorId);
+        if (!string.IsNullOrEmpty(normalizedTarget))
+        {
+            query = query.Where(s => s.TargetKey == normalizedTarget);
+        }
+
+        var states = await query.ToListAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+
+        if (durationMinutes is null or <= 0)
+        {
+            foreach (var state in states)
+            {
+                state.MutedUntil = null;
+                state.UpdatedAt = now;
+            }
+            if (states.Count > 0) await db.SaveChangesAsync(cancellationToken);
+            return null;
+        }
+
+        var mutedUntil = now.AddMinutes(Math.Clamp(durationMinutes.Value, 1, 43_200));
+        if (states.Count == 0)
+        {
+            db.AgentSensorStates.Add(new AgentSensorState
+            {
+                Id = Guid.NewGuid(),
+                AgentId = agentId,
+                SensorId = sensorId,
+                TargetKey = normalizedTarget ?? string.Empty,
+                Status = SensorStatus.Pending,
+                MutedUntil = mutedUntil,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
+        else
+        {
+            foreach (var state in states)
+            {
+                state.MutedUntil = mutedUntil;
+                state.UpdatedAt = now;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return mutedUntil;
+    }
 }

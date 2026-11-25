@@ -106,6 +106,7 @@ public partial class DiscoveryDbContext
             entity.Property(s => s.LastStatusChangedAt).HasColumnName("last_status_changed_at").HasColumnType("timestamptz");
             entity.Property(s => s.LastAlertedAt).HasColumnName("last_alerted_at").HasColumnType("timestamptz");
             entity.Property(s => s.LastAlertSeverity).HasColumnName("last_alert_severity").HasConversion<int?>();
+            entity.Property(s => s.MutedUntil).HasColumnName("muted_until").HasColumnType("timestamptz");
             entity.Property(s => s.SparklineJson).HasColumnName("sparkline_json").HasColumnType("jsonb");
             entity.Property(s => s.LastRunId).HasColumnName("last_run_id");
             entity.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

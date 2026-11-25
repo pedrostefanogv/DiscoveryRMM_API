@@ -13,4 +13,7 @@ public interface ISensorOperationService
 
     /// <summary>Pede ao agente um sensor-sync imediato.</summary>
     Task<SensorRunResponseDto> SyncNowAsync(Guid agentId, CancellationToken cancellationToken = default);
+
+    /// <summary>Silencia alertas de um sensor por N minutos (null/<= 0 remove o silenciamento).</summary>
+    Task<DateTime?> MuteAsync(Guid agentId, Guid sensorId, int? durationMinutes, string? targetKey = null, CancellationToken cancellationToken = default);
 }

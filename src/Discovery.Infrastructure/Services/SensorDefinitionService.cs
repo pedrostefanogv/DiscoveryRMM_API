@@ -169,6 +169,18 @@ public sealed class SensorDefinitionService(
         return true;
     }
 
+    public async Task<bool> SetPinnedAsync(Guid id, bool isPinned, CancellationToken cancellationToken = default)
+    {
+        var definition = await db.SensorDefinitions
+            .FirstOrDefaultAsync(s => s.Id == id && s.DeletedAt == null, cancellationToken);
+        if (definition is null) return false;
+
+        definition.IsPinned = isPinned;
+        definition.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
     private void ApplyRequest(SensorDefinition definition, SensorUpsertRequest request, bool isCreate)
     {
         if (!string.IsNullOrWhiteSpace(request.Name)) definition.Name = request.Name.Trim();
