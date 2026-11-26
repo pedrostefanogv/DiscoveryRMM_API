@@ -24,6 +24,9 @@ public class SiteConfiguration
     /// <summary>P2P Files: null = herda cliente/servidor</summary>
     public bool? P2PFilesEnabled { get; set; }
 
+    /// <summary>Cofre TPM de credenciais de conexão do agent: null = herda cliente/servidor</summary>
+    public bool? TpmRecoveryEnabled { get; set; }
+
     /// <summary>Suporte: null = herda cliente/servidor</summary>
     public bool? SupportEnabled { get; set; }
 

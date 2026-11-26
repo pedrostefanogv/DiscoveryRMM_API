@@ -20,6 +20,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.RecoveryEnabled).HasColumnName("recovery_enabled");
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
+            entity.Property(config => config.TpmRecoveryEnabled).HasColumnName("tpm_recovery_enabled");
             entity.Property(config => config.CloudBootstrapEnabled).HasColumnName("cloud_bootstrap_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
@@ -112,6 +113,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.RecoveryEnabled).HasColumnName("recovery_enabled");
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
+            entity.Property(config => config.TpmRecoveryEnabled).HasColumnName("tpm_recovery_enabled");
             entity.Property(config => config.CloudBootstrapEnabled).HasColumnName("cloud_bootstrap_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
@@ -175,6 +177,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.RecoveryEnabled).HasColumnName("recovery_enabled");
             entity.Property(config => config.DiscoveryEnabled).HasColumnName("discovery_enabled");
             entity.Property(config => config.P2PFilesEnabled).HasColumnName("p2p_files_enabled");
+            entity.Property(config => config.TpmRecoveryEnabled).HasColumnName("tpm_recovery_enabled");
             entity.Property(config => config.SupportEnabled).HasColumnName("support_enabled");
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");

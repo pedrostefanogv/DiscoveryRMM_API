@@ -18,6 +18,12 @@ public class ResolvedConfiguration
 
     public bool P2PFilesEnabled { get; set; }
 
+    /// <summary>
+    /// Cofre TPM de credenciais de conexão do agent já resolvido
+    /// (servidor → cliente → site). Default global = false (opt-in).
+    /// </summary>
+    public bool TpmRecoveryEnabled { get; set; }
+
     public bool CloudBootstrapEnabled { get; set; }
 
     public bool SupportEnabled { get; set; }

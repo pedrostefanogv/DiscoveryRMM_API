@@ -7,6 +7,10 @@ public static class ConfigurationFieldCatalog
         "RecoveryEnabled",
         "DiscoveryEnabled",
         "P2PFilesEnabled",
+        // Cofre TPM de credenciais de conexão do agent (servidor → cliente → site).
+        // Opt-in (default false). Sem entrar aqui o campo não aparece na UI nem é
+        // reconhecido em locks/herança — exatamente como os kill switches abaixo.
+        "TpmRecoveryEnabled",
         "CloudBootstrapEnabled",
         "SupportEnabled",
         "ChatAIEnabled",

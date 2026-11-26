@@ -25,6 +25,13 @@ public class ServerConfiguration
     /// <summary>Transferência de arquivos P2P entre agents</summary>
     public bool P2PFilesEnabled { get; set; } = false;
 
+    /// <summary>
+    /// Cofre TPM de credenciais de conexão: guarda as credenciais de conexão do
+    /// agent no TPM da máquina. OPT-IN (default false) — herda para clientes e
+    /// sites (null = herda o servidor).
+    /// </summary>
+    public bool TpmRecoveryEnabled { get; set; } = false;
+
     /// <summary>Habilita o bootstrap P2P via cloud (agent obtém lista de peers via servidor ao invés de apenas LAN)</summary>
     public bool CloudBootstrapEnabled { get; set; } = false;
 

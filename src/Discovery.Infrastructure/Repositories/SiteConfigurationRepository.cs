@@ -48,6 +48,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.RecoveryEnabled = config.RecoveryEnabled;
         existingConfig.DiscoveryEnabled = config.DiscoveryEnabled;
         existingConfig.P2PFilesEnabled = config.P2PFilesEnabled;
+        existingConfig.TpmRecoveryEnabled = config.TpmRecoveryEnabled;
         existingConfig.SupportEnabled = config.SupportEnabled;
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;

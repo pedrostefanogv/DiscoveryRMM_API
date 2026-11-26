@@ -66,6 +66,22 @@ public class AgentAuthMiddleware
             var rawAgentIdHeader = context.Request.Headers[AgentIdHeader].FirstOrDefault();
             if (string.IsNullOrWhiteSpace(rawAgentIdHeader))
             {
+                // ── Fallback: endpoints de AUTO-IDENTIDADE podem usar o AgentId do token ──
+                // O agent recuperado apenas com token (sem X-Agent-ID) precisa ler a
+                // própria identidade/configuração ANTES de conhecer o próprio AgentId.
+                // O token já foi validado acima; aqui só resolvemos o id pelo próprio
+                // token (nunca logamos o token).
+                if (IsSelfIdentityEndpoint(path))
+                {
+                    _logger.LogInformation(
+                        "[AgentAuth] Self-identity endpoint sem X-Agent-ID, usando AgentId do token: {AgentId} ({Path})",
+                        token.AgentId, path);
+                    context.Items["AgentId"] = token.AgentId;
+                    context.Items["TokenId"] = token.Id;
+                    await _next(context);
+                    return;
+                }
+
                 // ── Fallback: endpoints de registro de tools/status podem usar o AgentId do token ──
                 if (path.Value?.Contains("agent-tools/registry", StringComparison.OrdinalIgnoreCase) == true
                     || path.Value?.Contains("agent-tools", StringComparison.OrdinalIgnoreCase) == true)
@@ -152,6 +168,30 @@ public class AgentAuthMiddleware
             _logger.LogDebug(ex, "[AgentAuth] Falha ao verificar lixeira do agente {AgentId}.", agentId);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Endpoints de AUTO-IDENTIDADE que podem dispensar o header X-Agent-ID: o
+    /// agent recuperado só com token precisa de <c>GET /me</c> e
+    /// <c>GET /me/configuration</c> para descobrir o próprio AgentId.
+    ///
+    /// A comparação é por IGUALDADE EXATA do path normalizado
+    /// (<c>TrimEnd('/')</c>) contra uma allowlist de dois caminhos montada a
+    /// partir do prefixo configurado, case-insensitive. Não usamos
+    /// <c>StartsWith</c>/<c>Contains</c> de propósito: um prefixo
+    /// "agent-auth/me" liberaria por engano <c>/me/commands</c>,
+    /// <c>/me/hardware</c> e subrotas administrativas de outros controllers.
+    /// </summary>
+    private bool IsSelfIdentityEndpoint(PathString path)
+    {
+        if (!path.HasValue)
+            return false;
+
+        var value = path.Value!.TrimEnd('/');
+        var prefix = _agentAuthPathPrefix.TrimEnd('/');
+
+        return string.Equals(value, prefix + "/me", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, prefix + "/me/configuration", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -129,6 +129,7 @@ X-Agent-ID: {agentId}
 	"recoveryEnabled": true,
 	"discoveryEnabled": true,
 	"p2pFilesEnabled": false,
+	"tpmRecoveryEnabled": false,
 	"agentHomeTab": "support",
 	"siteId": "e5f6a7b8-...",
 	"clientId": "a1b2c3d4-...",
@@ -157,6 +158,22 @@ herda o nível acima) que define qual aba o painel do agent abre ao iniciar.
   `supportEnabled=false`), o painel abre a aba **Status** (fallback).
 - O agent não mantém lista própria de abas: normaliza o id (trim/lowercase) e o
   painel só ativa abas que conhece, caindo para Status em id desconhecido.
+
+**Cofre TPM de credenciais de conexão (`tpmRecoveryEnabled`):**
+
+Configuração herdável (**servidor → cliente → site**; nulo no cliente/site herda o
+nível acima) que liga o cofre TPM de credenciais de conexão. É **opt-in**: o default
+global é `false` e nada muda no rollout até alguém ligar explicitamente.
+
+- `false` (default) = o agent **não** usa o cofre TPM e **limpa** qualquer cofre de
+  credenciais de conexão criado anteriormente (as credenciais voltam para o
+  armazenamento padrão).
+- `true` = o agent **grava** as credenciais de conexão no TPM da máquina e as lê de
+  lá nos boots seguintes (não grava em claro em disco).
+- A chave chega sempre resolvida em `GET /api/v1/agent-auth/me/configuration`
+  (precedência `site ?? cliente ?? servidor`); o servidor também a expõe em locks/
+  herança (campo gerenciado) e `lockedFieldsJson` no servidor impede override em
+  cliente/site.
 
 ### 2.3 Bootstrap P2P
 

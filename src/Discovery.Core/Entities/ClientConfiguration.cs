@@ -23,6 +23,9 @@ public class ClientConfiguration
     /// <summary>Transferência de arquivos P2P entre agents</summary>
     public bool? P2PFilesEnabled { get; set; }
 
+    /// <summary>Cofre TPM de credenciais de conexão do agent (null = herda servidor)</summary>
+    public bool? TpmRecoveryEnabled { get; set; }
+
     /// <summary>Habilita o bootstrap P2P via cloud para este cliente (null = herda servidor)</summary>
     public bool? CloudBootstrapEnabled { get; set; }
 

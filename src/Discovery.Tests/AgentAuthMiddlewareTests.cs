@@ -89,6 +89,161 @@ public class AgentAuthMiddlewareTests
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // WS6: agent recuperado apenas com TOKEN (sem X-Agent-ID) lê a própria
+    // identidade. O fallback vale SÓ para GET /me e GET /me/configuration
+    // (allowlist exata); qualquer outra subrota continua 401.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task InvokeAsync_SelfIdentityMe_WithoutAgentIdHeader_UsesTokenAgentId()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+            Assert.That(nextCalled, Is.True, "GET /me precisa passar sem X-Agent-ID");
+            Assert.That(context.Items["AgentId"], Is.EqualTo(token.AgentId));
+            Assert.That(context.Items["TokenId"], Is.EqualTo(token.Id));
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_SelfIdentityConfiguration_WithoutAgentIdHeader_UsesTokenAgentId()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/configuration", "mdz_valid");
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+            Assert.That(nextCalled, Is.True, "GET /me/configuration precisa passar sem X-Agent-ID");
+            Assert.That(context.Items["AgentId"], Is.EqualTo(token.AgentId));
+            Assert.That(context.Items["TokenId"], Is.EqualTo(token.Id));
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_SelfIdentity_AcceptsCaseAndTrailingSlash()
+    {
+        // O match compara o path normalizado (TrimEnd('/')) case-insensitive, então
+        // "/API/v1/Agent-Auth/ME/" é o mesmo endpoint de "/api/v1/agent-auth/me".
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/API/v1/Agent-Auth/ME/", "mdz_valid");
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+            Assert.That(nextCalled, Is.True);
+            Assert.That(context.Items["AgentId"], Is.EqualTo(token.AgentId));
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_NonAllowlistedMeSubroute_WithoutAgentIdHeader_StaysUnauthorized()
+    {
+        // Guarda do defeito de um match por prefixo/Contains: "/me/commands" NÃO
+        // pode ser liberado pela allowlist de auto-identidade.
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/commands", "mdz_valid");
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            Assert.That(nextCalled, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_SelfIdentity_MismatchedHeader_StaysUnauthorized()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/configuration", "mdz_valid");
+        context.Request.Headers.Append("X-Agent-ID", Guid.NewGuid().ToString());
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            Assert.That(nextCalled, Is.False, "header presente e divergente continua 401");
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_SelfIdentity_InvalidHeader_StaysBadRequest()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var middleware = CreateMiddleware(_ => Task.CompletedTask);
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        context.Request.Headers.Append("X-Agent-ID", "not-a-guid");
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status400BadRequest),
+            "header presente e inválido continua 400");
+    }
+
+    [Test]
+    public async Task InvokeAsync_SelfIdentity_WithMatchingHeader_StillWorks()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+            Assert.That(nextCalled, Is.True);
+            Assert.That(context.Items["AgentId"], Is.EqualTo(token.AgentId));
+        });
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Escopo do agente na LIXEIRA: o token continua válido (é o canal do
     // descomissionamento), mas o acesso REST fica restrito ao próprio
     // encerramento. Sem esta guarda, o token de um agente excluído abriria os

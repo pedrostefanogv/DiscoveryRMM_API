@@ -200,6 +200,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var recovery = ResolveValue("RecoveryEnabled", blocked, site?.RecoveryEnabled, client?.RecoveryEnabled, server.RecoveryEnabled);
         var discovery = ResolveValue("DiscoveryEnabled", blocked, site?.DiscoveryEnabled, client?.DiscoveryEnabled, server.DiscoveryEnabled);
         var p2p = ResolveValue("P2PFilesEnabled", blocked, site?.P2PFilesEnabled, client?.P2PFilesEnabled, server.P2PFilesEnabled);
+        var tpmRecovery = ResolveValue("TpmRecoveryEnabled", blocked, site?.TpmRecoveryEnabled, client?.TpmRecoveryEnabled, server.TpmRecoveryEnabled);
         var cloudBootstrap = ResolveValue("CloudBootstrapEnabled", blocked, (bool?)null, client?.CloudBootstrapEnabled, server.CloudBootstrapEnabled);
         var support = ResolveValue("SupportEnabled", blocked, site?.SupportEnabled, client?.SupportEnabled, server.SupportEnabled);
         var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
@@ -289,6 +290,7 @@ public class ConfigurationResolver : IConfigurationResolver
             RecoveryEnabled = recovery.Value,
             DiscoveryEnabled = discovery.Value,
             P2PFilesEnabled = p2p.Value,
+            TpmRecoveryEnabled = tpmRecovery.Value,
             CloudBootstrapEnabled = cloudBootstrap.Value,
             SupportEnabled = support.Value,
             ChatAIEnabled = chatAi.Value,
@@ -331,6 +333,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["RecoveryEnabled"] = (int)recovery.Source;
         resolved.Inheritance["DiscoveryEnabled"] = (int)discovery.Source;
         resolved.Inheritance["P2PFilesEnabled"] = (int)p2p.Source;
+        resolved.Inheritance["TpmRecoveryEnabled"] = (int)tpmRecovery.Source;
         resolved.Inheritance["CloudBootstrapEnabled"] = (int)cloudBootstrap.Source;
         resolved.Inheritance["SupportEnabled"] = (int)support.Source;
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;

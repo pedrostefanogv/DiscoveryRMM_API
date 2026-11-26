@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessão agora é pulada para tokens temporários (mfa_pending/mfa_setup/step_up).
 
 ### Added
+- 🔐 **Cofre TPM de credenciais de conexão (`TpmRecoveryEnabled`)**: configuração herdável
+  (servidor → cliente → site) que liga o cofre TPM do agent, espelhando `P2PFilesEnabled`.
+  Opt-in: default global `false` (desligado, o agent limpa o cofre; ligado, ele grava/lê as
+  credenciais de conexão no TPM). Editável nas telas de Servidor/Cliente/Site, respeita
+  `lockedFieldsJson`, expõe a origem no mapa de herança e chega resolvida ao agent em
+  `GET /api/v1/agent-auth/me/configuration` como `tpmRecoveryEnabled` (migration
+  `M300_AddTpmRecoveryEnabled`).
 - 🏠 **Página inicial do agent (`agentHomeTab`)**: configuração herdável (servidor →
   cliente → site) que define qual aba o painel do agent abre ao iniciar (status, loja,
   atualizações, chat IA, suporte, base de conhecimento). Se a aba configurada estiver

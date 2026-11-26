@@ -117,6 +117,10 @@ public sealed class GetAgentConfigurationHandler(
             ["agentHomeTab"] = AgentHomeTabCatalog.Normalize(
                 FirstNonEmpty(siteConfig?.AgentHomeTab, clientConfig?.AgentHomeTab, serverConfig.AgentHomeTab)),
             ["p2pFilesEnabled"] = siteConfig?.P2PFilesEnabled ?? clientConfig?.P2PFilesEnabled ?? serverConfig.P2PFilesEnabled,
+            // Cofre TPM de credenciais de conexão do agent (servidor → cliente →
+            // site; default false = opt-in). true = o agent grava as credenciais
+            // no TPM; false = o cofre é limpo (ver AGENT_INTEGRATION_GUIDE).
+            ["tpmRecoveryEnabled"] = siteConfig?.TpmRecoveryEnabled ?? clientConfig?.TpmRecoveryEnabled ?? serverConfig.TpmRecoveryEnabled,
             ["cloudBootstrapEnabled"] = clientConfig?.CloudBootstrapEnabled ?? serverConfig.CloudBootstrapEnabled,
             ["zeroTouchEnabled"] = siteConfig?.ZeroTouchEnabled ?? clientConfig?.ZeroTouchEnabled ?? serverConfig.ZeroTouchEnabled,
             // Estado do próprio agente: provisionado por zero-touch mas aguardando

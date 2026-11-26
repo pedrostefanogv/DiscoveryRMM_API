@@ -38,6 +38,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.RecoveryEnabled = config.RecoveryEnabled;
         existingConfig.DiscoveryEnabled = config.DiscoveryEnabled;
         existingConfig.P2PFilesEnabled = config.P2PFilesEnabled;
+        existingConfig.TpmRecoveryEnabled = config.TpmRecoveryEnabled;
         existingConfig.CloudBootstrapEnabled = config.CloudBootstrapEnabled;
         existingConfig.SupportEnabled = config.SupportEnabled;
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
