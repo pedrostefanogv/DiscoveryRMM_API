@@ -76,6 +76,51 @@ public static class FileValidationHelper
     }
 
     /// <summary>
+    /// Sanitiza e valida o nome de uma pasta individual (sem barras ou segmentos de traversal).
+    /// </summary>
+    public static string SanitizeFolderName(string? name)
+    {
+        var clean = (name ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(clean))
+            throw new InvalidOperationException("O nome da pasta é obrigatório.");
+        if (clean is "." or "..")
+            throw new InvalidOperationException("Nome de pasta inválido.");
+        if (clean.Contains('/') || clean.Contains('\\'))
+            throw new InvalidOperationException("O nome da pasta não pode conter '/' ou '\\'.");
+        if (clean.Any(char.IsControl))
+            throw new InvalidOperationException("O nome da pasta contém caracteres inválidos.");
+        if (clean.Length > 120)
+            clean = clean[..120].Trim();
+        if (string.IsNullOrWhiteSpace(clean))
+            throw new InvalidOperationException("O nome da pasta é obrigatório.");
+
+        return clean;
+    }
+
+    /// <summary>
+    /// Retorna o caminho da pasta pai de um <paramref name="folderPath"/> normalizado.
+    /// </summary>
+    public static string GetParentFolderPath(string? folderPath)
+    {
+        var normalized = NormalizeFolderPath(folderPath);
+        if (normalized == "/")
+            return "/";
+
+        var lastSlash = normalized.LastIndexOf('/');
+        return lastSlash <= 0 ? "/" : normalized[..lastSlash];
+    }
+
+    /// <summary>
+    /// Combina o caminho pai normalizado com um nome de pasta validado.
+    /// </summary>
+    public static string CombineFolderPath(string? parentPath, string folderName)
+    {
+        var parent = NormalizeFolderPath(parentPath);
+        var safeName = SanitizeFolderName(folderName);
+        return parent == "/" ? "/" + safeName : parent + "/" + safeName;
+    }
+
+    /// <summary>
     /// Normaliza uma lista de extensões (ex.: <c>pdf</c> → <c>.pdf</c>).
     /// </summary>
     public static string[] NormalizeExtensions(IEnumerable<string>? extensions)

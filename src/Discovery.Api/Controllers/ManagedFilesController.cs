@@ -167,6 +167,95 @@ public class ManagedFilesController(
         return Ok(await fileService.GetAdminDownloadUrlAsync(id, ct));
     }
 
+    // ── Pastas (Folders) ──
+
+    [HttpGet("folders")]
+    [RequirePermission(ResourceType.Files, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> ListFolders(
+        [FromQuery] string? parentPath,
+        [FromQuery] bool includeAll = false,
+        [FromQuery] Core.Enums.FileScope? scope = null,
+        [FromQuery] Guid? clientId = null,
+        [FromQuery] Guid? siteId = null,
+        [FromQuery] Core.Enums.FileVisibility? visibility = null,
+        CancellationToken ct = default)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Files, ActionType.View);
+        var (allowedClients, allowedSites) = access.HasGlobalAccess
+            ? (null, null)
+            : (access.AllowedClientIds, access.AllowedSiteIds);
+
+        var folders = await fileService.ListFoldersAsync(
+            parentPath, includeAll, scope, clientId, siteId, visibility, allowedClients, allowedSites, ct);
+        return Ok(folders);
+    }
+
+    [HttpPost("folders")]
+    [RequirePermission(ResourceType.Files, ActionType.Create, ScopeSource.AccessList)]
+    public async Task<IActionResult> CreateFolder([FromBody] CreateManagedFileFolderRequest request, CancellationToken ct)
+    {
+        if (!await CanAccessScopeAsync(request.ClientId, request.SiteId, ActionType.Create))
+            return Forbid();
+
+        try
+        {
+            return Ok(await fileService.CreateFolderAsync(request, CurrentUser, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPatch("folders/{id:guid}")]
+    [RequirePermission(ResourceType.Files, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> UpdateFolder(Guid id, [FromBody] UpdateManagedFileFolderRequest request, CancellationToken ct)
+    {
+        var existing = await fileService.GetFolderByIdAsync(id, ct);
+        if (existing is null)
+            return NotFound(new { error = "Pasta não encontrada." });
+        if (!await CanAccessFolderAsync(existing, ActionType.Edit))
+            return Forbid();
+
+        try
+        {
+            return Ok(await fileService.UpdateFolderAsync(id, request, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (FileNotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
+    [HttpDelete("folders/{id:guid}")]
+    [RequirePermission(ResourceType.Files, ActionType.Delete, ScopeSource.AccessList)]
+    public async Task<IActionResult> DeleteFolder(Guid id, [FromQuery] bool moveFilesToParent = true, CancellationToken ct = default)
+    {
+        var existing = await fileService.GetFolderByIdAsync(id, ct);
+        if (existing is null)
+            return NotFound(new { error = "Pasta não encontrada." });
+        if (!await CanAccessFolderAsync(existing, ActionType.Delete))
+            return Forbid();
+
+        try
+        {
+            await fileService.DeleteFolderAsync(id, moveFilesToParent, ct);
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (FileNotFoundException ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
+    }
+
     // ── Share Links (Download) ──
 
     [HttpGet("share-links")]
@@ -325,6 +414,16 @@ public class ManagedFilesController(
         if (file.Scope == Core.Enums.FileScope.Global)
             return action == ActionType.View;
         return TenantScopePolicy.Allows(access, file.ClientId ?? Guid.Empty, file.SiteId ?? Guid.Empty);
+    }
+
+    private async Task<bool> CanAccessFolderAsync(ManagedFileFolderDto folder, ActionType action)
+    {
+        var access = await scopeContext.GetAccessAsync(ResourceType.Files, action);
+        if (access.HasGlobalAccess)
+            return true;
+        if (folder.Scope == Core.Enums.FileScope.Global)
+            return action == ActionType.View;
+        return TenantScopePolicy.Allows(access, folder.ClientId ?? Guid.Empty, folder.SiteId ?? Guid.Empty);
     }
 
     private async Task<bool> CanAccessScopeAsync(Guid? clientId, Guid? siteId, ActionType action)

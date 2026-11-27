@@ -30,6 +30,7 @@ public class ManagedFilesAndLinksTests
             var keep = new HashSet<Type>
             {
                 typeof(ManagedFile),
+                typeof(ManagedFileFolder),
                 typeof(FileShareLink),
                 typeof(FileShareLinkItem),
                 typeof(FileUploadLink),
@@ -50,6 +51,7 @@ public class ManagedFilesAndLinksTests
             }
 
             modelBuilder.Entity<ManagedFile>(e => e.HasKey(x => x.Id));
+            modelBuilder.Entity<ManagedFileFolder>(e => e.HasKey(x => x.Id));
             modelBuilder.Entity<FileShareLink>(e => e.HasKey(x => x.Id));
             modelBuilder.Entity<FileShareLinkItem>(e =>
             {
@@ -122,6 +124,254 @@ public class ManagedFilesAndLinksTests
         var list = await service.ListForAgentAsync(clientA, siteA1);
 
         Assert.That(list.Select(f => f.Name), Is.EquivalentTo(new[] { "global-public", "clientA-agent", "siteA1-agent" }));
+    }
+
+    [Test]
+    public async Task ManagedFileService_Folders_CreateRenameDeleteAndListPublic()
+    {
+        await using var db = CreateDb();
+        var service = new ManagedFileService(db, new StubStorageFactory(new InMemoryStubStorage()), NullLogger<ManagedFileService>.Instance);
+
+        // Criação com ancestrais automáticos ("/Instaladores/Windows")
+        var sub = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Windows",
+            ParentPath: "/Instaladores",
+            Description: "Instaladores Windows",
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Public), "admin");
+
+        Assert.That(sub.Path, Is.EqualTo("/Instaladores/Windows"));
+        Assert.That(sub.ParentPath, Is.EqualTo("/Instaladores"));
+
+        var rootFolders = await service.ListFoldersAsync("/");
+        Assert.That(rootFolders.Select(f => f.Path), Does.Contain("/Instaladores"));
+
+        // Bloqueia duplicata case-insensitive
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+                Name: "windows",
+                ParentPath: "/Instaladores",
+                Description: null,
+                Scope: FileScope.Global,
+                ClientId: null,
+                SiteId: null,
+                Visibility: FileVisibility.Public), "admin"));
+
+        // Arquivo dentro de /Instaladores/Windows + pasta virtual /Drivers (sem registro explícito)
+        var fileInSub = MakeFile("agent-msi", FileScope.Global, null, null, FileVisibility.Public);
+        fileInSub.FolderPath = "/Instaladores/Windows";
+        var fileInVirtual = MakeFile("nic-driver", FileScope.Global, null, null, FileVisibility.Public);
+        fileInVirtual.FolderPath = "/Drivers";
+        db.ManagedFiles.AddRange(fileInSub, fileInVirtual);
+        await db.SaveChangesAsync();
+
+        // Renomear /Instaladores -> /Pacotes propaga para subpasta e arquivo
+        var parentFolder = rootFolders.First(f => f.Path == "/Instaladores");
+        var renamed = await service.UpdateFolderAsync(parentFolder.Id, new UpdateManagedFileFolderRequest(Name: "Pacotes"));
+        Assert.That(renamed.Path, Is.EqualTo("/Pacotes"));
+
+        var reloadedSub = await service.GetFolderByIdAsync(sub.Id);
+        var reloadedFile = await service.GetByIdAsync(fileInSub.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reloadedSub?.Path, Is.EqualTo("/Pacotes/Windows"));
+            Assert.That(reloadedSub?.ParentPath, Is.EqualTo("/Pacotes"));
+            Assert.That(reloadedFile?.FolderPath, Is.EqualTo("/Pacotes/Windows"));
+        });
+
+        // ListPublicFilesAsync retorna pastas explícitas + virtuais com contagem correta
+        var (pubFiles, _, pubFolders) = await service.ListPublicFilesAsync(null, null);
+        Assert.That(pubFiles, Has.Count.EqualTo(2));
+        Assert.That(pubFolders.Select(f => f.Path), Is.EquivalentTo(new[] { "/Drivers", "/Pacotes", "/Pacotes/Windows" }));
+        Assert.That(pubFolders.First(f => f.Path == "/Pacotes").FileCount, Is.EqualTo(1));
+
+        // Exclusão com moveFilesToParent=false falha se não estiver vazia
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.DeleteFolderAsync(sub.Id, moveFilesToParent: false));
+
+        // Exclusão com moveFilesToParent=true move o arquivo para /Pacotes
+        await service.DeleteFolderAsync(sub.Id, moveFilesToParent: true);
+        var movedFile = await service.GetByIdAsync(fileInSub.Id);
+        Assert.That(movedFile?.FolderPath, Is.EqualTo("/Pacotes"));
+    }
+
+    [Test]
+    public async Task ManagedFileService_Folders_CaseInsensitiveAndOrphanPublicAncestor()
+    {
+        await using var db = CreateDb();
+        var service = new ManagedFileService(db, new StubStorageFactory(new InMemoryStubStorage()), NullLogger<ManagedFileService>.Instance);
+
+        var drivers = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Drivers",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Public), "admin");
+
+        // Arquivo com casing diferente não deve duplicar a pasta em ListFoldersAsync
+        var fileLower = MakeFile("audio-driver", FileScope.Global, null, null, FileVisibility.Public);
+        fileLower.FolderPath = "/drivers";
+        db.ManagedFiles.Add(fileLower);
+        await db.SaveChangesAsync();
+
+        var rootFolders = await service.ListFoldersAsync("/");
+        Assert.That(rootFolders.Count(f => f.Path.Equals("/Drivers", StringComparison.OrdinalIgnoreCase)), Is.EqualTo(1));
+
+        // Filtro por FolderPath é case-insensitive
+        var filteredFiles = await service.ListAsync(new ManagedFileFilter(FolderPath: "/DRIVERS"));
+        Assert.That(filteredFiles.Items.Select(x => x.Name), Is.EquivalentTo(new[] { "audio-driver" }));
+
+        // Renomear apenas casing ("Drivers" -> "DRIVERS") propaga para o arquivo
+        var recased = await service.UpdateFolderAsync(drivers.Id, new UpdateManagedFileFolderRequest(Name: "DRIVERS"));
+        Assert.That(recased.Path, Is.EqualTo("/DRIVERS"));
+        var reloadedFile = await service.GetByIdAsync(fileLower.Id);
+        Assert.That(reloadedFile?.FolderPath, Is.EqualTo("/DRIVERS"));
+
+        // Pasta dentro de pai privado herda visibilidade Private (Opção A) e não aparece em ListPublicFilesAsync
+        var privateParent = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Interno",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Private), "admin");
+        var inheritedPrivateSub = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Manuais",
+            ParentPath: privateParent.Path,
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Public), "admin");
+
+        Assert.That(inheritedPrivateSub.Visibility, Is.EqualTo(FileVisibility.Private));
+        var (_, _, pubFolders) = await service.ListPublicFilesAsync(null, null);
+        Assert.That(pubFolders.Select(f => f.Path), Does.Not.Contain("/Interno"));
+        Assert.That(pubFolders.Select(f => f.Path), Does.Not.Contain("/Interno/Manuais"));
+    }
+
+    [Test]
+    public async Task ManagedFileService_Folders_OptionA_StrictInheritanceCascadeAndFileDropBlock()
+    {
+        await using var db = CreateDb();
+        var service = new ManagedFileService(db, new StubStorageFactory(new InMemoryStubStorage()), NullLogger<ManagedFileService>.Instance);
+        var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        var linkService = new FileLinkService(db, new StubStorageFactory(new InMemoryStubStorage()), config, NullLogger<FileLinkService>.Instance);
+
+        // 1. Subpasta dentro de pasta Pública sempre herda Público
+        var rootPublic = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Publico",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Public), "admin");
+
+        var childAttemptPrivate = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "SubPrivada",
+            ParentPath: rootPublic.Path,
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Private), "admin");
+        Assert.That(childAttemptPrivate.Visibility, Is.EqualTo(FileVisibility.Public));
+
+        // 2. Alterar visibilidade diretamente em subpasta é bloqueado
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.UpdateFolderAsync(childAttemptPrivate.Id, new UpdateManagedFileFolderRequest(Visibility: FileVisibility.Private)));
+
+        // 3. Pasta raiz Privada -> alterar para Público propaga em cascata para subpastas e arquivos
+        var rootPrivate = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Cofre",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Private), "admin");
+
+        var subPrivate = await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "Guias",
+            ParentPath: rootPrivate.Path,
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Public), "admin");
+        Assert.That(subPrivate.Visibility, Is.EqualTo(FileVisibility.Private));
+
+        var fileInSub = MakeFile("manual-pdf", FileScope.Global, null, null, FileVisibility.Private);
+        fileInSub.FolderPath = subPrivate.Path;
+        db.ManagedFiles.Add(fileInSub);
+        await db.SaveChangesAsync();
+
+        await service.UpdateFolderAsync(rootPrivate.Id, new UpdateManagedFileFolderRequest(Visibility: FileVisibility.Public));
+
+        var reloadedSub = await service.GetFolderByIdAsync(subPrivate.Id);
+        var reloadedFile = await service.GetByIdAsync(fileInSub.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reloadedSub?.Visibility, Is.EqualTo(FileVisibility.Public));
+            Assert.That(reloadedFile?.Visibility, Is.EqualTo(FileVisibility.Public));
+        });
+
+        // 4. Mover arquivo privado da raiz para pasta Pública atualiza a visibilidade para Público
+        var loosePrivate = MakeFile("solto", FileScope.Global, null, null, FileVisibility.Private);
+        loosePrivate.FolderPath = "/";
+        db.ManagedFiles.Add(loosePrivate);
+        await db.SaveChangesAsync();
+
+        var moved = await service.UpdateAsync(loosePrivate.Id, new UpdateManagedFileRequest(FolderPath: rootPublic.Path));
+        Assert.That(moved.Visibility, Is.EqualTo(FileVisibility.Public));
+
+        // 5. File Drop (Upload Link) não pode apontar para pasta Pública nem subpasta dela
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await linkService.CreateUploadLinkAsync(new CreateUploadLinkRequest(
+                Title: "Upload Indevido",
+                Description: null,
+                ClientId: null,
+                SiteId: null,
+                TargetFolderPath: childAttemptPrivate.Path,
+                ExpiresAtUtc: DateTime.UtcNow.AddDays(1),
+                RequirePasscode: false,
+                Passcode: null,
+                AllowMultiple: true,
+                MaxFiles: 5,
+                MaxFileSizeBytes: 10_000_000,
+                MaxTotalSizeBytes: 50_000_000,
+                AllowedExtensions: null,
+                AllowedMimeTypes: null,
+                FileRetentionDays: null,
+                NotifyOnUpload: false), "admin"));
+
+        // 6. Excluir pasta Pública que tem subpasta colidindo com pasta Privada existente na raiz sincroniza visibilidade para Privado
+        await service.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "SubPrivada",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Private), "admin");
+        var fileInCollidingSub = MakeFile("colisao", FileScope.Global, null, null, FileVisibility.Public);
+        fileInCollidingSub.FolderPath = childAttemptPrivate.Path; // /Publico/SubPrivada
+        db.ManagedFiles.Add(fileInCollidingSub);
+        await db.SaveChangesAsync();
+
+        await service.DeleteFolderAsync(rootPublic.Id, moveFilesToParent: true);
+        var reloadedColliding = await service.GetByIdAsync(fileInCollidingSub.Id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reloadedColliding?.FolderPath, Is.EqualTo("/SubPrivada"));
+            Assert.That(reloadedColliding?.Visibility, Is.EqualTo(FileVisibility.Private));
+        });
     }
 
     [Test]

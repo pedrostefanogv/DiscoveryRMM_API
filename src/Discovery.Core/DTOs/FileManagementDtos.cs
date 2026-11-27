@@ -156,7 +156,49 @@ public sealed record ManagedFileSummaryDto(
     string ContentType,
     long SizeBytes,
     string? Sha256,
-    FileScope Scope);
+    FileScope Scope,
+    string FolderPath = "/");
+
+// ── Pastas Virtuais/Explícitas ───────────────────────────────────────────────
+
+public sealed record ManagedFileFolderDto(
+    Guid Id,
+    string Name,
+    string Path,
+    string ParentPath,
+    string? Description,
+    FileScope Scope,
+    Guid? ClientId,
+    string? ClientName,
+    Guid? SiteId,
+    string? SiteName,
+    FileVisibility Visibility,
+    int FileCount,
+    int SubfolderCount,
+    bool IsVirtual,
+    string? CreatedBy,
+    DateTime CreatedAt);
+
+public sealed record CreateManagedFileFolderRequest(
+    string Name,
+    string? ParentPath,
+    string? Description,
+    FileScope Scope,
+    Guid? ClientId,
+    Guid? SiteId,
+    FileVisibility Visibility);
+
+public sealed record UpdateManagedFileFolderRequest(
+    string? Name = null,
+    string? Description = null,
+    FileVisibility? Visibility = null);
+
+public sealed record PublicFolderDto(
+    string Path,
+    string Name,
+    string ParentPath,
+    string? Description,
+    int FileCount);
 
 // ── Links de Upload do Cliente (File Drop) ──────────────────────────────────
 
@@ -225,7 +267,8 @@ public sealed record PublicPortalDto(
     string? LogoUrl,
     PublicZeroTouchInfoDto ZeroTouch,
     IReadOnlyList<ManagedFileSummaryDto> Files,
-    IReadOnlyList<string> Categories);
+    IReadOnlyList<string> Categories,
+    IReadOnlyList<PublicFolderDto> Folders);
 
 public sealed record PublicShareInfoDto(
     string ShortCode,

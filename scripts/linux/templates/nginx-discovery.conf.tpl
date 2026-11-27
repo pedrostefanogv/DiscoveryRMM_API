@@ -57,6 +57,9 @@ __REDIRECT_RULES__
 
   ssl_certificate /etc/discovery-api/certs/api-internal.crt;
   ssl_certificate_key /etc/discovery-api/certs/api-internal.key;
+  ssl_client_certificate /etc/discovery-api/certs/agent-ca.crt;
+  ssl_verify_client optional;
+  ssl_verify_depth 2;
 
   # TLS moderno apenas (defaults antigos do nginx incluem TLS 1.0/1.1).
   ssl_protocols TLSv1.2 TLSv1.3;
@@ -98,6 +101,8 @@ client_max_body_size 64m;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-SSL-Client-Cert $ssl_client_escaped_cert;
+    proxy_set_header X-SSL-Client-Verify $ssl_client_verify;
   }
 
   # Download de instalador de agente (stage2 e generico/zero-touch): o arquivo

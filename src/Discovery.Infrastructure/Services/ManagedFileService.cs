@@ -56,8 +56,8 @@ public sealed class ManagedFileService(
 
         if (!string.IsNullOrWhiteSpace(filter.FolderPath))
         {
-            var folder = FileValidationHelper.NormalizeFolderPath(filter.FolderPath);
-            query = query.Where(f => f.FolderPath == folder);
+            var folderLower = FileValidationHelper.NormalizeFolderPath(filter.FolderPath).ToLowerInvariant();
+            query = query.Where(f => f.FolderPath.ToLower() == folderLower);
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Search))
@@ -251,6 +251,18 @@ public sealed class ManagedFileService(
             sha256 = await TryComputeSha256Async(storage, request.ObjectKey, ct);
 
         var now = DateTime.UtcNow;
+        var normalizedFolderPath = FileValidationHelper.NormalizeFolderPath(request.FolderPath);
+        var effectiveClientId = request.Scope == FileScope.Global ? null : request.ClientId;
+        var effectiveSiteId = request.Scope == FileScope.Site ? request.SiteId : null;
+        var effectiveVisibility = request.Visibility;
+        if (normalizedFolderPath != "/")
+        {
+            var inherited = await ResolveAncestorOrFolderVisibilityAsync(
+                request.Scope, effectiveClientId, effectiveSiteId, normalizedFolderPath, ct);
+            if (inherited.HasValue)
+                effectiveVisibility = inherited.Value;
+        }
+
         var entity = new ManagedFile
         {
             Id = request.FileId,
@@ -258,12 +270,12 @@ public sealed class ManagedFileService(
             FileName = safeName,
             Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
             Category = string.IsNullOrWhiteSpace(request.Category) ? null : request.Category.Trim(),
-            FolderPath = FileValidationHelper.NormalizeFolderPath(request.FolderPath),
+            FolderPath = normalizedFolderPath,
             TagsJson = JsonSerializer.Serialize(request.Tags?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToArray() ?? []),
             Scope = request.Scope,
-            ClientId = request.Scope == FileScope.Global ? null : request.ClientId,
-            SiteId = request.Scope == FileScope.Site ? request.SiteId : null,
-            Visibility = request.Visibility,
+            ClientId = effectiveClientId,
+            SiteId = effectiveSiteId,
+            Visibility = effectiveVisibility,
             Source = FileSource.AdminUpload,
             StorageObjectKey = request.ObjectKey,
             StorageBucket = metadata.Bucket,
@@ -318,6 +330,13 @@ public sealed class ManagedFileService(
         }
         if (request.Visibility.HasValue)
             entity.Visibility = request.Visibility.Value;
+        if (entity.FolderPath != "/")
+        {
+            var inherited = await ResolveAncestorOrFolderVisibilityAsync(
+                entity.Scope, entity.ClientId, entity.SiteId, entity.FolderPath, ct);
+            if (inherited.HasValue)
+                entity.Visibility = inherited.Value;
+        }
         if (request.IsActive.HasValue)
             entity.IsActive = request.IsActive.Value;
         if (request.ClearExpiresAt)
@@ -428,9 +447,10 @@ public sealed class ManagedFileService(
         return new PresignedDownloadResponse(url, entity.FileName, entity.SizeBytes, entity.Sha256, (int)DownloadUrlTtl.TotalSeconds);
     }
 
-    public async Task<(IReadOnlyList<ManagedFileSummaryDto> Files, IReadOnlyList<string> Categories)> ListPublicFilesAsync(
+    public async Task<(IReadOnlyList<ManagedFileSummaryDto> Files, IReadOnlyList<string> Categories, IReadOnlyList<PublicFolderDto> Folders)> ListPublicFilesAsync(
         string? search,
         string? category,
+        string? folder = null,
         CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
@@ -440,12 +460,68 @@ public sealed class ManagedFileService(
                         && f.Visibility == FileVisibility.Public
                         && (f.ExpiresAtUtc == null || f.ExpiresAtUtc > now));
 
-        var categories = await baseQuery
-            .Where(f => f.Category != null && f.Category != "")
+        var allPublicFiles = await baseQuery
+            .Select(f => new { f.FolderPath, f.Category })
+            .ToListAsync(ct);
+
+        var categories = allPublicFiles
+            .Where(f => !string.IsNullOrWhiteSpace(f.Category))
             .Select(f => f.Category!)
             .Distinct()
             .OrderBy(c => c)
+            .ToList();
+
+        var explicitFolders = await db.ManagedFileFolders.AsNoTracking()
+            .Where(f => f.Visibility == FileVisibility.Public)
             .ToListAsync(ct);
+
+        var folderMap = new Dictionary<string, (string Name, string ParentPath, string? Description)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var ef in explicitFolders)
+        {
+            var norm = FileValidationHelper.NormalizeFolderPath(ef.Path);
+            if (norm == "/") continue;
+            folderMap[norm] = (ef.Name, FileValidationHelper.GetParentFolderPath(norm), ef.Description);
+            var anc = FileValidationHelper.GetParentFolderPath(norm);
+            while (anc != "/")
+            {
+                if (!folderMap.ContainsKey(anc))
+                {
+                    var ancName = anc[(anc.LastIndexOf('/') + 1)..];
+                    folderMap[anc] = (ancName, FileValidationHelper.GetParentFolderPath(anc), null);
+                }
+                anc = FileValidationHelper.GetParentFolderPath(anc);
+            }
+        }
+
+        foreach (var pf in allPublicFiles)
+        {
+            var norm = FileValidationHelper.NormalizeFolderPath(pf.FolderPath);
+            while (norm != "/")
+            {
+                if (!folderMap.ContainsKey(norm))
+                {
+                    var name = norm[(norm.LastIndexOf('/') + 1)..];
+                    folderMap[norm] = (name, FileValidationHelper.GetParentFolderPath(norm), null);
+                }
+                norm = FileValidationHelper.GetParentFolderPath(norm);
+            }
+        }
+
+        var publicFolders = folderMap
+            .Select(kvp =>
+            {
+                var path = kvp.Key;
+                var prefix = path + "/";
+                var count = allPublicFiles.Count(f =>
+                {
+                    var fp = FileValidationHelper.NormalizeFolderPath(f.FolderPath);
+                    return string.Equals(fp, path, StringComparison.OrdinalIgnoreCase)
+                           || fp.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+                });
+                return new PublicFolderDto(path, kvp.Value.Name, kvp.Value.ParentPath, kvp.Value.Description, count);
+            })
+            .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         if (!string.IsNullOrWhiteSpace(category))
         {
@@ -462,12 +538,545 @@ public sealed class ManagedFileService(
                 || (f.Description != null && f.Description.ToLower().Contains(term)));
         }
 
+        if (!string.IsNullOrWhiteSpace(folder) && string.IsNullOrWhiteSpace(search) && string.IsNullOrWhiteSpace(category))
+        {
+            var folderLower = FileValidationHelper.NormalizeFolderPath(folder).ToLowerInvariant();
+            baseQuery = baseQuery.Where(f => f.FolderPath.ToLower() == folderLower);
+        }
+
         var rows = await baseQuery
             .OrderBy(f => f.Name)
             .Take(250)
             .ToListAsync(ct);
 
-        return (rows.Select(ToSummary).ToArray(), categories);
+        return (rows.Select(ToSummary).ToArray(), categories, publicFolders);
+    }
+
+    public async Task<IReadOnlyList<ManagedFileFolderDto>> ListFoldersAsync(
+        string? parentPath = null,
+        bool includeAll = false,
+        FileScope? scope = null,
+        Guid? clientId = null,
+        Guid? siteId = null,
+        FileVisibility? visibility = null,
+        IReadOnlyCollection<Guid>? allowedClientIds = null,
+        IReadOnlyCollection<Guid>? allowedSiteIds = null,
+        CancellationToken ct = default)
+    {
+        var foldersQuery = db.ManagedFileFolders.AsNoTracking();
+        var filesQuery = db.ManagedFiles.AsNoTracking().Where(f => f.DeletedAt == null && f.IsActive);
+
+        if (scope.HasValue)
+        {
+            foldersQuery = foldersQuery.Where(f => f.Scope == scope.Value);
+            filesQuery = filesQuery.Where(f => f.Scope == scope.Value);
+        }
+
+        if (clientId.HasValue)
+        {
+            foldersQuery = foldersQuery.Where(f => f.ClientId == clientId.Value);
+            filesQuery = filesQuery.Where(f => f.ClientId == clientId.Value);
+        }
+
+        if (siteId.HasValue)
+        {
+            foldersQuery = foldersQuery.Where(f => f.SiteId == siteId.Value);
+            filesQuery = filesQuery.Where(f => f.SiteId == siteId.Value);
+        }
+
+        if (visibility.HasValue)
+        {
+            foldersQuery = foldersQuery.Where(f => f.Visibility == visibility.Value);
+            filesQuery = filesQuery.Where(f => f.Visibility == visibility.Value);
+        }
+
+        if (allowedClientIds is not null || allowedSiteIds is not null)
+        {
+            var cIds = allowedClientIds?.ToHashSet() ?? [];
+            var sIds = allowedSiteIds?.ToHashSet() ?? [];
+            foldersQuery = foldersQuery.Where(f =>
+                f.Scope == FileScope.Global
+                || (f.ClientId.HasValue && cIds.Contains(f.ClientId.Value))
+                || (f.SiteId.HasValue && sIds.Contains(f.SiteId.Value)));
+            filesQuery = filesQuery.Where(f =>
+                f.Scope == FileScope.Global
+                || (f.ClientId.HasValue && cIds.Contains(f.ClientId.Value))
+                || (f.SiteId.HasValue && sIds.Contains(f.SiteId.Value)));
+        }
+
+        var explicitFolders = await foldersQuery.ToListAsync(ct);
+        var fileRows = await filesQuery
+            .Select(f => new { f.FolderPath, f.Scope, f.ClientId, f.SiteId, f.Visibility, f.CreatedAt })
+            .ToListAsync(ct);
+
+        var combined = new Dictionary<(FileScope Scope, Guid? ClientId, Guid? SiteId, string PathLower), ManagedFileFolder>();
+        foreach (var ef in explicitFolders)
+        {
+            var norm = FileValidationHelper.NormalizeFolderPath(ef.Path);
+            if (norm == "/") continue;
+            combined[(ef.Scope, ef.ClientId, ef.SiteId, norm.ToLowerInvariant())] = ef;
+        }
+
+        foreach (var fr in fileRows)
+        {
+            var norm = FileValidationHelper.NormalizeFolderPath(fr.FolderPath);
+            while (norm != "/")
+            {
+                var key = (fr.Scope, fr.ClientId, fr.SiteId, norm.ToLowerInvariant());
+                if (!combined.ContainsKey(key))
+                {
+                    var name = norm[(norm.LastIndexOf('/') + 1)..];
+                    combined[key] = new ManagedFileFolder
+                    {
+                        Id = Guid.Empty,
+                        Name = name,
+                        Path = norm,
+                        ParentPath = FileValidationHelper.GetParentFolderPath(norm),
+                        Scope = fr.Scope,
+                        ClientId = fr.ClientId,
+                        SiteId = fr.SiteId,
+                        Visibility = fr.Visibility,
+                        CreatedAt = fr.CreatedAt,
+                        UpdatedAt = fr.CreatedAt
+                    };
+                }
+                norm = FileValidationHelper.GetParentFolderPath(norm);
+            }
+        }
+
+        var allEntries = combined.Values.ToList();
+        var clientIds = allEntries.Where(x => x.ClientId.HasValue).Select(x => x.ClientId!.Value).Distinct().ToArray();
+        var siteIds = allEntries.Where(x => x.SiteId.HasValue).Select(x => x.SiteId!.Value).Distinct().ToArray();
+
+        var clients = clientIds.Length > 0
+            ? await db.Clients.AsNoTracking().Where(c => clientIds.Contains(c.Id)).ToDictionaryAsync(c => c.Id, c => c.Name, ct)
+            : new Dictionary<Guid, string>();
+        var sites = siteIds.Length > 0
+            ? await db.Sites.AsNoTracking().Where(s => siteIds.Contains(s.Id)).ToDictionaryAsync(s => s.Id, s => s.Name, ct)
+            : new Dictionary<Guid, string>();
+
+        var targetParent = FileValidationHelper.NormalizeFolderPath(parentPath);
+        IEnumerable<ManagedFileFolder> filtered = allEntries;
+        if (!includeAll)
+        {
+            filtered = filtered.Where(f => string.Equals(
+                FileValidationHelper.NormalizeFolderPath(f.ParentPath),
+                targetParent,
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        return filtered
+            .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(f =>
+            {
+                var normPath = FileValidationHelper.NormalizeFolderPath(f.Path);
+                var prefix = normPath + "/";
+                var fileCount = fileRows.Count(fr =>
+                {
+                    if (fr.Scope != f.Scope || fr.ClientId != f.ClientId || fr.SiteId != f.SiteId)
+                        return false;
+                    var fp = FileValidationHelper.NormalizeFolderPath(fr.FolderPath);
+                    return string.Equals(fp, normPath, StringComparison.OrdinalIgnoreCase)
+                           || fp.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+                });
+                var subfolderCount = allEntries.Count(sf =>
+                    sf.Scope == f.Scope
+                    && sf.ClientId == f.ClientId
+                    && sf.SiteId == f.SiteId
+                    && string.Equals(FileValidationHelper.NormalizeFolderPath(sf.ParentPath), normPath, StringComparison.OrdinalIgnoreCase));
+
+                return new ManagedFileFolderDto(
+                    Id: f.Id,
+                    Name: f.Name,
+                    Path: normPath,
+                    ParentPath: FileValidationHelper.NormalizeFolderPath(f.ParentPath),
+                    Description: f.Description,
+                    Scope: f.Scope,
+                    ClientId: f.ClientId,
+                    ClientName: f.ClientId.HasValue && clients.TryGetValue(f.ClientId.Value, out var cn) ? cn : null,
+                    SiteId: f.SiteId,
+                    SiteName: f.SiteId.HasValue && sites.TryGetValue(f.SiteId.Value, out var sn) ? sn : null,
+                    Visibility: f.Visibility,
+                    FileCount: fileCount,
+                    SubfolderCount: subfolderCount,
+                    IsVirtual: f.Id == Guid.Empty,
+                    CreatedBy: f.CreatedBy,
+                    CreatedAt: f.CreatedAt);
+            })
+            .ToArray();
+    }
+
+    public async Task<ManagedFileFolderDto?> GetFolderByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        var entity = await db.ManagedFileFolders.AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == id, ct);
+
+        if (entity is null)
+            return null;
+
+        return await MapFolderDtoAsync(entity, ct);
+    }
+
+    public async Task<ManagedFileFolderDto> CreateFolderAsync(
+        CreateManagedFileFolderRequest request,
+        string? actor,
+        CancellationToken ct = default)
+    {
+        ValidateScope(request.Scope, request.ClientId, request.SiteId);
+        var safeName = FileValidationHelper.SanitizeFolderName(request.Name);
+        var parentPath = FileValidationHelper.NormalizeFolderPath(request.ParentPath);
+        var fullPath = FileValidationHelper.CombineFolderPath(parentPath, safeName);
+        var effectiveClientId = request.Scope == FileScope.Global ? null : request.ClientId;
+        var effectiveSiteId = request.Scope == FileScope.Site ? request.SiteId : null;
+
+        var existingInScope = await db.ManagedFileFolders
+            .Where(f => f.Scope == request.Scope && f.ClientId == effectiveClientId && f.SiteId == effectiveSiteId)
+            .ToListAsync(ct);
+
+        if (existingInScope.Any(f => string.Equals(f.Path, fullPath, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Já existe uma pasta com este nome neste local.");
+
+        var effectiveVisibility = request.Visibility;
+        if (parentPath != "/")
+        {
+            var inherited = await ResolveAncestorOrFolderVisibilityAsync(
+                request.Scope, effectiveClientId, effectiveSiteId, parentPath, ct);
+            if (inherited.HasValue)
+                effectiveVisibility = inherited.Value;
+        }
+
+        var now = DateTime.UtcNow;
+
+        // Garante que todos os ancestrais intermediários existam no mesmo escopo/tenant.
+        if (parentPath != "/")
+        {
+            var segments = parentPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var running = "";
+            foreach (var seg in segments)
+            {
+                var prev = running == "" ? "/" : running;
+                running += "/" + seg;
+                if (!existingInScope.Any(f => string.Equals(f.Path, running, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var ancestor = new ManagedFileFolder
+                    {
+                        Id = IdGenerator.NewId(),
+                        Name = seg,
+                        Path = running,
+                        ParentPath = prev,
+                        Scope = request.Scope,
+                        ClientId = effectiveClientId,
+                        SiteId = effectiveSiteId,
+                        Visibility = effectiveVisibility,
+                        CreatedBy = actor,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    };
+                    db.ManagedFileFolders.Add(ancestor);
+                    existingInScope.Add(ancestor);
+                }
+            }
+        }
+
+        var entity = new ManagedFileFolder
+        {
+            Id = IdGenerator.NewId(),
+            Name = safeName,
+            Path = fullPath,
+            ParentPath = parentPath,
+            Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+            Scope = request.Scope,
+            ClientId = effectiveClientId,
+            SiteId = effectiveSiteId,
+            Visibility = effectiveVisibility,
+            CreatedBy = actor,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        db.ManagedFileFolders.Add(entity);
+        await db.SaveChangesAsync(ct);
+
+        return await MapFolderDtoAsync(entity, ct);
+    }
+
+    public async Task<ManagedFileFolderDto> UpdateFolderAsync(
+        Guid id,
+        UpdateManagedFileFolderRequest request,
+        CancellationToken ct = default)
+    {
+        var entity = await db.ManagedFileFolders.FirstOrDefaultAsync(f => f.Id == id, ct)
+            ?? throw new FileNotFoundException("Pasta não encontrada.");
+
+        var oldPath = FileValidationHelper.NormalizeFolderPath(entity.Path);
+        var now = DateTime.UtcNow;
+
+        if (!string.IsNullOrWhiteSpace(request.Name))
+        {
+            var safeName = FileValidationHelper.SanitizeFolderName(request.Name);
+            var newPath = FileValidationHelper.CombineFolderPath(entity.ParentPath, safeName);
+
+            if (!string.Equals(oldPath, newPath, StringComparison.Ordinal))
+            {
+                var scopeFolders = await db.ManagedFileFolders
+                    .Where(f => f.Scope == entity.Scope && f.ClientId == entity.ClientId && f.SiteId == entity.SiteId)
+                    .ToListAsync(ct);
+
+                if (scopeFolders.Any(f => f.Id != entity.Id && string.Equals(f.Path, newPath, StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidOperationException("Já existe uma pasta com este nome neste local.");
+
+                var oldPrefix = oldPath + "/";
+                foreach (var sub in scopeFolders.Where(f => f.Id != entity.Id && f.Path.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase)))
+                {
+                    sub.Path = newPath + sub.Path[oldPath.Length..];
+                    sub.ParentPath = FileValidationHelper.GetParentFolderPath(sub.Path);
+                    sub.UpdatedAt = now;
+                }
+
+                var scopeFiles = await db.ManagedFiles
+                    .Where(f => f.DeletedAt == null
+                                && f.Scope == entity.Scope
+                                && f.ClientId == entity.ClientId
+                                && f.SiteId == entity.SiteId)
+                    .ToListAsync(ct);
+
+                foreach (var file in scopeFiles)
+                {
+                    var fp = FileValidationHelper.NormalizeFolderPath(file.FolderPath);
+                    if (string.Equals(fp, oldPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        file.FolderPath = newPath;
+                        file.UpdatedAt = now;
+                    }
+                    else if (fp.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        file.FolderPath = newPath + fp[oldPath.Length..];
+                        file.UpdatedAt = now;
+                    }
+                }
+            }
+
+            entity.Name = safeName;
+            entity.Path = newPath;
+        }
+
+        if (request.Description is not null)
+            entity.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+
+        if (request.Visibility.HasValue && request.Visibility.Value != entity.Visibility)
+        {
+            if (FileValidationHelper.NormalizeFolderPath(entity.ParentPath) != "/")
+            {
+                throw new InvalidOperationException(
+                    "A visibilidade de subpastas é herdada da pasta raiz. Altere a visibilidade na pasta raiz para aplicá-la a toda a árvore.");
+            }
+
+            var currentPath = FileValidationHelper.NormalizeFolderPath(entity.Path);
+            var currentPrefix = currentPath + "/";
+            entity.Visibility = request.Visibility.Value;
+
+            var childFolders = await db.ManagedFileFolders
+                .Where(f => f.Id != entity.Id
+                            && f.Scope == entity.Scope
+                            && f.ClientId == entity.ClientId
+                            && f.SiteId == entity.SiteId)
+                .ToListAsync(ct);
+
+            foreach (var sub in childFolders.Where(f =>
+                         FileValidationHelper.NormalizeFolderPath(f.Path).StartsWith(currentPrefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                sub.Visibility = request.Visibility.Value;
+                sub.UpdatedAt = now;
+            }
+
+            var childFiles = await db.ManagedFiles
+                .Where(f => f.DeletedAt == null
+                            && f.Scope == entity.Scope
+                            && f.ClientId == entity.ClientId
+                            && f.SiteId == entity.SiteId)
+                .ToListAsync(ct);
+
+            foreach (var file in childFiles)
+            {
+                var fp = FileValidationHelper.NormalizeFolderPath(file.FolderPath);
+                if (string.Equals(fp, currentPath, StringComparison.OrdinalIgnoreCase)
+                    || fp.StartsWith(currentPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    file.Visibility = request.Visibility.Value;
+                    file.UpdatedAt = now;
+                }
+            }
+        }
+
+        entity.UpdatedAt = now;
+        await db.SaveChangesAsync(ct);
+
+        return await MapFolderDtoAsync(entity, ct);
+    }
+
+    private async Task<FileVisibility?> ResolveAncestorOrFolderVisibilityAsync(
+        FileScope scope,
+        Guid? clientId,
+        Guid? siteId,
+        string folderPath,
+        CancellationToken ct)
+    {
+        var norm = FileValidationHelper.NormalizeFolderPath(folderPath);
+        if (norm == "/")
+            return null;
+
+        var folders = await db.ManagedFileFolders.AsNoTracking()
+            .Where(f => f.Scope == scope && f.ClientId == clientId && f.SiteId == siteId)
+            .Select(f => new { f.Path, f.Visibility })
+            .ToListAsync(ct);
+
+        while (norm != "/")
+        {
+            var match = folders.FirstOrDefault(f =>
+                string.Equals(FileValidationHelper.NormalizeFolderPath(f.Path), norm, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                return match.Visibility;
+            norm = FileValidationHelper.GetParentFolderPath(norm);
+        }
+
+        return null;
+    }
+
+    public async Task DeleteFolderAsync(Guid id, bool moveFilesToParent = true, CancellationToken ct = default)
+    {
+        var entity = await db.ManagedFileFolders.FirstOrDefaultAsync(f => f.Id == id, ct)
+            ?? throw new FileNotFoundException("Pasta não encontrada.");
+
+        var oldPath = FileValidationHelper.NormalizeFolderPath(entity.Path);
+        var parentPath = FileValidationHelper.NormalizeFolderPath(entity.ParentPath);
+        var oldPrefix = oldPath + "/";
+        var now = DateTime.UtcNow;
+
+        var scopeFolders = await db.ManagedFileFolders
+            .Where(f => f.Scope == entity.Scope && f.ClientId == entity.ClientId && f.SiteId == entity.SiteId)
+            .ToListAsync(ct);
+
+        var subfolders = scopeFolders
+            .Where(f => f.Id != entity.Id && f.Path.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var scopeFiles = await db.ManagedFiles
+            .Where(f => f.DeletedAt == null
+                        && f.IsActive
+                        && f.Scope == entity.Scope
+                        && f.ClientId == entity.ClientId
+                        && f.SiteId == entity.SiteId)
+            .ToListAsync(ct);
+
+        var affectedFiles = scopeFiles
+            .Where(f =>
+            {
+                var fp = FileValidationHelper.NormalizeFolderPath(f.FolderPath);
+                return string.Equals(fp, oldPath, StringComparison.OrdinalIgnoreCase)
+                       || fp.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase);
+            })
+            .ToList();
+
+        if (!moveFilesToParent && (subfolders.Count > 0 || affectedFiles.Count > 0))
+            throw new InvalidOperationException("A pasta não está vazia. Remova ou mova os itens antes de excluir.");
+
+        var existingFoldersByPath = scopeFolders
+            .Where(f => f.Id != entity.Id && !subfolders.Contains(f))
+            .GroupBy(f => FileValidationHelper.NormalizeFolderPath(f.Path), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Visibility, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var sub in subfolders)
+        {
+            var suffix = sub.Path[oldPath.Length..];
+            var nextPath = FileValidationHelper.NormalizeFolderPath(parentPath == "/" ? suffix : parentPath + suffix);
+            if (existingFoldersByPath.ContainsKey(nextPath))
+            {
+                db.ManagedFileFolders.Remove(sub);
+            }
+            else
+            {
+                sub.Path = nextPath;
+                sub.ParentPath = FileValidationHelper.GetParentFolderPath(nextPath);
+                sub.UpdatedAt = now;
+                existingFoldersByPath[nextPath] = sub.Visibility;
+            }
+        }
+
+        foreach (var file in affectedFiles)
+        {
+            var fp = FileValidationHelper.NormalizeFolderPath(file.FolderPath);
+            if (string.Equals(fp, oldPath, StringComparison.OrdinalIgnoreCase))
+            {
+                file.FolderPath = parentPath;
+            }
+            else
+            {
+                var suffix = fp[oldPath.Length..]; // starts with '/'
+                file.FolderPath = FileValidationHelper.NormalizeFolderPath(parentPath == "/" ? suffix : parentPath + suffix);
+            }
+
+            var probe = file.FolderPath;
+            while (probe != "/")
+            {
+                if (existingFoldersByPath.TryGetValue(probe, out var inheritedVis))
+                {
+                    file.Visibility = inheritedVis;
+                    break;
+                }
+                probe = FileValidationHelper.GetParentFolderPath(probe);
+            }
+
+            file.UpdatedAt = now;
+        }
+
+        db.ManagedFileFolders.Remove(entity);
+        await db.SaveChangesAsync(ct);
+    }
+
+    private async Task<ManagedFileFolderDto> MapFolderDtoAsync(ManagedFileFolder f, CancellationToken ct)
+    {
+        var clientName = f.ClientId.HasValue
+            ? await db.Clients.AsNoTracking().Where(c => c.Id == f.ClientId.Value).Select(c => c.Name).FirstOrDefaultAsync(ct)
+            : null;
+        var siteName = f.SiteId.HasValue
+            ? await db.Sites.AsNoTracking().Where(s => s.Id == f.SiteId.Value).Select(s => s.Name).FirstOrDefaultAsync(ct)
+            : null;
+
+        var normPath = FileValidationHelper.NormalizeFolderPath(f.Path);
+        var prefix = normPath + "/";
+
+        var filePaths = await db.ManagedFiles.AsNoTracking()
+            .Where(x => x.DeletedAt == null && x.IsActive && x.Scope == f.Scope && x.ClientId == f.ClientId && x.SiteId == f.SiteId)
+            .Select(x => x.FolderPath)
+            .ToListAsync(ct);
+
+        var fileCount = filePaths.Count(fp =>
+        {
+            var normFp = FileValidationHelper.NormalizeFolderPath(fp);
+            return string.Equals(normFp, normPath, StringComparison.OrdinalIgnoreCase)
+                   || normFp.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        });
+
+        var subCount = await db.ManagedFileFolders.AsNoTracking()
+            .CountAsync(sf => sf.Scope == f.Scope && sf.ClientId == f.ClientId && sf.SiteId == f.SiteId && sf.ParentPath == normPath, ct);
+
+        return new ManagedFileFolderDto(
+            Id: f.Id,
+            Name: f.Name,
+            Path: normPath,
+            ParentPath: FileValidationHelper.NormalizeFolderPath(f.ParentPath),
+            Description: f.Description,
+            Scope: f.Scope,
+            ClientId: f.ClientId,
+            ClientName: clientName,
+            SiteId: f.SiteId,
+            SiteName: siteName,
+            Visibility: f.Visibility,
+            FileCount: fileCount,
+            SubfolderCount: subCount,
+            IsVirtual: f.Id == Guid.Empty,
+            CreatedBy: f.CreatedBy,
+            CreatedAt: f.CreatedAt);
     }
 
     public async Task<PresignedDownloadResponse> GetPublicFileDownloadUrlAsync(
@@ -567,7 +1176,7 @@ public sealed class ManagedFileService(
     }
 
     internal static ManagedFileSummaryDto ToSummary(ManagedFile f) => new(
-        f.Id, f.Name, f.FileName, f.Description, f.Category, f.ContentType, f.SizeBytes, f.Sha256, f.Scope);
+        f.Id, f.Name, f.FileName, f.Description, f.Category, f.ContentType, f.SizeBytes, f.Sha256, f.Scope, f.FolderPath);
 
     private static void ValidateScope(FileScope scope, Guid? clientId, Guid? siteId)
     {

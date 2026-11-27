@@ -200,6 +200,29 @@ public sealed class FileLinkService(
         var maxTotal = Math.Max(request.MaxTotalSizeBytes, request.MaxFileSizeBytes);
         var extensions = FileValidationHelper.NormalizeExtensions(request.AllowedExtensions);
         var mimes = FileValidationHelper.NormalizeMimeTypes(request.AllowedMimeTypes);
+        var targetFolderPath = FileValidationHelper.NormalizeFolderPath(
+            string.IsNullOrWhiteSpace(request.TargetFolderPath) ? "/recebidos" : request.TargetFolderPath);
+
+        if (targetFolderPath != "/")
+        {
+            var publicFolders = await db.ManagedFileFolders.AsNoTracking()
+                .Where(f => f.Visibility == FileVisibility.Public
+                            && (f.Scope == FileScope.Global
+                                || (request.ClientId.HasValue && f.ClientId == request.ClientId)
+                                || (request.SiteId.HasValue && f.SiteId == request.SiteId)))
+                .Select(f => f.Path)
+                .ToListAsync(ct);
+
+            var isPublicTarget = publicFolders.Any(pub =>
+            {
+                var normPub = FileValidationHelper.NormalizeFolderPath(pub);
+                return string.Equals(targetFolderPath, normPub, StringComparison.OrdinalIgnoreCase)
+                       || targetFolderPath.StartsWith(normPub + "/", StringComparison.OrdinalIgnoreCase);
+            });
+
+            if (isPublicTarget)
+                throw new InvalidOperationException("Não é permitido direcionar links de upload (File Drop) para pastas públicas. Escolha uma pasta privada (ex.: /recebidos).");
+        }
 
         var link = new FileUploadLink
         {
@@ -210,8 +233,7 @@ public sealed class FileLinkService(
             ClientId = request.ClientId,
             SiteId = request.SiteId,
             TicketId = request.TicketId,
-            TargetFolderPath = FileValidationHelper.NormalizeFolderPath(
-                string.IsNullOrWhiteSpace(request.TargetFolderPath) ? "/recebidos" : request.TargetFolderPath),
+            TargetFolderPath = targetFolderPath,
             RequirePasscode = request.RequirePasscode,
             PasscodeHash = request.RequirePasscode ? HashPasscode(request.Passcode!.Trim()) : null,
             ExpiresAtUtc = request.ExpiresAtUtc.ToUniversalTime(),

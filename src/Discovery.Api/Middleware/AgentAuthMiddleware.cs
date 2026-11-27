@@ -1,4 +1,6 @@
+using System.Security.Cryptography.X509Certificates;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Security;
 using Microsoft.Extensions.Configuration;
 
 namespace Discovery.Api.Middleware;
@@ -15,6 +17,7 @@ public class AgentAuthMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly string _agentAuthPathPrefix;
+    private readonly bool _strictMtls;
     private readonly ILogger<AgentAuthMiddleware> _logger;
     private const string AgentIdHeader = "X-Agent-ID";
     private const string DefaultPathPrefix = "/api/v1/agent-auth";
@@ -24,6 +27,7 @@ public class AgentAuthMiddleware
         _next = next;
         _logger = logger;
         _agentAuthPathPrefix = configuration.GetValue<string>("AgentAuth:PathPrefix") ?? DefaultPathPrefix;
+        _strictMtls = configuration.GetValue<bool?>("AgentMtls:StrictMode") ?? true;
     }
 
     public async Task InvokeAsync(
@@ -147,7 +151,74 @@ public class AgentAuthMiddleware
         context.Items["AgentId"] = token.AgentId;
         context.Items["TokenId"] = token.Id;
 
+        if (_strictMtls && !IsMtlsExemptEndpoint(path) && !IsDecommissionEndpoint(path))
+        {
+            var agentCaService = context.RequestServices.GetService<IAgentCaService>();
+            if (agentCaService is not null)
+            {
+                var (clientCert, ownsCert) = ExtractClientCertificate(context);
+                try
+                {
+                    var mtlsResult = agentCaService.ValidateClientCertificate(clientCert, token.AgentId);
+                    if (!mtlsResult.IsValid)
+                    {
+                        _logger.LogWarning("[AgentAuth] 401 mTLS rejeitado para AgentId={AgentId} ({Path}): {Error}",
+                            token.AgentId, path, mtlsResult.Error);
+                        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                        await context.Response.WriteAsJsonAsync(new
+                        {
+                            error = mtlsResult.Error ?? "Valid mTLS client certificate required.",
+                            code = "MTLS_CERT_REQUIRED"
+                        });
+                        return;
+                    }
+                }
+                finally
+                {
+                    if (ownsCert)
+                        clientCert?.Dispose();
+                }
+            }
+        }
+
         await _next(context);
+    }
+
+    private bool IsMtlsExemptEndpoint(PathString path)
+    {
+        if (!path.HasValue)
+            return false;
+        var value = path.Value!.TrimEnd('/');
+        var prefix = _agentAuthPathPrefix.TrimEnd('/');
+        return string.Equals(value, prefix + "/me/mtls/enroll", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, prefix + "/me/mtls/ca", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (X509Certificate2? Cert, bool OwnsCert) ExtractClientCertificate(HttpContext context)
+    {
+        if (context.Connection.ClientCertificate is not null)
+            return (context.Connection.ClientCertificate, false);
+
+        var verifyHeader = context.Request.Headers["X-SSL-Client-Verify"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(verifyHeader)
+            && !string.Equals(verifyHeader.Trim(), "SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            return (null, false);
+        }
+
+        var rawHeader = context.Request.Headers["X-SSL-Client-Cert"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(rawHeader))
+            return (null, false);
+
+        try
+        {
+            var pem = Uri.UnescapeDataString(rawHeader);
+            return (X509Certificate2.CreateFromPem(pem), true);
+        }
+        catch
+        {
+            return (null, false);
+        }
     }
 
     /// <summary>

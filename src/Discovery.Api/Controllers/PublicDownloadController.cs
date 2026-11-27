@@ -38,7 +38,8 @@ public class PublicDownloadController(
     public async Task<IActionResult> GetPortal(
         [FromQuery] string? search,
         [FromQuery] string? category,
-        CancellationToken ct)
+        [FromQuery] string? folder = null,
+        CancellationToken ct = default)
     {
         var server = await configResolver.GetServerAsync();
         var branding = await configResolver.GetConfigurationObjectAsync<BrandingSettings>("branding");
@@ -53,10 +54,11 @@ public class PublicDownloadController(
                 LogoUrl: branding?.LogoUrl,
                 ZeroTouch: new PublicZeroTouchInfoDto(false, false, null, null, null, null),
                 Files: [],
-                Categories: []));
+                Categories: [],
+                Folders: []));
         }
 
-        var (files, categories) = await fileService.ListPublicFilesAsync(search, category, ct);
+        var (files, categories, folders) = await fileService.ListPublicFilesAsync(search, category, folder, ct);
 
         PublicZeroTouchInfoDto zeroTouch;
         if (server.PublicDownloadZeroTouchEnabled)
@@ -83,7 +85,8 @@ public class PublicDownloadController(
             LogoUrl: branding?.LogoUrl,
             ZeroTouch: zeroTouch,
             Files: files,
-            Categories: categories));
+            Categories: categories,
+            Folders: folders));
     }
 
     [HttpPost("downloads/files/{id:guid}/download")]

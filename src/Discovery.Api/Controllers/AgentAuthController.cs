@@ -5,6 +5,7 @@ using Discovery.Core.Cqrs.AgentAuth.Status;
 using Discovery.Core.Cqrs.Notes.Commands;
 using Discovery.Core.DTOs;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Security;
 using Discovery.Core.ValueObjects;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -14,17 +15,54 @@ namespace Discovery.Api.Controllers;
 public class AgentAuthController : AgentAuthControllerBase
 {
     private readonly IP2pService _p2pService;
+    private readonly IAgentCaService _agentCaService;
+    private readonly ISiteRepository _siteRepo;
 
     public AgentAuthController(
         IMediator mediator,
         IAgentRepository agentRepo,
-        IP2pService p2pService)
+        ISiteRepository siteRepo,
+        IP2pService p2pService,
+        IAgentCaService agentCaService)
         : base(mediator, agentRepo)
     {
+        _siteRepo = siteRepo;
         _p2pService = p2pService;
+        _agentCaService = agentCaService;
     }
 
     // ── Identity & Status ─────────────────────────────────────────────────
+
+    [HttpGet("me/mtls/ca")]
+    public IActionResult GetMtlsCaCertificate()
+    {
+        if (!TryGetAgentId(out _)) return Unauthorized();
+        return Ok(new { caCertificatePem = _agentCaService.GetCaCertificatePem() });
+    }
+
+    public sealed record AgentMtlsEnrollRequest(string CsrPem);
+
+    [HttpPost("me/mtls/enroll")]
+    public async Task<IActionResult> EnrollMtls([FromBody] AgentMtlsEnrollRequest request, CancellationToken ct)
+    {
+        if (!TryGetAgentId(out var id)) return Unauthorized();
+        var (agent, blocked) = await GetAgentOrBlockAsync(id, true);
+        if (blocked is not null) return blocked;
+        if (request is null || string.IsNullOrWhiteSpace(request.CsrPem))
+            return BadRequest(new { error = "CsrPem é obrigatório." });
+
+        var site = await _siteRepo.GetByIdAsync(agent!.SiteId);
+        var clientId = site?.ClientId ?? Guid.Empty;
+        try
+        {
+            var result = _agentCaService.SignAgentCsr(agent.Id, clientId, request.CsrPem);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 
     [HttpGet("me")]
     public async Task<IActionResult> GetAgentIdentity()

@@ -121,6 +121,7 @@ builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IAgentCommandDispatcher, AgentCommandDispatcher>();
 builder.Services.AddScoped<ISyncInvalidationPublisher, SyncInvalidationPublisher>();
 builder.Services.AddSingleton<SpecialCommandPayloadValidator>();
+builder.Services.AddSingleton<IAgentCaService, AgentCaService>();
 builder.Services.AddSingleton<DashboardEventContractNormalizer>();
 builder.Services.AddSingleton<IRemoteDebugSessionManager, RemoteDebugSessionManager>();
 builder.Services.AddScoped<IAgentTransferService, AgentTransferService>();

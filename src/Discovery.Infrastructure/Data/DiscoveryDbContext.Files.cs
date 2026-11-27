@@ -6,6 +6,7 @@ namespace Discovery.Infrastructure.Data;
 public partial class DiscoveryDbContext
 {
     public DbSet<ManagedFile> ManagedFiles => Set<ManagedFile>();
+    public DbSet<ManagedFileFolder> ManagedFileFolders => Set<ManagedFileFolder>();
     public DbSet<FileShareLink> FileShareLinks => Set<FileShareLink>();
     public DbSet<FileShareLinkItem> FileShareLinkItems => Set<FileShareLinkItem>();
     public DbSet<FileUploadLink> FileUploadLinks => Set<FileUploadLink>();
@@ -45,6 +46,25 @@ public partial class DiscoveryDbContext
             entity.Property(f => f.DeletedAt).HasColumnName("deleted_at");
 
             entity.HasIndex(f => f.StorageObjectKey).IsUnique();
+        });
+
+        modelBuilder.Entity<ManagedFileFolder>(entity =>
+        {
+            entity.ToTable("managed_file_folders");
+            entity.HasKey(f => f.Id);
+
+            entity.Property(f => f.Id).HasColumnName("id").ValueGeneratedNever();
+            entity.Property(f => f.Name).HasColumnName("name").HasMaxLength(120);
+            entity.Property(f => f.Path).HasColumnName("path").HasMaxLength(500);
+            entity.Property(f => f.ParentPath).HasColumnName("parent_path").HasMaxLength(500);
+            entity.Property(f => f.Description).HasColumnName("description").HasMaxLength(1000);
+            entity.Property(f => f.Scope).HasColumnName("scope").HasConversion<short>();
+            entity.Property(f => f.ClientId).HasColumnName("client_id");
+            entity.Property(f => f.SiteId).HasColumnName("site_id");
+            entity.Property(f => f.Visibility).HasColumnName("visibility").HasConversion<short>();
+            entity.Property(f => f.CreatedBy).HasColumnName("created_by").HasMaxLength(255);
+            entity.Property(f => f.CreatedAt).HasColumnName("created_at");
+            entity.Property(f => f.UpdatedAt).HasColumnName("updated_at");
         });
 
         modelBuilder.Entity<FileShareLink>(entity =>
