@@ -21,7 +21,8 @@ public interface IKnowledgeChunkRepository
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool forAi = false);
 
     /// <summary>
     /// Busca semântica em múltiplos escopos (ACL do usuário).
@@ -36,7 +37,8 @@ public interface IKnowledgeChunkRepository
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool forAi = false);
 
     /// <summary>
     /// Chunks sem embedding gerado (para background service)
@@ -64,4 +66,5 @@ public record KnowledgeChunkSearchResult(
     Guid? ArticleSiteId,
     string? SectionTitle,
     string ChunkContent,
-    double Distance);
+    double Distance,
+    string ArticleStatus = "Published");

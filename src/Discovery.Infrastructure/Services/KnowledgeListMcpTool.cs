@@ -54,9 +54,12 @@ public class KnowledgeListMcpTool(
                 sortDirection: "desc",
                 ct: ct);
 
-            var total = await articleRepository.CountPublishedAsync(clientId, siteId, ct);
+            var rawTotal = await articleRepository.CountPublishedAsync(clientId, siteId, ct);
 
-            var articles = data.Items.Select(a => new
+            // Artigos com AiIndexingEnabled == false não são expostos à IA no catálogo.
+            var articles = data.Items
+                .Where(a => a.AiIndexingEnabled)
+                .Select(a => new
             {
                 article_id = a.Id,
                 title = a.Title,
@@ -67,6 +70,9 @@ public class KnowledgeListMcpTool(
                 updated_at = a.UpdatedAt,
                 internal_url = $"discovery://knowledge/article/{a.Id}"
             }).ToList();
+
+            var excludedOnPage = data.Items.Count - articles.Count;
+            var total = Math.Max(articles.Count, rawTotal - excludedOnPage);
 
             var message = total == 0
                 ? "A base de conhecimento ainda não tem artigos publicados para este escopo."

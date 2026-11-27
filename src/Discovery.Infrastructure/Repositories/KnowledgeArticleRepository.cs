@@ -57,7 +57,8 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         Guid? siteId,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool forAi = false)
     {
         var terms = KnowledgeKeywordQuery.BuildTerms(queryText);
         if (terms.Count == 0)
@@ -65,7 +66,12 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
 
         var query = db.KnowledgeArticles
             .Where(a => a.DeletedAt == null
-                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()));
+                && (a.Status == ArticleStatus.Published.ToString()
+                    || a.Status == ArticleStatus.Internal.ToString()
+                    || a.Status == ArticleStatus.AiOnly.ToString()));
+
+        if (forAi)
+            query = query.Where(a => a.AiIndexingEnabled);
 
         query = ApplyKeywordTerms(query, terms);
 
@@ -84,7 +90,7 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
-        query = ApplyStatusVisibility(query, departmentId, publishedOnly);
+        query = ApplyStatusVisibility(query, departmentId, publishedOnly, forAi);
 
         return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
     }
@@ -94,24 +100,28 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         CancellationToken ct = default)
         => await db.KnowledgeArticles
             .Where(a => a.DeletedAt == null
-                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString())
+                && a.AiIndexingEnabled
+                && (a.Status == ArticleStatus.Published.ToString()
+                    || a.Status == ArticleStatus.Internal.ToString()
+                    || a.Status == ArticleStatus.AiOnly.ToString())
                 && (a.LastChunkedAt == null || a.LastChunkedAt < a.UpdatedAt))
             .OrderBy(a => a.CreatedAt)
             .Take(limit)
             .ToListAsync(ct);
 
     public async Task<bool> HasPublishedArticlesAsync(
-        Guid? clientId, Guid? siteId, CancellationToken ct = default)
-        => await CountPublishedAsync(clientId, siteId, ct) > 0;
+        Guid? clientId, Guid? siteId, CancellationToken ct = default, bool forAi = false)
+        => await CountPublishedAsync(clientId, siteId, ct, forAi) > 0;
 
     public async Task<int> CountPublishedAsync(
-        Guid? clientId, Guid? siteId, CancellationToken ct = default)
+        Guid? clientId, Guid? siteId, CancellationToken ct = default, bool forAi = false)
     {
-        // Somente artigos PUBLICADOS: é o que o chat pode expor ao usuário.
-        // Artigos Internal orientam o departamento e não entram aqui.
         var query = db.KnowledgeArticles
-            .Where(a => a.DeletedAt == null
-                && a.Status == ArticleStatus.Published.ToString());
+            .Where(a => a.DeletedAt == null);
+
+        query = forAi
+            ? query.Where(a => a.AiIndexingEnabled && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.AiOnly.ToString()))
+            : query.Where(a => a.Status == ArticleStatus.Published.ToString());
 
         // Herança de escopo: site → client → global
         query = (clientId, siteId) switch
@@ -314,14 +324,11 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
         }
 
-        // Filtro de departamento (para artigos Internal).
-        // Com acesso global (admin), Internal fica visível mesmo sem departmentId;
-        // sem acesso global, Internal só aparece quando o departamento confere.
+        // Filtro de departamento: quando selecionado, filtra pelos artigos do departamento;
+        // sem departamento selecionado, usuários sem acesso global não veem artigos Internal.
         if (departmentId.HasValue)
         {
-            query = query.Where(a =>
-                a.Status != ArticleStatus.Internal.ToString() ||
-                a.DepartmentId == departmentId.Value);
+            query = query.Where(a => a.DepartmentId == departmentId.Value);
         }
         else if (!hasGlobalAccess)
         {
@@ -331,10 +338,41 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         if (!string.IsNullOrWhiteSpace(category))
             query = query.Where(a => a.Category != null && a.Category.ToLower() == category.ToLower());
 
-        // Ordenação suportada: "title" (padrão legacy) e "updatedAt".
-        // Direção: title default asc (compatível); updatedAt default desc (esperado pela UI).
+        // Ordenação suportada: "title" (padrão legacy), "updatedAt", "createdBy", "status", "scope".
         var sort = string.IsNullOrWhiteSpace(sortBy) ? "title" : sortBy.Trim().ToLowerInvariant();
         var direction = string.IsNullOrWhiteSpace(sortDirection) ? "" : sortDirection.Trim().ToLowerInvariant();
+
+        if (sort is "createdby" or "created_by" or "author" or "status" or "scope")
+        {
+            var descending = direction == "desc";
+            var offset = 0;
+            if (!string.IsNullOrWhiteSpace(cursor) &&
+                cursor.StartsWith("offset:", StringComparison.Ordinal) &&
+                int.TryParse(cursor[7..], out var parsedOffset))
+            {
+                offset = Math.Max(0, parsedOffset);
+            }
+
+            IOrderedQueryable<KnowledgeArticle> ordered = sort switch
+            {
+                "createdby" or "created_by" or "author" => descending
+                    ? query.OrderByDescending(a => a.CreatedBy ?? string.Empty).ThenByDescending(a => a.Id)
+                    : query.OrderBy(a => a.CreatedBy ?? string.Empty).ThenBy(a => a.Id),
+                "status" => descending
+                    ? query.OrderByDescending(a => a.Status).ThenByDescending(a => a.Id)
+                    : query.OrderBy(a => a.Status).ThenBy(a => a.Id),
+                _ => descending
+                    ? query.OrderByDescending(a => a.SiteId != null ? 2 : a.ClientId != null ? 1 : 0).ThenByDescending(a => a.Id)
+                    : query.OrderBy(a => a.SiteId != null ? 2 : a.ClientId != null ? 1 : 0).ThenBy(a => a.Id),
+            };
+
+            var sortPage = await ordered.Skip(offset).Take(limit + 1).ToListAsync(ct);
+            var sortHasMore = sortPage.Count > limit;
+            var sortItems = sortHasMore ? sortPage.Take(limit).ToList() : sortPage;
+            var sortNextCursor = sortHasMore ? $"offset:{offset + sortItems.Count}" : null;
+
+            return await BuildPageAsync(sortItems, sortHasMore, sortNextCursor, ct);
+        }
 
         if (sort is "updatedat" or "updated_at" or "updated")
         {
@@ -416,7 +454,12 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         var counts = await db.KnowledgeArticleChunks
             .Where(c => ids.Contains(c.ArticleId))
             .GroupBy(c => c.ArticleId)
-            .Select(g => new { g.Key, Total = g.Count() })
+            .Select(g => new
+            {
+                g.Key,
+                Total = g.Count(),
+                Embedded = g.Count(c => c.EmbeddingGeneratedAt != null)
+            })
             .ToListAsync(ct);
 
         return new ArticleListPageData
@@ -425,8 +468,33 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
             Count = items.Count,
             NextCursor = nextCursor,
             HasMore = hasMore,
-            ChunkCounts = counts.ToDictionary(x => x.Key, x => x.Total)
+            ChunkCounts = counts.ToDictionary(x => x.Key, x => x.Total),
+            EmbeddedChunkCounts = counts.ToDictionary(x => x.Key, x => x.Embedded)
         };
+    }
+
+    public async Task<IReadOnlyList<string>> ListDistinctCategoriesByUserScopeAsync(
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
+        CancellationToken ct = default)
+    {
+        var query = db.KnowledgeArticles
+            .Where(a => a.DeletedAt == null && a.Category != null && a.Category != "");
+
+        query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
+
+        var raw = await query
+            .Select(a => a.Category!)
+            .Distinct()
+            .ToListAsync(ct);
+
+        return raw
+            .Select(c => c.Trim())
+            .Where(c => c.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     public async Task<List<KnowledgeArticle>> SearchKeywordByUserScopeAsync(
@@ -436,7 +504,8 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         IReadOnlySet<Guid> allowedSiteIds,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool forAi = false)
     {
         var terms = KnowledgeKeywordQuery.BuildTerms(queryText);
         if (terms.Count == 0)
@@ -444,17 +513,21 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
 
         var query = db.KnowledgeArticles
             .Where(a => a.DeletedAt == null
-                && (a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.Internal.ToString()));
+                && (a.Status == ArticleStatus.Published.ToString()
+                    || a.Status == ArticleStatus.Internal.ToString()
+                    || a.Status == ArticleStatus.AiOnly.ToString()));
+
+        if (forAi)
+            query = query.Where(a => a.AiIndexingEnabled);
 
         query = ApplyKeywordTerms(query, terms);
         query = ApplyMultiScopeFilter(query, hasGlobalAccess, allowedClientIds, allowedSiteIds);
 
-        // "Published only" (chat do agent) tem precedência sobre a visibilidade de
-        // Internal. Sem ele, mantém a regra da listagem: com acesso global Internal
-        // fica visível; sem acesso global, só quando o departamento confere.
         if (publishedOnly)
         {
-            query = query.Where(a => a.Status == ArticleStatus.Published.ToString());
+            query = forAi
+                ? query.Where(a => a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.AiOnly.ToString())
+                : query.Where(a => a.Status == ArticleStatus.Published.ToString());
         }
         else if (departmentId.HasValue)
         {
@@ -504,10 +577,15 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
     private static IQueryable<KnowledgeArticle> ApplyStatusVisibility(
         IQueryable<KnowledgeArticle> query,
         Guid? departmentId,
-        bool publishedOnly)
+        bool publishedOnly,
+        bool forAi = false)
     {
         if (publishedOnly)
-            return query.Where(a => a.Status == ArticleStatus.Published.ToString());
+        {
+            return forAi
+                ? query.Where(a => a.Status == ArticleStatus.Published.ToString() || a.Status == ArticleStatus.AiOnly.ToString())
+                : query.Where(a => a.Status == ArticleStatus.Published.ToString());
+        }
 
         if (departmentId.HasValue)
             return query.Where(a =>

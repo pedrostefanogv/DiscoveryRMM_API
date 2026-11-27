@@ -26,3 +26,5 @@ public sealed record ListKnowledgeArticlesByUserScopeQuery(
     string? SortDirection = null) : IQuery<Result<CursorPageDto<ArticleListItem>>>;
 
 public sealed record GetKnowledgeArticleByIdQuery(Guid Id) : IQuery<Result<ArticleResponse>>;
+
+public sealed record GetKnowledgeCategoriesQuery() : IQuery<Result<IReadOnlyList<string>>>;

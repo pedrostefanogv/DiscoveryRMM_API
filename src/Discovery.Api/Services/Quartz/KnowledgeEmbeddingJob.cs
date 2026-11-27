@@ -174,8 +174,17 @@ public sealed class KnowledgeEmbeddingJob : IJob
             {
                 var article = await articleRepository.GetByIdAsync(item.ArticleId);
                 if (article == null || article.DeletedAt != null
-                    || (article.Status != "Published" && article.Status != "Internal"))
+                    || (article.Status != "Published" && article.Status != "Internal" && article.Status != "AiOnly"))
                 {
+                    await queueRepository.MarkDoneAsync(item.Id);
+                    continue;
+                }
+
+                if (!article.AiIndexingEnabled)
+                {
+                    await chunkRepository.ReplaceAllForArticleAsync(article.Id, []);
+                    article.LastChunkedAt = null;
+                    await articleRepository.UpdateAsync(article);
                     await queueRepository.MarkDoneAsync(item.Id);
                     continue;
                 }

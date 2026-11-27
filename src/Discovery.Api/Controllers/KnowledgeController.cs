@@ -87,7 +87,7 @@ public class KnowledgeController(
     {
         var result = await mediator.Send(new CreateKnowledgeArticleCommand(
             request.Title, request.Content, request.Category, request.Tags,
-            request.CreatedBy, request.ClientId, request.SiteId, request.DepartmentId), ct);
+            request.CreatedBy, request.ClientId, request.SiteId, request.DepartmentId, request.AiIndexingEnabled), ct);
         return result.Match<IActionResult>(
             success: article => CreatedAtAction(nameof(GetById), new { id = article.Id, version = "v1" }, article),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
@@ -98,8 +98,27 @@ public class KnowledgeController(
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateKnowledgeArticleCommand(
-            id, request.Title, request.Content, request.Category, request.Tags, request.LastEditedBy), ct);
+            id, request.Title, request.Content, request.Category, request.Tags, request.LastEditedBy,
+            request.ClientId, request.SiteId, request.DepartmentId, request.AiIndexingEnabled, request.UpdateScope), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
+    }
+
+    [HttpGet("categories")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
+    public async Task<IActionResult> GetCategories(CancellationToken ct)
+    {
+        var result = await mediator.Send(new GetKnowledgeCategoriesQuery(), ct);
+        return result.ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/reindex")]
+    [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
+    public async Task<IActionResult> Reindex(Guid id, CancellationToken ct)
+    {
+        var result = await mediator.Send(new ReindexKnowledgeArticleCommand(id), ct);
+        return result.Match<IActionResult>(
+            success: Ok,
+            failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
     [HttpDelete("{id:guid}")]

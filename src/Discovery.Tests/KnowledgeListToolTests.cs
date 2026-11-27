@@ -123,7 +123,7 @@ public class KnowledgeListToolTests
             return Task.FromResult(Page);
         }
 
-        public Task<int> CountPublishedAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default)
+        public Task<int> CountPublishedAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default, bool forAi = false)
             => Task.FromResult(Total);
 
         public Task<KnowledgeArticle?> GetByIdAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
@@ -132,11 +132,12 @@ public class KnowledgeListToolTests
         public Task<KnowledgeArticle> CreateAsync(KnowledgeArticle article, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<KnowledgeArticle> UpdateAsync(KnowledgeArticle article, CancellationToken ct = default) => throw new NotImplementedException();
         public Task DeleteAsync(Guid id, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<List<KnowledgeArticle>> SearchKeywordAsync(string query, Guid? clientId, Guid? siteId, Guid? departmentId = null, bool publishedOnly = false, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<List<KnowledgeArticle>> SearchKeywordByUserScopeAsync(string query, bool hasGlobalAccess, IReadOnlySet<Guid> allowedClientIds, IReadOnlySet<Guid> allowedSiteIds, Guid? departmentId = null, bool publishedOnly = false, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<List<KnowledgeArticle>> SearchKeywordAsync(string query, Guid? clientId, Guid? siteId, Guid? departmentId = null, bool publishedOnly = false, CancellationToken ct = default, bool forAi = false) => throw new NotImplementedException();
+        public Task<List<KnowledgeArticle>> SearchKeywordByUserScopeAsync(string query, bool hasGlobalAccess, IReadOnlySet<Guid> allowedClientIds, IReadOnlySet<Guid> allowedSiteIds, Guid? departmentId = null, bool publishedOnly = false, CancellationToken ct = default, bool forAi = false) => throw new NotImplementedException();
+        public Task<IReadOnlyList<string>> ListDistinctCategoriesByUserScopeAsync(bool hasGlobalAccess, IReadOnlySet<Guid> allowedClientIds, IReadOnlySet<Guid> allowedSiteIds, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<KnowledgeArticle>> GetArticlesNeedingChunkingAsync(int limit = 20, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<KnowledgeArticle>> GetByTicketAsync(Guid ticketId, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<bool> HasPublishedArticlesAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> HasPublishedArticlesAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default, bool forAi = false) => throw new NotImplementedException();
         public Task<KnowledgeArticleVersion> CreateVersionAsync(KnowledgeArticleVersion version, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<KnowledgeArticleVersion>> GetVersionsAsync(Guid articleId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<KnowledgeArticleVersion?> GetVersionAsync(Guid articleId, int versionNumber, CancellationToken ct = default) => throw new NotImplementedException();

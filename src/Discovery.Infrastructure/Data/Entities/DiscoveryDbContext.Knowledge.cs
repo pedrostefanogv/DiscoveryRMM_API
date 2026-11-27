@@ -28,6 +28,7 @@ public partial class DiscoveryDbContext
             entity.Property(article => article.Category).HasColumnName("category").HasMaxLength(200);
             entity.Property(article => article.TagsJson).HasColumnName("tags_json").HasColumnType("jsonb");
             entity.Property(article => article.Status).HasColumnName("status").HasMaxLength(20);
+            entity.Property(article => article.AiIndexingEnabled).HasColumnName("ai_indexing_enabled").HasDefaultValue(true);
             entity.Property(article => article.CreatedBy).HasColumnName("created_by").HasMaxLength(256);
             entity.Property(article => article.LastEditedBy).HasColumnName("last_edited_by").HasMaxLength(256);
             entity.Property(article => article.LastEditedAt).HasColumnName("last_edited_at").HasColumnType("timestamptz");

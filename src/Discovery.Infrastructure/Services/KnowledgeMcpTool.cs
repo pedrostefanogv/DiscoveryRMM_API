@@ -91,7 +91,8 @@ public class KnowledgeMcpTool(
                 excludeArticleIds: excludeArticleIds,
                 departmentId: departmentId,
                 publishedOnly: true,
-                ct: ct);
+                ct: ct,
+                forAi: true);
         }
         catch (Exception ex)
         {
@@ -112,7 +113,7 @@ public class KnowledgeMcpTool(
         try
         {
             var keywordResults = await articleRepository.SearchKeywordAsync(
-                query, clientId, siteId, departmentId: departmentId, publishedOnly: true, ct);
+                query, clientId, siteId, departmentId: departmentId, publishedOnly: true, ct, forAi: true);
             if (keywordResults.Count == 0)
                 return await BuildEmptyResultAsync(clientId, siteId, ct);
 
@@ -136,7 +137,7 @@ public class KnowledgeMcpTool(
         bool hasArticles;
         try
         {
-            hasArticles = await articleRepository.HasPublishedArticlesAsync(clientId, siteId, ct);
+            hasArticles = await articleRepository.HasPublishedArticlesAsync(clientId, siteId, ct, forAi: true);
         }
         catch (Exception ex)
         {
@@ -156,6 +157,19 @@ public class KnowledgeMcpTool(
 
     private static object BuildCitationResult(KnowledgeChunkSearchResult r, string? keywordScore, AIIntegrationSettings settings)
     {
+        if (string.Equals(r.ArticleStatus, Discovery.Core.Enums.ArticleStatus.AiOnly.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                ai_only = true,
+                content = TruncateContent(r.ChunkContent),
+                score = keywordScore ?? Math.Round(1.0 - r.Distance, 4).ToString("F4"),
+                scope = GetScope(r.ArticleClientId, r.ArticleSiteId),
+                source_line = keywordScore is not null ? "keyword" : "semantic",
+                guidance = "Use este conteúdo apenas para orientar a resposta; nunca cite o título nem gere link clicável."
+            };
+        }
+
         var baseFields = new
         {
             article_id = r.ArticleId,
@@ -188,6 +202,19 @@ public class KnowledgeMcpTool(
 
     private static object BuildKeywordCitation(Discovery.Core.Entities.KnowledgeArticle a, AIIntegrationSettings settings)
     {
+        if (string.Equals(a.Status, Discovery.Core.Enums.ArticleStatus.AiOnly.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return new
+            {
+                ai_only = true,
+                content = TruncateContent(a.Content),
+                score = (string?)null,
+                scope = GetScope(a.ClientId, a.SiteId),
+                source_line = "keyword",
+                guidance = "Use este conteúdo apenas para orientar a resposta; nunca cite o título nem gere link clicável."
+            };
+        }
+
         if (!settings.CitationsEnabled)
         {
             return new

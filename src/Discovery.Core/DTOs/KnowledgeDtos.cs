@@ -13,17 +13,23 @@ public record CreateArticleRequest(
     string? CreatedBy,
     Guid? ClientId,
     Guid? SiteId,
-    Guid? DepartmentId = null);
+    Guid? DepartmentId = null,
+    bool AiIndexingEnabled = true);
 
 public record UpdateArticleRequest(
     string Title,
     string Content,
     string? Category,
     List<string>? Tags,
-    string? LastEditedBy);
+    string? LastEditedBy,
+    Guid? ClientId = null,
+    Guid? SiteId = null,
+    Guid? DepartmentId = null,
+    bool? AiIndexingEnabled = null,
+    bool UpdateScope = false);
 
 public record PublishArticleRequest(
-    string Status,        // "Published" ou "Internal"
+    string Status,        // "Published", "Internal" ou "AiOnly"
     string? LastEditedBy,
     string? ChangeSummary = null);
 
@@ -62,7 +68,9 @@ public record ArticleListItem(
     DateTime? PublishedAt,
     int ChunkCount,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    bool AiIndexingEnabled = true,
+    int EmbeddedChunkCount = 0);
 
 public record ArticleResponse(
     Guid Id,
@@ -86,7 +94,9 @@ public record ArticleResponse(
     int ChunkCount,
     bool EmbeddingsReady,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    bool AiIndexingEnabled = true,
+    int EmbeddedChunkCount = 0);
 
 public record ArticleVersionResponse(
     Guid Id,
@@ -180,6 +190,8 @@ public class ArticleListPageData
     public bool HasMore { get; init; }
     /// <summary>Contagem de chunks por artigo da página (query agregada leve — chunks não são materializados).</summary>
     public IReadOnlyDictionary<Guid, int> ChunkCounts { get; init; } = new Dictionary<Guid, int>();
+    /// <summary>Contagem de chunks que já possuem embedding gerado por artigo da página.</summary>
+    public IReadOnlyDictionary<Guid, int> EmbeddedChunkCounts { get; init; } = new Dictionary<Guid, int>();
 }
 
 /// <summary>DTO plano para envio ao agent, sem navigation properties que causam recursão infinita.</summary>

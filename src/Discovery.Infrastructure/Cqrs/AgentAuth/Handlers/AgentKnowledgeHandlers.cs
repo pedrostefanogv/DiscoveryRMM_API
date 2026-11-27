@@ -77,13 +77,20 @@ public sealed class GetKnowledgeArticlesHandler(
 }
 
 public sealed class GetKnowledgeArticleHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
     IKnowledgeArticleRepository knowledgeRepo
 ) : IRequestHandler<GetKnowledgeArticleQuery, Result<object>>
 {
     public async Task<Result<object>> Handle(GetKnowledgeArticleQuery q, CancellationToken ct)
     {
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<object>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
         var article = await knowledgeRepo.GetByIdAsync(q.ArticleId, ct);
-        if (article is null)
+        if (article is null || article.DeletedAt != null || article.Status != "Published" || !IsVisibleToAgent(article, site?.ClientId, agent.SiteId))
             return Result<object>.Failure(Error.NotFound("Knowledge article not found."));
 
         // Mapeia para DTO plano para evitar ciclo de serialização
@@ -109,6 +116,11 @@ public sealed class GetKnowledgeArticleHandler(
         return Result<object>.Success(dto);
     }
 
+    private static bool IsVisibleToAgent(KnowledgeArticle article, Guid? clientId, Guid siteId)
+        => (article.ClientId == null && article.SiteId == null)
+           || (clientId.HasValue && article.ClientId == clientId.Value && article.SiteId == null)
+           || (article.SiteId == siteId);
+
     private static List<string> ParseTags(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return [];
@@ -118,22 +130,32 @@ public sealed class GetKnowledgeArticleHandler(
 }
 
 public sealed class GetKnowledgeArticlePagesHandler(
+    IAgentRepository agentRepo,
+    ISiteRepository siteRepo,
     IKnowledgeArticleRepository knowledgeRepo,
     IKnowledgeArticlePageRepository pageRepo)
     : IRequestHandler<GetKnowledgeArticlePagesQuery, Result<IReadOnlyList<ArticlePageTreeNode>>>
 {
     public async Task<Result<IReadOnlyList<ArticlePageTreeNode>>> Handle(GetKnowledgeArticlePagesQuery q, CancellationToken ct)
     {
-        // Consistente com GetKnowledgeArticleHandler (detalhe): não valida escopo aqui,
-        // pois o agente obtém os artigos da lista já filtrada por escopo (ListByUserScopeAsync).
+        var agent = await agentRepo.GetByIdAsync(q.AgentId);
+        if (agent is null)
+            return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound("Agent not found."));
+
+        var site = await siteRepo.GetByIdAsync(agent.SiteId);
         var article = await knowledgeRepo.GetByIdAsync(q.ArticleId, ct);
-        if (article is null)
+        if (article is null || article.DeletedAt != null || article.Status != "Published" || !IsVisibleToAgent(article, site?.ClientId, agent.SiteId))
             return Result<IReadOnlyList<ArticlePageTreeNode>>.Failure(Error.NotFound("Knowledge article not found."));
 
         var pages = await pageRepo.ListByArticleAsync(q.ArticleId, ct);
         var roots = BuildTree(pages);
         return Result<IReadOnlyList<ArticlePageTreeNode>>.Success(roots);
     }
+
+    private static bool IsVisibleToAgent(KnowledgeArticle article, Guid? clientId, Guid siteId)
+        => (article.ClientId == null && article.SiteId == null)
+           || (clientId.HasValue && article.ClientId == clientId.Value && article.SiteId == null)
+           || (article.SiteId == siteId);
 
     private static IReadOnlyList<ArticlePageTreeNode> BuildTree(List<KnowledgeArticlePage> pages)
     {

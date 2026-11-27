@@ -466,7 +466,7 @@ Leia code, scope e retryable SEMPRE que uma ferramenta retornar erro. A resposta
                 new Pgvector.Vector(embedding),
                 ragClientId, session.SiteId,
                 limit: maxChunks, minSimilarity: aiSettings.MinSimilarityScore,
-                departmentId: departmentId, publishedOnly: true, ct: ct);
+                departmentId: departmentId, publishedOnly: true, ct: ct, forAi: true);
 
             if (kbChunks.Count == 0)
                 return (basePrompt, injected);
@@ -476,6 +476,7 @@ Leia code, scope e retryable SEMPRE que uma ferramenta retornar erro. A resposta
             kbSection.AppendLine();
             kbSection.AppendLine("## Base de Conhecimento (contexto relevante)");
             kbSection.AppendLine("Os seguintes artigos da base de conhecimento podem ser relevantes para a pergunta atual:");
+            kbSection.AppendLine("Para itens marcados como 'Orientação interna para a IA', use apenas as instruções para responder ao usuário sem citar o título nem gerar link clicável.");
 
             var totalTokens = 0;
             foreach (var chunk in kbChunks)
@@ -492,9 +493,12 @@ Leia code, scope e retryable SEMPRE que uma ferramenta retornar erro. A resposta
                 if (totalTokens + estimatedTokens > ClampKbContextTokens(aiSettings)) break;
 
                 kbSection.AppendLine();
-                var sectionLabel = string.IsNullOrEmpty(chunk.SectionTitle)
-                    ? chunk.ArticleTitle
-                    : $"{chunk.ArticleTitle} — {chunk.SectionTitle}";
+                var isAiOnly = string.Equals(chunk.ArticleStatus, Discovery.Core.Enums.ArticleStatus.AiOnly.ToString(), StringComparison.OrdinalIgnoreCase);
+                var sectionLabel = isAiOnly
+                    ? "Orientação interna para a IA (NÃO citar título nem link ao usuário)"
+                    : string.IsNullOrEmpty(chunk.SectionTitle)
+                        ? chunk.ArticleTitle
+                        : $"{chunk.ArticleTitle} — {chunk.SectionTitle}";
                 kbSection.AppendLine($"### {sectionLabel}");
                 kbSection.AppendLine(chunkText);
                 kbSection.AppendLine("---");

@@ -60,6 +60,10 @@ public class UpdateArticleRequestValidator : AbstractValidator<UpdateArticleRequ
 
         RuleFor(x => x.LastEditedBy)
             .MaximumLength(256).WithMessage("LastEditedBy deve ter no máximo 256 caracteres.");
+
+        RuleFor(x => x.SiteId)
+            .Null().When(x => x.UpdateScope && x.ClientId == null)
+            .WithMessage("ClientId é obrigatório quando SiteId é informado.");
     }
 }
 
@@ -69,8 +73,10 @@ public class PublishArticleRequestValidator : AbstractValidator<PublishArticleRe
     {
         RuleFor(x => x.Status)
             .NotEmpty().WithMessage("Status é obrigatório.")
-            .Must(s => s == ArticleStatus.Published.ToString() || s == ArticleStatus.Internal.ToString())
-            .WithMessage("Status deve ser 'Published' ou 'Internal'.");
+            .Must(s => s == ArticleStatus.Published.ToString()
+                || s == ArticleStatus.Internal.ToString()
+                || s == ArticleStatus.AiOnly.ToString())
+            .WithMessage("Status deve ser 'Published', 'Internal' ou 'AiOnly'.");
 
         RuleFor(x => x.LastEditedBy)
             .MaximumLength(256).WithMessage("LastEditedBy deve ter no máximo 256 caracteres.");

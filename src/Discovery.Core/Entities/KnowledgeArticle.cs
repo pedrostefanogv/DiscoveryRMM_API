@@ -27,8 +27,11 @@ public class KnowledgeArticle
     public string? Category { get; set; }               // string livre
     public string? TagsJson { get; set; }               // JSONB: ["tag1","tag2"]
 
-    // Status tri-state: Draft, Published, Internal
+    // Status tri-state: Draft, Published, Internal, AiOnly
     public string Status { get; set; } = ArticleStatus.Draft.ToString();
+
+    // Controla se o artigo pode ser chunkado, indexado com embeddings e usado pela IA
+    public bool AiIndexingEnabled { get; set; } = true;
 
     // Autor original — imutável após criação
     public string? CreatedBy { get; set; }

@@ -52,7 +52,8 @@ public interface IKnowledgeArticleRepository
         Guid? siteId,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool forAi = false);
 
     /// <summary>
     /// Busca por palavra-chave em múltiplos escopos (ACL do usuário).
@@ -65,6 +66,13 @@ public interface IKnowledgeArticleRepository
         IReadOnlySet<Guid> allowedSiteIds,
         Guid? departmentId = null,
         bool publishedOnly = false,
+        CancellationToken ct = default,
+        bool forAi = false);
+
+    Task<IReadOnlyList<string>> ListDistinctCategoriesByUserScopeAsync(
+        bool hasGlobalAccess,
+        IReadOnlySet<Guid> allowedClientIds,
+        IReadOnlySet<Guid> allowedSiteIds,
         CancellationToken ct = default);
 
     /// <summary>
@@ -82,14 +90,14 @@ public interface IKnowledgeArticleRepository
     /// Usado como guard clause para evitar chamadas de embedding quando a KB está vazia
     /// e para distinguir "base sem artigos" de "busca sem resultado" no chat.
     /// </summary>
-    Task<bool> HasPublishedArticlesAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
+    Task<bool> HasPublishedArticlesAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default, bool forAi = false);
 
     /// <summary>
     /// Conta os artigos PUBLICADOS acessíveis no escopo (site → client → global).
     /// Usado pelo catálogo do chat (knowledge_list) para informar o total real,
     /// mesmo quando a página retornada é limitada.
     /// </summary>
-    Task<int> CountPublishedAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default);
+    Task<int> CountPublishedAsync(Guid? clientId, Guid? siteId, CancellationToken ct = default, bool forAi = false);
 
     // ─── Versionamento ──────────────────────────────────────────
 

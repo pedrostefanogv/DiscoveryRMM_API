@@ -26,7 +26,8 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool forAi = false)
     {
         var chunksQuery = db.KnowledgeArticleChunks
             .Include(c => c.Article)
@@ -34,12 +35,21 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 c.Embedding != null &&
                 c.Article.DeletedAt == null &&
                 (c.Article.Status == ArticleStatus.Published.ToString() ||
-                 c.Article.Status == ArticleStatus.Internal.ToString()));
+                 c.Article.Status == ArticleStatus.Internal.ToString() ||
+                 c.Article.Status == ArticleStatus.AiOnly.ToString()));
 
-        // Chat do agent: apenas artigos publicados (Internal é orientação interna
-        // do departamento e não deve chegar ao usuário final).
+        if (forAi)
+            chunksQuery = chunksQuery.Where(c => c.Article.AiIndexingEnabled);
+
+        // Chat do agent: apenas artigos publicados (ou AiOnly quando forAi=true).
         if (publishedOnly)
-            chunksQuery = chunksQuery.Where(c => c.Article.Status == ArticleStatus.Published.ToString());
+        {
+            chunksQuery = forAi
+                ? chunksQuery.Where(c =>
+                    c.Article.Status == ArticleStatus.Published.ToString() ||
+                    c.Article.Status == ArticleStatus.AiOnly.ToString())
+                : chunksQuery.Where(c => c.Article.Status == ArticleStatus.Published.ToString());
+        }
 
         // Filtro de herança de escopo via artigo pai
         chunksQuery = (clientId, siteId) switch
@@ -86,6 +96,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 ArticleTitle = c.Article.Title,
                 ArticleClientId = c.Article.ClientId,
                 ArticleSiteId = c.Article.SiteId,
+                ArticleStatus = c.Article.Status,
                 c.SectionTitle,
                 Content = c.Content,
                 Distance = (double)c.Embedding!.CosineDistance(queryEmbedding)
@@ -107,7 +118,8 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 x.ArticleSiteId,
                 x.SectionTitle,
                 x.Content,
-                x.Distance))
+                x.Distance,
+                x.ArticleStatus))
             .ToList();
     }
 
@@ -117,8 +129,10 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         => await db.KnowledgeArticleChunks
             .Include(c => c.Article)
             .Where(c => c.EmbeddingGeneratedAt == null
+                && c.Article.AiIndexingEnabled
                 && (c.Article.Status == ArticleStatus.Published.ToString() ||
-                    c.Article.Status == ArticleStatus.Internal.ToString())
+                    c.Article.Status == ArticleStatus.Internal.ToString() ||
+                    c.Article.Status == ArticleStatus.AiOnly.ToString())
                 && c.Article.DeletedAt == null)
             .OrderBy(c => c.ArticleId).ThenBy(c => c.ChunkIndex)
             .Take(limit)
@@ -152,7 +166,8 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
             .Where(c => c.Embedding != null
                 && c.EmbeddingGeneratedAt != null
                 && c.Article != null && c.Article.DeletedAt == null
-                && c.Article.Status == "Published");
+                && c.Article.AiIndexingEnabled
+                && (c.Article.Status == "Published" || c.Article.Status == "AiOnly"));
 
         // Herança de escopo
         query = (clientId, siteId) switch
@@ -194,7 +209,8 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
         IReadOnlyCollection<Guid>? excludeArticleIds = null,
         Guid? departmentId = null,
         bool publishedOnly = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool forAi = false)
     {
         var chunksQuery = db.KnowledgeArticleChunks
             .Include(c => c.Article)
@@ -202,17 +218,23 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 c.Embedding != null &&
                 c.Article.DeletedAt == null &&
                 (c.Article.Status == ArticleStatus.Published.ToString() ||
-                 c.Article.Status == ArticleStatus.Internal.ToString()));
+                 c.Article.Status == ArticleStatus.Internal.ToString() ||
+                 c.Article.Status == ArticleStatus.AiOnly.ToString()));
+
+        if (forAi)
+            chunksQuery = chunksQuery.Where(c => c.Article.AiIndexingEnabled);
 
         // Filtro multi-escopo
         chunksQuery = ApplyMultiScopeFilter(chunksQuery, hasGlobalAccess, allowedClientIds, allowedSiteIds);
 
-        // Chat do agent: apenas publicados, mesmo com acesso global. Sem esse
-        // flag, mantém a regra da listagem (Internal visível por departamento/ACL).
+        // Chat do agent: apenas publicados (ou AiOnly quando forAi=true).
         if (publishedOnly)
         {
-            chunksQuery = chunksQuery.Where(c =>
-                c.Article.Status == ArticleStatus.Published.ToString());
+            chunksQuery = forAi
+                ? chunksQuery.Where(c =>
+                    c.Article.Status == ArticleStatus.Published.ToString() ||
+                    c.Article.Status == ArticleStatus.AiOnly.ToString())
+                : chunksQuery.Where(c => c.Article.Status == ArticleStatus.Published.ToString());
         }
         else if (departmentId.HasValue)
         {
@@ -238,6 +260,7 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 ArticleTitle = c.Article.Title,
                 ArticleClientId = c.Article.ClientId,
                 ArticleSiteId = c.Article.SiteId,
+                ArticleStatus = c.Article.Status,
                 c.SectionTitle,
                 Content = c.Content,
                 Distance = (double)c.Embedding!.CosineDistance(queryEmbedding)
@@ -258,7 +281,8 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 x.ArticleSiteId,
                 x.SectionTitle,
                 x.Content,
-                x.Distance))
+                x.Distance,
+                x.ArticleStatus))
             .ToList();
     }
 
