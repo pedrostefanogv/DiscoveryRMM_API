@@ -74,6 +74,9 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
         string toolName, [FromQuery] Guid? clientId, [FromQuery] Guid? siteId, [FromQuery] Guid? agentId,
         CancellationToken ct)
     {
+        if (!IsValidToolName(toolName))
+            return BadRequest(new { errors = new[] { new { Code = "InvalidToolName", Message = "Nome de ferramenta inválido." } } });
+
         var removed = await governance.ResetPolicyAsync(toolName, NormalizeScope(clientId, siteId, agentId), ct);
         if (!removed)
             return NotFound(new { errors = new[] { new { Code = "NotOverridden", Message = "Não há sobrescrita neste escopo." } } });
@@ -88,6 +91,9 @@ public class McpToolsController(IMcpToolGovernance governance) : ControllerBase
         string toolName, [FromQuery] Guid? clientId, [FromQuery] Guid? siteId, [FromQuery] Guid? agentId,
         CancellationToken ct)
     {
+        if (!IsValidToolName(toolName))
+            return BadRequest(new { errors = new[] { new { Code = "InvalidToolName", Message = "Nome de ferramenta inválido." } } });
+
         var count = await governance.GetImpactAsync(toolName, NormalizeScope(clientId, siteId, agentId), ct);
         return Ok(new McpToolPolicyImpact(count));
     }

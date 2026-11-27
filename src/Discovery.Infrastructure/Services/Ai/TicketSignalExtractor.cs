@@ -15,8 +15,13 @@ public static partial class TicketSignalExtractor
     {
         "para", "com", "sem", "sobre", "pelo", "pela", "dos", "das", "uma", "que", "nao", "não",
         "esta", "está", "esse", "essa", "isso", "aqui", "quando", "onde", "como", "porque", "mais",
-        "menos", "muito", "pouco", "favor", "urgente", "ajuda", "problema", "erro", "favor",
+        "menos", "muito", "pouco", "favor", "urgente", "ajuda", "problema", "erro",
         "the", "and", "for", "with", "when", "this", "that", "from"
+    };
+
+    private static readonly HashSet<string> ShortTechAcronyms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "vpn", "dns", "sql", "rdp", "ssh", "sap", "erp", "cpu", "ram", "ssl", "tls", "nat", "ad", "ip", "os", "vm", "lan", "wan", "usb"
     };
 
     private static readonly (string Keyword, int Delta)[] DifficultyKeywords =
@@ -28,7 +33,7 @@ public static partial class TicketSignalExtractor
         ("impressora", -1), ("senha", -1), ("reset", -1), ("acesso", -1), ("instalar", -1)
     ];
 
-    [GeneratedRegex(@"[\p{L}\p{N}][\p{L}\p{N}\-_\.]{3,}", RegexOptions.Compiled)]
+    [GeneratedRegex(@"[\p{L}\p{N}][\p{L}\p{N}\-_\.]{1,}", RegexOptions.Compiled)]
     private static partial Regex TokenRegex();
 
     /// <summary>Tags derivadas da categoria e do texto do chamado (tokens relevantes).</summary>
@@ -43,7 +48,7 @@ public static partial class TicketSignalExtractor
         foreach (Match match in TokenRegex().Matches(text))
         {
             var token = match.Value;
-            if (token.Length < 4 || StopWords.Contains(token)) continue;
+            if ((token.Length < 4 && !ShortTechAcronyms.Contains(token)) || StopWords.Contains(token)) continue;
             if (tags.Contains(token, StringComparer.OrdinalIgnoreCase)) continue;
 
             tags.Add(token);

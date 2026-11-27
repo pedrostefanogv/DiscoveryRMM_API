@@ -2,6 +2,7 @@ using Discovery.Core.Configuration;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
 using Discovery.Infrastructure.Data;
+using Discovery.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace Discovery.Infrastructure.Repositories;
@@ -187,6 +188,10 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
 
             if (row is null)
             {
+                var meta = McpToolCatalogMetadata.For(reg.Name, normalizedSource);
+                var defaultTimeout = meta.TimeoutApplies
+                    ? (meta.RecommendedTimeoutSeconds > 0 ? meta.RecommendedTimeoutSeconds : (normalizedSource == McpToolSources.Agent ? 120 : 30))
+                    : 0;
                 _db.Set<McpToolPolicy>().Add(new McpToolPolicy
                 {
                     Id = Guid.NewGuid(),
@@ -198,7 +203,7 @@ public class McpToolPolicyRepository : IMcpToolPolicyRepository
                     // herdável (McpToolCallsPerMinute) é que reduz o efetivo em
                     // runtime, não o default da política.
                     MaxCallsPerMinute = McpToolRateLimitCatalog.DefaultCallsPerMinute,
-                    TimeoutSeconds = normalizedSource == McpToolSources.Agent ? 120 : 30,
+                    TimeoutSeconds = defaultTimeout,
                     CreatedAt = now,
                 });
                 added = true;

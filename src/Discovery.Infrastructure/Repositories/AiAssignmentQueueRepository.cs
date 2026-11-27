@@ -52,8 +52,10 @@ public class AiAssignmentQueueRepository(DiscoveryDbContext db) : IAiAssignmentQ
             WHERE id IN (
                 SELECT id
                 FROM ai_assignment_queue
-                WHERE status IN (@pending, @failed)
-                  AND available_at <= now()
+                WHERE (
+                    (status IN (@pending, @failed) AND available_at <= now() AND attempts < 10)
+                    OR (status = @processing AND updated_at < now() - interval '15 minutes')
+                )
                 ORDER BY updated_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT @limit
@@ -135,8 +137,10 @@ public class AiAssignmentQueueRepository(DiscoveryDbContext db) : IAiAssignmentQ
                 SELECT q.id
                 FROM ai_assignment_queue q
                 JOIN departments d ON d.id = q.department_id
-                WHERE q.status IN (@pending, @failed)
-                  AND q.available_at <= now()
+                WHERE (
+                    (q.status IN (@pending, @failed) AND q.available_at <= now() AND q.attempts < 10)
+                    OR (q.status = @processing AND q.updated_at < now() - interval '15 minutes')
+                )
                   AND " + clientFilter + @"
                 ORDER BY q.updated_at
                 FOR UPDATE OF q SKIP LOCKED

@@ -55,53 +55,58 @@ public class TicketAnswerEmbeddingProcessor(
             var candidates = pending.Where(item => IsEmbeddable(item.ValueText)).ToList();
             if (candidates.Count == 0) continue;
 
-            // Dedupe: respostas repetidas entre chamados custam uma única chamada.
-            var textsByAnswer = candidates.ToDictionary(
-                item => item.AnswerId,
-                item => BuildText(item.QuestionLabel, item.ValueText));
-            var distinctInputs = textsByAnswer.Values
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var indexByText = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < distinctInputs.Count; i++)
-                indexByText[distinctInputs[i]] = i;
-
-            var first = candidates[0];
-            var credential = await credentialResolver.ResolveAsync(first.ClientId, first.SiteId, ct);
-            var baseUrl = credential?.EffectiveEmbeddingBaseUrl
-                ?? (string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl);
-            var apiKey = credential?.EffectiveEmbeddingApiKey
-                ?? (string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey);
-
-            var embeddings = await embeddingProvider.GenerateEmbeddingsAsync(
-                distinctInputs, settings.EmbeddingModel, apiKey, baseUrl, ct);
-            if (embeddings.Count == 0) break;
-
-            // Divergência de dimensão: NÃO grava — o AutoSync/reset do ciclo
-            // realinha a coluna e o próximo ciclo reprocessa.
-            if (embeddings[0].Length != settings.EmbeddingDimensions)
+            var groupedByScope = candidates.GroupBy(c => (c.ClientId, c.SiteId));
+            foreach (var scopeGroup in groupedByScope)
             {
-                logger.LogWarning(
-                    "[TicketAnswerEmbedding] Dimensão {Actual} difere da configurada {Expected}. Aguardando realinhamento.",
-                    embeddings[0].Length, settings.EmbeddingDimensions);
-                break;
+                var scopeCandidates = scopeGroup.ToList();
+
+                // Dedupe dentro do escopo: respostas repetidas entre chamados do mesmo tenant custam uma única chamada.
+                var textsByAnswer = scopeCandidates.ToDictionary(
+                    item => item.AnswerId,
+                    item => BuildText(item.QuestionLabel, item.ValueText));
+                var distinctInputs = textsByAnswer.Values
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var indexByText = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                for (var i = 0; i < distinctInputs.Count; i++)
+                    indexByText[distinctInputs[i]] = i;
+
+                var credential = await credentialResolver.ResolveAsync(scopeGroup.Key.ClientId, scopeGroup.Key.SiteId, ct);
+                var baseUrl = credential?.EffectiveEmbeddingBaseUrl
+                    ?? (string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl);
+                var apiKey = credential?.EffectiveEmbeddingApiKey
+                    ?? (string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey);
+
+                var embeddings = await embeddingProvider.GenerateEmbeddingsAsync(
+                    distinctInputs, settings.EmbeddingModel, apiKey, baseUrl, ct);
+                if (embeddings.Count == 0) continue;
+
+                // Divergência de dimensão: NÃO grava — o AutoSync/reset do ciclo
+                // realinha a coluna e o próximo ciclo reprocessa.
+                if (embeddings[0].Length != settings.EmbeddingDimensions)
+                {
+                    logger.LogWarning(
+                        "[TicketAnswerEmbedding] Dimensão {Actual} difere da configurada {Expected}. Aguardando realinhamento.",
+                        embeddings[0].Length, settings.EmbeddingDimensions);
+                    return processed;
+                }
+
+                var updates = new List<TicketAnswerEmbeddingUpdate>(scopeCandidates.Count);
+                foreach (var candidate in scopeCandidates)
+                {
+                    if (!textsByAnswer.TryGetValue(candidate.AnswerId, out var text)) continue;
+                    if (!indexByText.TryGetValue(text, out var index)) continue;
+                    if (index >= embeddings.Count) continue;
+                    updates.Add(new TicketAnswerEmbeddingUpdate(candidate.AnswerId, embeddings[index]));
+                }
+
+                await repository.UpdateEmbeddingsAsync(updates, ct);
+                processed += updates.Count;
+
+                logger.LogDebug(
+                    "[TicketAnswerEmbedding] Lote processado (ClientId={ClientId}): {Count} respostas ({Distinct} textos distintos).",
+                    scopeGroup.Key.ClientId, updates.Count, distinctInputs.Count);
             }
-
-            var updates = new List<TicketAnswerEmbeddingUpdate>(candidates.Count);
-            foreach (var candidate in candidates)
-            {
-                if (!textsByAnswer.TryGetValue(candidate.AnswerId, out var text)) continue;
-                if (!indexByText.TryGetValue(text, out var index)) continue;
-                if (index >= embeddings.Count) continue;
-                updates.Add(new TicketAnswerEmbeddingUpdate(candidate.AnswerId, embeddings[index]));
-            }
-
-            await repository.UpdateEmbeddingsAsync(updates, ct);
-            processed += updates.Count;
-
-            logger.LogDebug(
-                "[TicketAnswerEmbedding] Lote processado: {Count} respostas ({Distinct} textos distintos).",
-                updates.Count, distinctInputs.Count);
         }
 
         return processed;

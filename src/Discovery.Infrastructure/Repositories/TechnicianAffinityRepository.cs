@@ -20,13 +20,13 @@ public class TechnicianAffinityRepository(
         SELECT t.assigned_to_user_id AS user_id,
                t.id                  AS ticket_id,
                t.title               AS title,
-               similarity(t.title || ' ' || coalesce(t.description, ''), @query) AS similarity
+               word_similarity(@query, t.title || ' ' || coalesce(t.description, '')) AS similarity
         FROM tickets t
         WHERE t.assigned_to_user_id IS NOT NULL
           AND t.closed_at IS NOT NULL
           AND t.deleted_at IS NULL
           AND (@client_id IS NULL OR t.client_id = @client_id)
-          AND (t.title || ' ' || coalesce(t.description, '')) % @query
+          AND @query <% (t.title || ' ' || coalesce(t.description, ''))
         ORDER BY similarity DESC
         LIMIT @limit;";
 

@@ -141,21 +141,38 @@ public class KnowledgeChunkingService : IKnowledgeChunkingService
     {
         var paragraphs = content.Split(["\n\n", "\r\n\r\n"], StringSplitOptions.RemoveEmptyEntries)
             .Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
-        return BuildChunks(paragraphs, title, startIdx, maxTokens);
+        return BuildChunks(paragraphs, title, startIdx, maxTokens, overlap);
     }
 
-    private static List<KnowledgeArticleChunk> BuildChunks(List<string> paragraphs, string? title, int startIdx, int maxTokens)
+    private static List<KnowledgeArticleChunk> BuildChunks(List<string> paragraphs, string? title, int startIdx, int maxTokens, int overlap)
     {
         var chunks = new List<KnowledgeArticleChunk>();
         var buffer = string.Empty;
 
         foreach (var para in paragraphs)
         {
+            if (EstimateTokens(para) > maxTokens)
+            {
+                if (!string.IsNullOrWhiteSpace(buffer))
+                {
+                    chunks.Add(new KnowledgeArticleChunk { ChunkIndex = startIdx + chunks.Count, SectionTitle = title, Content = buffer.Trim(), TokenCount = EstimateTokens(buffer) });
+                    buffer = string.Empty;
+                }
+                var sub = SplitFixedSize(para, title, maxTokens, overlap);
+                foreach (var s in sub)
+                {
+                    s.ChunkIndex = startIdx + chunks.Count;
+                    chunks.Add(s);
+                }
+                continue;
+            }
+
             var candidate = string.IsNullOrEmpty(buffer) ? para : buffer + "\n\n" + para;
             if (EstimateTokens(candidate) > maxTokens && !string.IsNullOrEmpty(buffer))
             {
                 chunks.Add(new KnowledgeArticleChunk { ChunkIndex = startIdx + chunks.Count, SectionTitle = title, Content = buffer.Trim(), TokenCount = EstimateTokens(buffer) });
-                buffer = para;
+                var overlapPrefix = overlap > 0 ? ExtractOverlap(buffer, overlap / 2) : string.Empty;
+                buffer = string.IsNullOrEmpty(overlapPrefix) ? para : overlapPrefix + "\n\n" + para;
             }
             else { buffer = candidate; }
         }
@@ -171,14 +188,16 @@ public class KnowledgeChunkingService : IKnowledgeChunkingService
         var words = content.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var chunks = new List<KnowledgeArticleChunk>();
         var i = 0; var idx = 0;
-        var wpc = (int)(maxTokens / 1.3);
+        var wpc = Math.Max(1, (int)(maxTokens / 1.3));
+        var step = Math.Max(1, wpc - Math.Min(Math.Max(0, overlap / 2), wpc - 1));
 
         while (i < words.Length)
         {
             var end = Math.Min(i + wpc, words.Length);
             var text = string.Join(" ", words[i..end]);
             chunks.Add(new KnowledgeArticleChunk { ChunkIndex = idx++, SectionTitle = title, Content = text, TokenCount = EstimateTokens(text) });
-            i = end - Math.Min(overlap / 2, end - i);
+            if (end >= words.Length) break;
+            i += step;
         }
 
         return chunks;
@@ -214,7 +233,12 @@ public class KnowledgeChunkingService : IKnowledgeChunkingService
         t = HeaderRegex.Replace(t, "$1");
         t = Regex.Replace(t, @"\*{1,3}(.+?)\*{1,3}", "$1");
         t = Regex.Replace(t, @"_{1,3}(.+?)_{1,3}", "$1");
-        t = Regex.Replace(t, @"`{1,3}[^`]*`{1,3}", "[codigo]");
+        t = Regex.Replace(t, @"```[^\n]*\n([\s\S]*?)```", m =>
+        {
+            var body = m.Groups[1].Value.Trim();
+            return body.Length > 1200 ? body[..1200] + "\n..." : body;
+        });
+        t = Regex.Replace(t, @"`([^`]+)`", "$1");
         t = Regex.Replace(t, @"\[([^\]]+)\]\([^\)]+\)", "$1");
         t = Regex.Replace(t, @"!\[[^\]]*\]\([^\)]+\)", "");
         t = Regex.Replace(t, @"<[^>]+>", "");

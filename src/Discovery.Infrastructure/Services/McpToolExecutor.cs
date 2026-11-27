@@ -270,11 +270,12 @@ public class McpToolExecutor : IMcpToolExecutor
         //
         // A resolução é ASSÍNCRONA e roda ANTES do AddOrUpdate do contador — se
         // rodasse depois, a chamada recusada já teria consumido cota da janela.
-        var effectiveMaxCallsPerMinute = policy.MaxCallsPerMinute;
+        var effectiveMaxCallsPerMinute = McpToolRateLimitCatalog.Normalize(policy.MaxCallsPerMinute);
         try
         {
+            var rawCeiling = await ResolveGlobalCeilingAsync(clientId, siteId, agentId, ct);
             effectiveMaxCallsPerMinute = McpToolRateLimitCatalog.Effective(
-                policy.MaxCallsPerMinute, await ResolveGlobalCeilingAsync(clientId, siteId, agentId, ct));
+                effectiveMaxCallsPerMinute, rawCeiling);
         }
         catch (Exception ex)
         {
@@ -282,16 +283,20 @@ public class McpToolExecutor : IMcpToolExecutor
             // execução da tool; o limite da própria política continua valendo.
             _logger.LogWarning(ex,
                 "Falha ao resolver o teto global de tools MCP para '{ToolName}'; usando o limite da política ({Max}/min)",
-                toolName, policy.MaxCallsPerMinute);
+                toolName, effectiveMaxCallsPerMinute);
         }
 
-        var rateKey = $"mcp_rate:{toolName}:{clientId}:{siteId}:{agentId}";
+        var rateKey = $"mcp:ratelimit:{toolName}:{clientId}:{siteId}:{agentId}";
         long currentCount;
         if (_redis?.IsConnected == true)
         {
             currentCount = await _redis.IncrementAsync(rateKey);
-            if (currentCount == 1)
-                await _redis.SetExpiryAsync(rateKey, 60);
+            if (currentCount == 1 || currentCount > effectiveMaxCallsPerMinute)
+            {
+                var ttl = await _redis.GetTtlSecondsAsync(rateKey);
+                if (ttl <= 0)
+                    await _redis.SetExpiryAsync(rateKey, 60);
+            }
         }
         else
         {
@@ -321,6 +326,7 @@ public class McpToolExecutor : IMcpToolExecutor
         if (!_handlers.TryGetValue(toolName, out var handler))
         {
             _logger.LogWarning("MCP tool '{ToolName}' sem handler registrado", toolName);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "error", 0, "Handler não registrado.", CancellationToken.None);
             return $"{{\"error\": \"Tool '{toolName}' não tem implementação registrada.\"}}";
         }
 
@@ -342,21 +348,27 @@ public class McpToolExecutor : IMcpToolExecutor
 
             var result = await handler(context);
             sw.Stop();
-            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "success", (int)sw.ElapsedMilliseconds, null, ct);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "success", (int)sw.ElapsedMilliseconds, null, CancellationToken.None);
             return result;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            sw.Stop();
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "cancelled", (int)sw.ElapsedMilliseconds, "Cancelado pelo chamador.", CancellationToken.None);
+            return $"{{\"error\": \"Execução da tool '{toolName}' cancelada.\"}}";
         }
         catch (OperationCanceledException)
         {
             sw.Stop();
             _logger.LogWarning("MCP tool '{ToolName}' timeout após {Timeout}s", toolName, policy.TimeoutSeconds);
-            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "timeout", (int)sw.ElapsedMilliseconds, $"Timeout de {policy.TimeoutSeconds}s", ct);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "timeout", (int)sw.ElapsedMilliseconds, $"Timeout de {policy.TimeoutSeconds}s", CancellationToken.None);
             return $"{{\"error\": \"Tool '{toolName}' excedeu timeout de {policy.TimeoutSeconds}s.\"}}";
         }
         catch (Exception ex)
         {
             sw.Stop();
             _logger.LogError(ex, "Erro ao executar MCP tool '{ToolName}'", toolName);
-            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "error", (int)sw.ElapsedMilliseconds, ex.Message, ct);
+            await RecordAuditAsync(toolName, clientId, siteId, agentId, sessionId, "error", (int)sw.ElapsedMilliseconds, ex.Message, CancellationToken.None);
             return $"{{\"error\": \"Erro interno ao executar tool '{toolName}'.\"}}";
         }
     }
@@ -449,11 +461,13 @@ public class McpToolExecutor : IMcpToolExecutor
 
     private async Task<string> HandleKnowledgeSearchAsync(McpToolCallContext ctx)
     {
-        var query = ctx.Arguments.RootElement.TryGetProperty("query", out var qProp)
+        var query = ctx.Arguments.RootElement.TryGetProperty("query", out var qProp) && qProp.ValueKind == JsonValueKind.String
             ? qProp.GetString() ?? string.Empty
             : string.Empty;
         var maxRes = ctx.Arguments.RootElement.TryGetProperty("max_results", out var mProp)
-            ? mProp.GetInt32()
+            && mProp.ValueKind == JsonValueKind.Number
+            && mProp.TryGetInt32(out var parsedMax)
+            ? parsedMax
             : 3;
 
         return await _knowledgeMcpTool.ExecuteWithSettingsAsync(
@@ -475,8 +489,10 @@ public class McpToolExecutor : IMcpToolExecutor
             ? cProp.GetString()
             : null;
 
-        var limit = root.TryGetProperty("limit", out var lProp) && lProp.ValueKind == JsonValueKind.Number
-            ? lProp.GetInt32()
+        var limit = root.TryGetProperty("limit", out var lProp)
+            && lProp.ValueKind == JsonValueKind.Number
+            && lProp.TryGetInt32(out var parsedLimit)
+            ? parsedLimit
             : 50;
 
         return await _knowledgeListMcpTool.ExecuteAsync(
@@ -486,7 +502,7 @@ public class McpToolExecutor : IMcpToolExecutor
     private static Task<string> HandleTimeCurrentAsync(McpToolCallContext ctx)
     {
         var now = DateTimeOffset.UtcNow;
-        var local = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(now, "E. South America Standard Time");
+        var local = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(now, "America/Sao_Paulo");
         var result = new
         {
             utc = now.ToString("O"),
@@ -500,11 +516,14 @@ public class McpToolExecutor : IMcpToolExecutor
     private static Task<string> HandleSequentialThinkingAsync(McpToolCallContext ctx)
     {
         // No-op: registra o pensamento no log para debug/trace, mas não afeta a execução.
-        var thought = ctx.Arguments.RootElement.TryGetProperty("thought", out var tProp)
+        var thought = ctx.Arguments.RootElement.TryGetProperty("thought", out var tProp) && tProp.ValueKind == JsonValueKind.String
             ? tProp.GetString() ?? string.Empty
             : string.Empty;
         var step = ctx.Arguments.RootElement.TryGetProperty("step", out var sProp)
-            ? sProp.GetInt32() : 0;
+            && sProp.ValueKind == JsonValueKind.Number
+            && sProp.TryGetInt32(out var parsedStep)
+            ? parsedStep
+            : 0;
 
         var result = new
         {
@@ -1052,44 +1071,33 @@ public class McpToolExecutor : IMcpToolExecutor
                 ctx.AgentId.Value, sensorId, targetKey, cursor: null, limit, ctx.CancellationToken);
 
             // Achata os canais em pontos { at, value | channels } respeitando o
-            // teto de limit: a série pode ter centenas de pontos por canal.
+            // Alinha canais pelo timestamp exato (em vez de índice posicional) para evitar
+            // mesclar amostras de instantes diferentes quando algum canal tem lacuna.
             var channelList = series.Channels.ToList();
-            var points = new List<object>();
-            var maxPoints = channelList.Count == 0 ? 0 : channelList.Max(c => c.Points.Count);
-            // Pega os ÚLTIMOS pontos (mais recentes) quando a série for maior que o limit.
-            var skip = Math.Max(0, maxPoints - limit);
-
-            for (var i = skip; i < maxPoints; i++)
+            var byTimestamp = new SortedDictionary<DateTime, Dictionary<string, double>>();
+            foreach (var ch in channelList)
             {
-                DateTime at = default;
-                var values = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-                var found = false;
-
-                foreach (var ch in channelList)
+                foreach (var point in ch.Points)
                 {
-                    if (i >= ch.Points.Count) continue;
-                    var point = ch.Points[i];
-                    if (!found)
+                    if (!point.V.HasValue) continue;
+                    if (!byTimestamp.TryGetValue(point.T, out var values))
                     {
-                        at = point.T;
-                        found = true;
+                        values = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                        byTimestamp[point.T] = values;
                     }
-
-                    if (point.V.HasValue)
-                        values[ch.Key] = point.V.Value;
+                    values[ch.Key] = point.V.Value;
                 }
-
-                if (!found) continue;
-
-                points.Add(new
-                {
-                    at,
-                    // Um único canal => 'value' (contrato simples do plano);
-                    // vários canais => mapa completo.
-                    value = values.Count == 1 ? values.Values.First() : (double?)null,
-                    channels = values
-                });
             }
+
+            var points = byTimestamp
+                .Skip(Math.Max(0, byTimestamp.Count - limit))
+                .Select(kvp => (object)new
+                {
+                    at = kvp.Key,
+                    value = kvp.Value.Count == 1 ? kvp.Value.Values.First() : (double?)null,
+                    channels = kvp.Value
+                })
+                .ToList();
 
             var eventItems = events.Items.Select(evt => new
             {
@@ -1131,7 +1139,7 @@ public class McpToolExecutor : IMcpToolExecutor
                 events = eventItems,
                 eventCount = eventItems.Count,
                 nextEventCursor = events.NextCursor,
-                truncated = maxPoints > limit,
+                truncated = byTimestamp.Count > limit,
                 // Limiares são INFORMATIVOS: quem decide status é o servidor.
                 thresholds = new
                 {
@@ -1266,6 +1274,20 @@ public class McpToolExecutor : IMcpToolExecutor
 
         if (Guid.TryParse(ticketIdRaw, out var existingTicketId))
         {
+            if (!ctx.ClientId.HasValue)
+                return JsonSerializer.Serialize(new { error = "Contexto de cliente ausente para validar acesso ao chamado." });
+
+            var existingRes = await _mediator.Send(new GetTicketByIdQuery(existingTicketId), ctx.CancellationToken);
+            if (!existingRes.IsSuccess || existingRes.Value is null)
+                return JsonSerializer.Serialize(new { error = existingRes.Errors.FirstOrDefault()?.Message ?? "Chamado não encontrado." });
+
+            var existingTicket = existingRes.Value;
+            if (existingTicket.ClientId != ctx.ClientId.Value ||
+                (ctx.AgentId.HasValue && existingTicket.AgentId.HasValue && existingTicket.AgentId.Value != ctx.AgentId.Value))
+            {
+                return JsonSerializer.Serialize(new { error = "Chamado não pertence ao escopo desta máquina." });
+            }
+
             var commentRes = await _mediator.Send(
                 new AddTicketCommentCommand(existingTicketId, body, IsInternal: false, UserId: null, UserName: "Assistente IA (Escalonamento)"),
                 ctx.CancellationToken);
@@ -1380,8 +1402,12 @@ public class McpToolExecutor : IMcpToolExecutor
         if (!res.IsSuccess)
             return JsonSerializer.Serialize(new { error = res.Errors.FirstOrDefault()?.Message ?? "Chamado não encontrado." });
 
+        if (!ctx.ClientId.HasValue)
+            return JsonSerializer.Serialize(new { error = "Contexto de cliente ausente para validar acesso ao chamado." });
+
         var t = res.Value!;
-        if (ctx.ClientId.HasValue && t.ClientId != ctx.ClientId.Value)
+        if (t.ClientId != ctx.ClientId.Value ||
+            (ctx.AgentId.HasValue && t.AgentId.HasValue && t.AgentId.Value != ctx.AgentId.Value))
             return JsonSerializer.Serialize(new { error = "Chamado não pertence ao escopo desta máquina." });
 
         return JsonSerializer.Serialize(new

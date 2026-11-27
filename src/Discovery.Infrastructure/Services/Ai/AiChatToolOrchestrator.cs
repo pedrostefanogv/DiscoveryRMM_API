@@ -55,17 +55,19 @@ public class AiChatToolOrchestrator
 
     private static readonly Dictionary<string, string> EmptyArgHints = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["software"] = "VOCÊ CHAMOU software COM PARÂMETROS VAZIOS. Informe 'action' (search, list_installed, list_start_menu, pending_updates, actions, install, upgrade, upgrade_all, uninstall). Para 'search', informe 'query'; para 'install'/'upgrade'/'uninstall', informe o 'id' obtido em action='search'.",
         ["search_packages"] = "VOCÊ CHAMOU search_packages COM query VAZIA. ISSO É UM ERRO GRAVE. Leia a mensagem do usuário no histórico e extraia o nome do programa. Se o usuário disse \"Quero instalar o Foxit\", você DEVE chamar search_packages com query=\"Foxit\". NÃO desista. NÃO mude de assunto. NÃO pergunte ao usuário o que ele quer — ele JÁ disse. CORRIJA o parâmetro query e chame search_packages novamente AGORA.",
         ["ask_user"] = "VOCÊ CHAMOU ask_user COM question VAZIA. Leia o histórico da conversa e formule uma pergunta clara baseada no contexto.",
-        ["create_ticket"] = "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, categoria e prioridade. NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
+        ["create_ticket"] = "VOCÊ CHAMOU create_ticket COM PARÂMETROS VAZIOS. Extraia do histórico: título, descrição, departmentId e prioridade (1-4). NÃO pergunte ao usuário — ele JÁ forneceu as informações.",
         ["install_package"] = "VOCÊ CHAMOU install_package COM PARÂMETROS VAZIOS. Você precisa do 'id' exato — execute search_packages PRIMEIRO para obter o ID correto do programa. NUNCA invente um ID. Se ainda não executou search_packages, faça isso AGORA.",
     };
 
     private static readonly Dictionary<string, string> EmptyArgHintsAscii = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["software"] = "VOCE CHAMOU software COM PARAMETROS VAZIOS. Informe 'action' e os parametros necessarios ('query' para search, 'id' para install/upgrade/uninstall).",
         ["search_packages"] = "VOCE CHAMOU search_packages COM query VAZIA. Leia a mensagem do usuario no historico e extraia o nome do programa. Se o usuario disse \"Quero instalar o Adobe Acrobat\", voce DEVE chamar search_packages com query=\"Adobe Acrobat\". NAO desista. CORRIJA o parametro query e chame search_packages novamente AGORA.",
         ["ask_user"] = "VOCE CHAMOU ask_user COM question VAZIA. Leia o historico e formule uma pergunta clara.",
-        ["create_ticket"] = "VOCE CHAMOU create_ticket COM PARAMETROS VAZIOS. Extraia do historico: titulo, descricao, categoria e prioridade.",
+        ["create_ticket"] = "VOCE CHAMOU create_ticket COM PARAMETROS VAZIOS. Extraia do historico: titulo, descricao, departmentId e prioridade (1-4).",
         ["install_package"] = "VOCE CHAMOU install_package COM PARAMETROS VAZIOS. Extraia do historico o nome/id do programa.",
     };
 
@@ -270,7 +272,7 @@ public class AiChatToolOrchestrator
                 "search_packages" => new[] { "query" },
                 "install_package" => new[] { "id" },
                 "ask_user" => new[] { "question" },
-                "create_ticket" => new[] { "title", "description", "category", "priority" },
+                "create_ticket" => new[] { "title", "description", "departmentId" },
                 _ => Array.Empty<string>()
             };
             foreach (var r in toAdd)
@@ -328,6 +330,8 @@ public class AiChatToolOrchestrator
     {
         var enrichment = toolName switch
         {
+            "software" => "Gerencia aplicativos e pacotes winget. Para buscar softwares use action='search' com 'query'; para instalar/atualizar/desinstalar obtenha o 'id' exato antes via action='search' ou 'list_installed'.",
+
             "search_packages" => "Busca softwares e aplicativos disponíveis para instalação nos repositórios do RMM. Use APENAS quando o usuário solicitar instalar, atualizar ou buscar informações sobre programas (ex: 'Quero o Firefox', 'Tem Adobe?'). NÃO use esta ferramenta para buscar scripts de automação, configurações de rede, status de hardware ou logs de eventos. O parâmetro 'query' é OBRIGATÓRIO e deve conter o nome ou parte do nome do software (ex: 'chrome', 'office 365', 'adobe'). NUNCA envie query vazia. Se o usuário não especificou qual software, pergunte antes de chamar a ferramenta.",
 
             "install_package" => "Instala um programa no computador do usuário. PRÉ-REQUISITO: você DEVE ter obtido o 'id' exato da ferramenta 'search_packages' ANTES de chamar esta função. NUNCA invente ou adivinhe um ID — se ainda não tem o ID, chame 'search_packages' primeiro. NÃO use para desinstalar, atualizar ou reparar programas — apenas para instalação limpa. Aguarde a confirmação do usuário antes de instalar.",
@@ -338,7 +342,7 @@ public class AiChatToolOrchestrator
 
             "list_tickets" => "Lista os chamados vinculados a esta máquina em formato resumido (id, title, description curta, category, priority, workflowStateId, isOpen, createdAt, closedAt), com os ABERTOS primeiro e os contadores total/openCount/returned/truncated. Chame SEMPRE antes de create_ticket para verificar se já existe chamado ABERTO (isOpen=true, equivalente a ClosedAt nulo) sobre o MESMO assunto e evitar chamado duplicado. Se existir, NÃO abra duplicata: informe o usuário e ofereça complementar o chamado existente com add_ticket_comment. Se truncated=true, existem chamados fora do recorte — não conclua que não há duplicata sem considerar isso. Use get_ticket_details(ticketId) para o texto completo. Use também quando o usuário perguntar quais chamados ele tem.",
 
-            "create_ticket" => "Abre um chamado de suporte técnico para a equipe de TI. Use APENAS quando: (a) você não conseguiu resolver o problema com as ferramentas disponíveis, ou (b) o usuário solicitou explicitamente abrir um chamado. PRÉ-REQUISITO ANTIDUPLICIDADE (OBRIGATÓRIO): antes de abrir, chame list_tickets e confirme que NÃO existe chamado aberto (ClosedAt nulo) sobre o mesmo assunto; se existir, NÃO abra um novo chamado — avise o usuário e ofereça complementar o existente via add_ticket_comment. Só abra um chamado novo se o usuário confirmar explicitamente que é um problema diferente. NÃO abra chamado sem antes tentar resolver o problema ou sem confirmar os dados com o usuário. Parâmetros obrigatórios: title (título resumido, ex: 'Instalação do Foxit Reader no DESKTOP-ABC'), description (detalhamento completo do problema, ações já tentadas e contexto), category (Software, Hardware, Rede, Impressora, Acesso/Senha, Outro) e priority (Baixa, Média, Alta — avalie pelo impacto e urgência). Quando um template foi escolhido, envie também templateId e answers (respostas do mini questionário do template, chave->valor); envie customFields apenas para os campos personalizados do departamento (definitionId->valor). NUNCA envie parâmetros vazios — extraia do histórico da conversa.",
+            "create_ticket" => "Abre um chamado de suporte técnico. PRÉ-REQUISITO ANTIDUPLICIDADE: antes de abrir, chame list_tickets e confirme que NÃO existe chamado aberto (ClosedAt nulo) sobre o mesmo assunto; se existir, ofereça add_ticket_comment no existente. Parâmetros obrigatórios: title, description, departmentId (obtido via list_departments). Parâmetros opcionais: priority (inteiro: 1=Baixa, 2=Média, 3=Alta, 4=Crítica), category, templateId, answers e customFields. NUNCA envie parâmetros vazios.",
 
             _ => null
         };
@@ -606,10 +610,10 @@ public class AiChatToolOrchestrator
 
             if (jsonEnd > 0)
             {
-                var full = content.Substring(openIdx, jsonEnd - openIdx + 1);
-                full += content.Substring(jsonEnd + 1, tagEnd - (jsonEnd + 1));
+                var fullEnd = Math.Min(content.Length, tagEnd + closingTag.Length);
+                var full = content[openIdx..fullEnd];
                 calls.Add(new BalancedXmlToolCall(full, toolName, content.Substring(jsonStart, jsonEnd - jsonStart + 1)));
-                openIdx = tagEnd + closingTag.Length;
+                openIdx = fullEnd;
             }
             else
             {
@@ -1072,14 +1076,14 @@ public class AiChatToolOrchestrator
         }
 
         // Quando o declarer ORIGINAL de um call_id está fora da janela, a
-        // resposta dele fica órfã. Se outro declarer (adiante) declara o MESMO
+        // resposta dele fica órfã. Se outro declarer anterior à resposta declara o MESMO
         // call_id, a resposta é reaproveitada para ele em vez de ser descartada.
         foreach (var pair in answerOf.ToList())
         {
             if (declarerOf[pair.Key] >= 0 && resolved[declarerOf[pair.Key]]) continue;
-            for (var d = pair.Value + 1; d < source.Count; d++)
+            for (var d = 0; d < pair.Value; d++)
             {
-                if (!resolved[d] || !declares[d].Contains(pair.Key)) continue;
+                if (!declares[d].Contains(pair.Key)) continue;
                 declarerOf[pair.Key] = d;
                 break;
             }

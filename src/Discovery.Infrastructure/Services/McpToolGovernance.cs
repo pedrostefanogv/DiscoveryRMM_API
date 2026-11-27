@@ -137,7 +137,7 @@ public class McpToolGovernance : IMcpToolGovernance
                 TimeoutSeconds: isCapability
                                ? 0
                                : (policy?.TimeoutSeconds
-                                  ?? (metadata.TimeoutApplies ? metadata.RecommendedTimeoutSeconds : defaults.Timeout)),
+                                  ?? (metadata.TimeoutApplies ? metadata.RecommendedTimeoutSeconds : 0)),
                 LowerScopeOverrides: lowerScopeCounts.GetValueOrDefault(name),
                 Category: metadata.Category,
                 WhenToUse: metadata.WhenToUse,
@@ -188,8 +188,12 @@ public class McpToolGovernance : IMcpToolGovernance
             // Herda a descrição registrada pelo agente para que a sobrescrita no
             // escopo não perca a explicação da ferramenta.
             Description = inherited?.Description,
-            MaxCallsPerMinute = request.MaxCallsPerMinute is > 0 ? request.MaxCallsPerMinute.Value : defaults.Max,
-            TimeoutSeconds = request.TimeoutSeconds is > 0 ? request.TimeoutSeconds.Value : defaults.Timeout,
+            MaxCallsPerMinute = request.MaxCallsPerMinute is > 0
+                ? request.MaxCallsPerMinute.Value
+                : (inherited?.MaxCallsPerMinute ?? defaults.Max),
+            TimeoutSeconds = request.TimeoutSeconds is > 0
+                ? request.TimeoutSeconds.Value
+                : (inherited?.TimeoutSeconds ?? defaults.Timeout),
         }, ct);
 
         return await GetCatalogAsync(scope, ct);

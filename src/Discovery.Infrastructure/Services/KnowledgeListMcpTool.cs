@@ -54,7 +54,7 @@ public class KnowledgeListMcpTool(
                 sortDirection: "desc",
                 ct: ct);
 
-            var rawTotal = await articleRepository.CountPublishedAsync(clientId, siteId, ct);
+            var rawTotal = await articleRepository.CountPublishedAsync(clientId, siteId, ct, forAi: true);
 
             // Artigos com AiIndexingEnabled == false não são expostos à IA no catálogo.
             var articles = data.Items

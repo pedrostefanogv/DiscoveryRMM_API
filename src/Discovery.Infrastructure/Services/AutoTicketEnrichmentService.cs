@@ -57,14 +57,17 @@ public class AutoTicketEnrichmentService(
     /// </summary>
     private const int CtsGraceMs = 2_000;
 
-    // ── Circuito ───────────────────────────────────────────────────────────
-    // Após K falhas consecutivas, para de chamar o provedor por M minutos.
+    // ── Circuito por tenant (um tenant sem créditos/chave não derruba os demais) ──
     private const int CircuitFailureThreshold = 3;
     private static readonly TimeSpan CircuitOpenDuration = TimeSpan.FromMinutes(5);
 
-    private static int _consecutiveFailures;
-    private static DateTime _circuitOpenedAt = DateTime.MinValue;
-    private static readonly Lock CircuitLock = new();
+    private sealed class TenantCircuitState
+    {
+        public int ConsecutiveFailures;
+        public DateTime CircuitOpenedAt = DateTime.MinValue;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, TenantCircuitState> TenantCircuits = new();
 
     public async Task<AutoTicketEnrichment> EnrichAsync(
         AgentMonitoringEvent monitoringEvent,
@@ -75,9 +78,9 @@ public class AutoTicketEnrichmentService(
         if (policy.AiMode == AutoTicketAiMode.Off)
             return AutoTicketEnrichment.Fallback("AI mode is off.");
 
-        if (IsCircuitOpen())
+        if (IsCircuitOpen(monitoringEvent.ClientId))
         {
-            logger.LogDebug("Circuito de IA do auto-ticket aberto; usando texto determinístico.");
+            logger.LogDebug("Circuito de IA do auto-ticket aberto para ClientId={ClientId}; usando texto determinístico.", monitoringEvent.ClientId);
             return AutoTicketEnrichment.Fallback("Circuit breaker is open.");
         }
 
@@ -133,23 +136,25 @@ public class AutoTicketEnrichmentService(
                     OpenRouterReferer: settings.OpenRouterReferer,
                     OpenRouterTitle: settings.OpenRouterTitle,
                     OpenRouterCategories: settings.OpenRouterCategories,
-                    TimeoutMs: providerTimeoutMs),
+                    TimeoutMs: providerTimeoutMs,
+                    ResponseFormat: "json_object",
+                    ReasoningEffort: "low"),
                 cts.Token);
 
             var enrichment = ParseResponse(response, policy);
 
             if (enrichment.UsedFallback)
             {
-                RegisterFailure();
+                RegisterFailure(monitoringEvent.ClientId);
                 return enrichment;
             }
 
-            RegisterSuccess();
+            RegisterSuccess(monitoringEvent.ClientId);
             return enrichment;
         }
         catch (OperationCanceledException)
         {
-            RegisterFailure();
+            RegisterFailure(monitoringEvent.ClientId);
             logger.LogWarning(
                 "Timeout no enriquecimento por IA do evento {MonitoringEventId}; usando texto determinístico.",
                 monitoringEvent.Id);
@@ -157,7 +162,7 @@ public class AutoTicketEnrichmentService(
         }
         catch (Exception ex)
         {
-            RegisterFailure();
+            RegisterFailure(monitoringEvent.ClientId);
             logger.LogWarning(ex,
                 "Falha no enriquecimento por IA do evento {MonitoringEventId}; usando texto determinístico.",
                 monitoringEvent.Id);
@@ -232,84 +237,81 @@ public class AutoTicketEnrichmentService(
             sb.AppendLine($"Metric: {monitoringEvent.MetricKey} = {monitoringEvent.MetricValue}");
         sb.AppendLine($"OccurredAt (UTC): {monitoringEvent.OccurredAt:u}");
 
-        // O envio de contexto do equipamento é PLUGÁVEL. Quando desligado, o
-        // modelo recebe apenas o evento — sem identificação do ativo.
         if (!policy.AiAllowEquipmentContext)
         {
             sb.AppendLine();
             sb.AppendLine("## Contexto do equipamento");
             sb.AppendLine("(não autorizado pela configuração deste escopo)");
-            return sb.ToString();
         }
-
-        var agent = await db.Agents.AsNoTracking()
-            .Where(a => a.Id == monitoringEvent.AgentId)
-            .Select(a => new { a.Hostname, a.OperatingSystem, a.Status })
-            .FirstOrDefaultAsync(ct);
-
-        if (agent is not null)
+        else
         {
-            sb.AppendLine();
-            sb.AppendLine("## Equipamento");
-            sb.AppendLine($"Host: {MaskAsset(agent.Hostname, policy)}");
-            sb.AppendLine($"OS: {agent.OperatingSystem}");
-        }
+            var agent = await db.Agents.AsNoTracking()
+                .Where(a => a.Id == monitoringEvent.AgentId)
+                .Select(a => new { a.Hostname, a.OperatingSystem, a.Status })
+                .FirstOrDefaultAsync(ct);
 
-        // Definição do sensor: dá ao modelo o limiar e o alvo, indispensáveis
-        // para uma descrição útil.
-        if (monitoringEvent.SourceRefId is not null)
-        {
-            var sensor = await db.SensorDefinitions.AsNoTracking()
-                .Where(s => s.Id == monitoringEvent.SourceRefId.Value)
-                .Select(s => new
+            if (agent is not null)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Equipamento");
+                sb.AppendLine($"Host: {MaskAsset(agent.Hostname, policy)}");
+                sb.AppendLine($"OS: {agent.OperatingSystem}");
+            }
+
+            // Definição do sensor: dá ao modelo o limiar e o alvo, indispensáveis
+            // para uma descrição útil.
+            if (monitoringEvent.SourceRefId is not null)
+            {
+                var sensor = await db.SensorDefinitions.AsNoTracking()
+                    .Where(s => s.Id == monitoringEvent.SourceRefId.Value)
+                    .Select(s => new
+                    {
+                        s.Name,
+                        s.Key,
+                        s.Target,
+                        s.WarningThreshold,
+                        s.CriticalThreshold,
+                        s.ThresholdUnit,
+                        s.Comparison
+                    })
+                    .FirstOrDefaultAsync(ct);
+
+                if (sensor is not null)
                 {
-                    s.Name,
-                    s.Key,
-                    s.Target,
-                    s.WarningThreshold,
-                    s.CriticalThreshold,
-                    s.ThresholdUnit,
-                    s.Comparison
-                })
-                .FirstOrDefaultAsync(ct);
+                    sb.AppendLine();
+                    sb.AppendLine("## Sensor");
+                    sb.AppendLine($"Name: {sensor.Name}");
+                    sb.AppendLine($"Key: {sensor.Key}");
+                    sb.AppendLine($"Target: {sensor.Target}");
+                    sb.AppendLine($"Thresholds: warning={sensor.WarningThreshold}, critical={sensor.CriticalThreshold} ({sensor.ThresholdUnit})");
+                    sb.AppendLine($"Comparison: {sensor.Comparison}");
+                }
+            }
 
-            if (sensor is not null)
+            // Valores recentes: dá noção de tendência, não só do instante.
+            if (monitoringEvent.SourceRefId is not null)
             {
-                sb.AppendLine();
-                sb.AppendLine("## Sensor");
-                sb.AppendLine($"Name: {sensor.Name}");
-                sb.AppendLine($"Key: {sensor.Key}");
-                sb.AppendLine($"Target: {sensor.Target}");
-                sb.AppendLine($"Thresholds: warning={sensor.WarningThreshold}, critical={sensor.CriticalThreshold} ({sensor.ThresholdUnit})");
-                sb.AppendLine($"Comparison: {sensor.Comparison}");
+                var state = await db.AgentSensorStates.AsNoTracking()
+                    .Where(s => s.AgentId == monitoringEvent.AgentId
+                                && s.SensorId == monitoringEvent.SourceRefId.Value)
+                    .Select(s => new { s.PrimaryValue, s.PrimaryChannel, s.SparklineJson, s.ConsecutiveFailures })
+                    .FirstOrDefaultAsync(ct);
+
+                if (state is not null)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("## Estado atual do sensor");
+                    sb.AppendLine($"Channel: {state.PrimaryChannel} = {state.PrimaryValue}");
+                    sb.AppendLine($"ConsecutiveFailures: {state.ConsecutiveFailures}");
+                    if (!string.IsNullOrWhiteSpace(state.SparklineJson))
+                        sb.AppendLine($"Recent series: {Truncate(state.SparklineJson, 300)}");
+                }
             }
         }
 
-        // Valores recentes: dá noção de tendência, não só do instante. Usamos o
-        // estado corrente, que já carrega o valor primário e a série curta
-        // (sparkline) — evita varrer a tabela de amostras brutas.
-        if (monitoringEvent.SourceRefId is not null)
-        {
-            var state = await db.AgentSensorStates.AsNoTracking()
-                .Where(s => s.AgentId == monitoringEvent.AgentId
-                            && s.SensorId == monitoringEvent.SourceRefId.Value)
-                .Select(s => new { s.PrimaryValue, s.PrimaryChannel, s.SparklineJson, s.ConsecutiveFailures })
-                .FirstOrDefaultAsync(ct);
-
-            if (state is not null)
-            {
-                sb.AppendLine();
-                sb.AppendLine("## Estado atual do sensor");
-                sb.AppendLine($"Channel: {state.PrimaryChannel} = {state.PrimaryValue}");
-                sb.AppendLine($"ConsecutiveFailures: {state.ConsecutiveFailures}");
-                if (!string.IsNullOrWhiteSpace(state.SparklineJson))
-                    sb.AppendLine($"Recent series: {Truncate(state.SparklineJson, 300)}");
-            }
-        }
-
-        // Departamentos válidos do cliente: o modelo só pode escolher entre eles.
+        // Departamentos válidos e ativos do cliente: o modelo só pode escolher entre eles.
         var departments = await db.Departments.AsNoTracking()
-            .Where(d => d.ClientId == null || d.ClientId == monitoringEvent.ClientId)
+            .Where(d => d.IsActive && (d.ClientId == null || d.ClientId == monitoringEvent.ClientId))
             .Select(d => new { d.Id, d.Name })
             .Take(20)
             .ToListAsync(ct);
@@ -478,12 +480,12 @@ public class AutoTicketEnrichmentService(
             if (allowed.Contains(AutoTicketSuggestionField.Priority.ToString(), StringComparer.OrdinalIgnoreCase))
             {
                 var priority = GetString(root, "priority");
-                if (!string.IsNullOrWhiteSpace(priority))
+                if (!string.IsNullOrWhiteSpace(priority) && Enum.TryParse<TicketPriority>(priority.Trim(), ignoreCase: true, out var parsedPriority))
                 {
                     suggestions.Add(new AutoTicketSuggestionItem
                     {
                         Field = AutoTicketSuggestionField.Priority,
-                        SuggestedValue = priority,
+                        SuggestedValue = parsedPriority.ToString(),
                         Confidence = confidence,
                         Rationale = "Suggested by the AI from the event context."
                     });
@@ -493,12 +495,12 @@ public class AutoTicketEnrichmentService(
             if (allowed.Contains(AutoTicketSuggestionField.Department.ToString(), StringComparer.OrdinalIgnoreCase))
             {
                 var departmentId = GetString(root, "departmentId");
-                if (!string.IsNullOrWhiteSpace(departmentId))
+                if (Guid.TryParse(departmentId, out var parsedDeptId))
                 {
                     suggestions.Add(new AutoTicketSuggestionItem
                     {
                         Field = AutoTicketSuggestionField.Department,
-                        SuggestedValue = departmentId,
+                        SuggestedValue = parsedDeptId.ToString("D"),
                         Confidence = confidence,
                         Rationale = "Suggested by the AI from the event context."
                     });
@@ -583,54 +585,48 @@ public class AutoTicketEnrichmentService(
            : value.Length <= max ? value
            : value[..max];
 
-    // ── Circuito ───────────────────────────────────────────────────────────
+    // ── Circuito por tenant ────────────────────────────────────────────────
 
-    private static bool IsCircuitOpen()
+    private static bool IsCircuitOpen(Guid clientId)
     {
-        lock (CircuitLock)
+        var state = TenantCircuits.GetOrAdd(clientId, _ => new TenantCircuitState());
+        lock (state)
         {
-            if (_consecutiveFailures < CircuitFailureThreshold) return false;
-            if (DateTime.UtcNow - _circuitOpenedAt < CircuitOpenDuration) return true;
+            if (state.ConsecutiveFailures < CircuitFailureThreshold) return false;
+            if (DateTime.UtcNow - state.CircuitOpenedAt < CircuitOpenDuration) return true;
 
             // Janela expirou: meio-aberto, deixa tentar de novo.
-            _consecutiveFailures = 0;
+            state.ConsecutiveFailures = 0;
             return false;
         }
     }
 
-    private static void RegisterFailure()
+    private static void RegisterFailure(Guid clientId)
     {
-        lock (CircuitLock)
+        var state = TenantCircuits.GetOrAdd(clientId, _ => new TenantCircuitState());
+        lock (state)
         {
-            _consecutiveFailures++;
-            if (_consecutiveFailures >= CircuitFailureThreshold)
-                _circuitOpenedAt = DateTime.UtcNow;
+            state.ConsecutiveFailures++;
+            if (state.ConsecutiveFailures >= CircuitFailureThreshold)
+                state.CircuitOpenedAt = DateTime.UtcNow;
         }
     }
 
-    private static void RegisterSuccess()
+    private static void RegisterSuccess(Guid clientId)
     {
-        lock (CircuitLock)
+        if (!TenantCircuits.TryGetValue(clientId, out var state)) return;
+        lock (state)
         {
-            _consecutiveFailures = 0;
-            _circuitOpenedAt = DateTime.MinValue;
+            state.ConsecutiveFailures = 0;
+            state.CircuitOpenedAt = DateTime.MinValue;
         }
     }
 
     /// <summary>
-    /// Fecha o circuito imediatamente.
-    ///
-    /// Dois usos legítimos:
-    ///  - Testes: o circuito é <c>static</c> (estado de processo), então testes de
-    ///    falha o abrem e contaminariam os testes de caminho feliz.
-    ///  - Operação: se o provedor voltar, não é preciso esperar a janela expirar.
+    /// Fecha o circuito imediatamente para todos os tenants (testes/operação).
     /// </summary>
     public static void ResetCircuit()
     {
-        lock (CircuitLock)
-        {
-            _consecutiveFailures = 0;
-            _circuitOpenedAt = DateTime.MinValue;
-        }
+        TenantCircuits.Clear();
     }
 }

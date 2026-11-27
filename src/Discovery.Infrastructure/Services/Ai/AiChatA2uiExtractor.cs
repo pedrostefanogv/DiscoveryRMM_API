@@ -528,7 +528,8 @@ public static class AiChatA2uiExtractor
             if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 return false;
 
-            if (!doc.RootElement.TryGetProperty("version", out var versionProp))
+            if (!doc.RootElement.TryGetProperty("version", out var versionProp)
+                || versionProp.ValueKind != JsonValueKind.String)
                 return false;
             var version = versionProp.GetString();
             if (string.IsNullOrWhiteSpace(version)) return false;

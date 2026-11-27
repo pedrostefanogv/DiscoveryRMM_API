@@ -38,6 +38,6 @@ public class AiChatKnowledgePromptTests
     {
         var prompt = AiChatSystemPromptBuilder.BuildDefaultSystemPrompt(BuildAgent());
 
-        Assert.That(prompt, Does.Contain("knowledge_article"));
+        Assert.That(prompt, Does.Contain("discovery://knowledge/article/"));
     }
 }

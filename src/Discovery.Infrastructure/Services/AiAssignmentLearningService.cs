@@ -48,7 +48,7 @@ public class AiAssignmentLearningService(
         // HERDA AiTriage do global pai precisa entrar no ciclo. O filtro pela
         // estrategia EFETIVA acontece depois de resolver a heranca (abaixo).
         var departments = await db.Departments
-            .Where(d => departmentId == null || d.Id == departmentId.Value)
+            .Where(d => d.IsActive && (departmentId == null || d.Id == departmentId.Value))
             .ToListAsync(ct);
 
         if (departments.Count == 0)
@@ -134,6 +134,7 @@ public class AiAssignmentLearningService(
 
             var rows = await db.Tickets.AsNoTracking()
                 .Where(t => t.DeletedAt == null && t.AssignedToUserId == member.UserId
+                            && (t.DepartmentId == null || t.DepartmentId == department.Id)
                             && t.ClosedAt != null && t.CreatedAt >= since)
                 .OrderByDescending(t => t.ClosedAt)
                 .Take(MaxResolvedTicketsPerMember)
@@ -156,7 +157,8 @@ public class AiAssignmentLearningService(
             // Substitui pendências anteriores do mesmo membro.
             await SupersedeSkillSuggestionsAsync(department.Id, member.UserId, ct);
 
-            var auto = settings.AiSkillLearningMode.Value == (int)AiLearningMode.Auto;
+            var isInheritedMember = member.DepartmentId != department.Id;
+            var auto = !isInheritedMember && settings.AiSkillLearningMode.Value == (int)AiLearningMode.Auto;
             var suggestion = new TechnicianSkillSuggestion
             {
                 Id = Guid.NewGuid(),
@@ -204,6 +206,7 @@ public class AiAssignmentLearningService(
 
         var decisions = await db.TicketAssignmentDecisions.AsNoTracking()
             .Where(d => d.DepartmentId == department.Id && d.Applied
+                        && d.StrategySource == AiAssignmentDecisionSource.Ai
                         && d.ChosenUserId != null && d.CreatedAt >= windowStart)
             .Select(d => new { d.Id, d.ChosenUserId, d.OverriddenAt, d.CandidatesJson })
             .ToListAsync(ct);

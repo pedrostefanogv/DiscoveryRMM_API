@@ -63,6 +63,10 @@ public class KnowledgeChunkRepository(DiscoveryDbContext db) : IKnowledgeChunkRe
                 (c.Article.ClientId == clientId && c.Article.SiteId == null) ||
                 (c.Article.ClientId == null && c.Article.SiteId == null)),
 
+            (null, not null) => chunksQuery.Where(c =>
+                c.Article.SiteId == siteId ||
+                (c.Article.ClientId == null && c.Article.SiteId == null)),
+
             _ => chunksQuery.Where(c => c.Article.ClientId == null && c.Article.SiteId == null)
         };
 

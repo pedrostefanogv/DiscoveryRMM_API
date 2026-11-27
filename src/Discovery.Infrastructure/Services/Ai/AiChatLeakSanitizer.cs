@@ -13,7 +13,7 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public static partial class AiChatLeakSanitizer
 {
-    [GeneratedRegex(@"<[｜|]DSML[｜|][a-z_]*>.*?</｜DSML｜[a-z_]*>", RegexOptions.Singleline)]
+    [GeneratedRegex(@"<[｜|]DSML[｜|][a-z_]*>.*?</[｜|]DSML[｜|][a-z_]*>", RegexOptions.Singleline)]
     private static partial Regex DsmlBlockRegex();
 
     [GeneratedRegex(@"</?[｜|]DSML[｜|][a-z_]*>")]
@@ -33,7 +33,7 @@ public static partial class AiChatLeakSanitizer
     private static partial Regex JsonFenceRegex();
 
     // Blocos ```a2ui ... ``` (C7): fallback para caminhos sem extractor.
-    [GeneratedRegex("```a2ui[\\s\\S]*?(?:```|$)", RegexOptions.Singleline)]
+    [GeneratedRegex("```a2ui[\\s\\S]*?(?:```|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
     private static partial Regex A2uiFenceRegex();
 
     [GeneratedRegex(@"^\s*\[\s*\{\s*""name""\s*:")]
@@ -46,8 +46,8 @@ public static partial class AiChatLeakSanitizer
     [GeneratedRegex(@"^\s*\{\s*""version""\s*:\s*""a2ui""")]
     private static partial Regex A2uiActionRegex();
 
-    // C5: protocolo A2UI real usa version "v0.9" com verbos do catálogo.
-    [GeneratedRegex(@"^\s*\{\s*""(createSurface|updateComponents|updateDataModel|deleteSurface)""")]
+    // C5: protocolo A2UI real usa version "v0.9" com verbos do catálogo (independente da ordem das chaves).
+    [GeneratedRegex(@"^\s*\{(?=[\s\S]*""(createSurface|updateComponents|updateDataModel|deleteSurface)""\s*:)", RegexOptions.Singleline)]
     private static partial Regex A2uiV09Regex();
 
     /// <summary>

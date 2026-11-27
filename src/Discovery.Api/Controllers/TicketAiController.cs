@@ -63,7 +63,7 @@ public class TicketAiController(
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;
 
         var result = await mediator.Send(new TicketAiTriageCommand(id), ct);
-        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : StatusCode(503, new { error = errors[0].Message }));
+        return result.Match<IActionResult>(success: Ok, failure: errors => MapError(errors[0]));
     }
 
     /// <summary>Resumo executivo do ticket.</summary>
@@ -74,7 +74,7 @@ public class TicketAiController(
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;
 
         var result = await mediator.Send(new TicketAiSummarizeCommand(id), ct);
-        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : StatusCode(503, new { error = errors[0].Message }));
+        return result.Match<IActionResult>(success: Ok, failure: errors => MapError(errors[0]));
     }
 
     /// <summary>Sugestão de resposta ao cliente.</summary>
@@ -85,7 +85,7 @@ public class TicketAiController(
         if (await EnsureCanTreatAsync(id, ct) is { } denied) return denied;
 
         var result = await mediator.Send(new TicketAiSuggestReplyCommand(id), ct);
-        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : StatusCode(503, new { error = errors[0].Message }));
+        return result.Match<IActionResult>(success: Ok, failure: errors => MapError(errors[0]));
     }
 
     /// <summary>
@@ -119,6 +119,14 @@ public class TicketAiController(
         }
 
         var result = await mediator.Send(new TicketAiDraftKbArticleCommand(id, persist), ct);
-        return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : StatusCode(503, new { error = errors[0].Message }));
+        return result.Match<IActionResult>(success: Ok, failure: errors => MapError(errors[0]));
+    }
+
+    private IActionResult MapError(Discovery.Core.Cqrs.Error err)
+    {
+        if (err.Code == "NotFound") return NotFound();
+        if (err.Message.StartsWith("AiUsageLimit:", StringComparison.Ordinal))
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = err.Message["AiUsageLimit:".Length..].Trim() });
+        return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = err.Message });
     }
 }

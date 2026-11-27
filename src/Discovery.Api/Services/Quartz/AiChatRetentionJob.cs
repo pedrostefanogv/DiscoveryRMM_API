@@ -33,12 +33,16 @@ public sealed class AiChatRetentionJob : IJob
         var expiryCutoff = now.AddDays(-RetentionDays);
         var deleteCutoff = now.AddDays(-(RetentionDays + GracePeriodDays));
 
-        var expiredSessions = await sessionRepo.GetExpiredAsync(expiryCutoff, 1000, ct);
         var softDeleteCount = 0;
-        foreach (var session in expiredSessions)
+        while (!ct.IsCancellationRequested)
         {
-            await sessionRepo.SoftDeleteAsync(session.Id, ct);
-            softDeleteCount++;
+            var expiredSessions = await sessionRepo.GetExpiredAsync(expiryCutoff, 500, ct);
+            if (expiredSessions.Count == 0) break;
+            foreach (var session in expiredSessions)
+            {
+                await sessionRepo.SoftDeleteAsync(session.Id, ct);
+                softDeleteCount++;
+            }
         }
 
         var hardDeleteCount = await sessionRepo.HardDeleteAsync(deleteCutoff, ct);

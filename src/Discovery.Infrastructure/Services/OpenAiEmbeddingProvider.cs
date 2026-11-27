@@ -13,7 +13,7 @@ namespace Discovery.Infrastructure.Services;
 /// </summary>
 public class OpenAiEmbeddingProvider : IEmbeddingProvider
 {
-    private const int MaxInputChars = 30000; // ~8000 tokens de segurança
+    private const int MaxInputChars = 16000; // ~6000-7000 tokens de segurança (PT-BR/código/logs)
     private const string DefaultEmbeddingModel = "text-embedding-3-small";
 
     private readonly IHttpClientFactory _httpClientFactory;
@@ -190,16 +190,24 @@ public class OpenAiEmbeddingProvider : IEmbeddingProvider
         using var doc = JsonDocument.Parse(responseBody);
 
         var dataArray = doc.RootElement.GetProperty("data");
-        var results = new List<float[]>(dataArray.GetArrayLength());
+        var indexed = new List<(int Index, float[] Emb)>(dataArray.GetArrayLength());
 
+        var fallbackIdx = 0;
         foreach (var item in dataArray.EnumerateArray())
         {
+            var idx = item.TryGetProperty("index", out var idxProp) && idxProp.ValueKind == JsonValueKind.Number
+                ? idxProp.GetInt32()
+                : fallbackIdx;
             var emb = item.GetProperty("embedding")
                 .EnumerateArray()
                 .Select(v => v.GetSingle())
                 .ToArray();
-            results.Add(emb);
+            indexed.Add((idx, emb));
+            fallbackIdx++;
         }
+
+        indexed.Sort((a, b) => a.Index.CompareTo(b.Index));
+        var results = indexed.Select(x => x.Emb).ToList();
 
         _logger.LogDebug("Embeddings batch: {Count} vetores de {Dims} dimensões para {InputCount} inputs",
             results.Count, results.Count > 0 ? results[0].Length : 0, truncated.Count);

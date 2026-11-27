@@ -55,6 +55,17 @@ public interface IKnowledgeArticleRepository
         CancellationToken ct = default,
         bool forAi = false);
 
+    Task<List<KnowledgeArticle>> SearchKeywordAsync(
+        string query,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? departmentId,
+        bool publishedOnly,
+        CancellationToken ct,
+        bool forAi,
+        IReadOnlyCollection<Guid>? excludeArticleIds)
+        => SearchKeywordAsync(query, clientId, siteId, departmentId, publishedOnly, ct, forAi);
+
     /// <summary>
     /// Busca por palavra-chave em múltiplos escopos (ACL do usuário).
     /// Mesma tokenização por termos de <see cref="SearchKeywordAsync"/>.

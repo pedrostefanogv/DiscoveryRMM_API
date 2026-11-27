@@ -50,8 +50,10 @@ public class KnowledgeEmbeddingQueueRepository(DiscoveryDbContext db) : IKnowled
             WHERE id IN (
                 SELECT id
                 FROM knowledge_embedding_queue
-                WHERE status IN (@pending, @failed)
-                  AND available_at <= now()
+                WHERE (
+                    (status IN (@pending, @failed) AND available_at <= now() AND attempts < 10)
+                    OR (status = @processing AND updated_at < now() - interval '15 minutes')
+                )
                 ORDER BY updated_at ASC
                 FOR UPDATE SKIP LOCKED
                 LIMIT @limit

@@ -49,8 +49,10 @@ public sealed class McpToolAuditService(
             query = query.Where(x => x.AgentId == agentId.Value);
         if (!string.IsNullOrWhiteSpace(toolName))
         {
-            var termLower = toolName.Trim().ToLowerInvariant();
-            query = query.Where(x => x.ToolName.ToLower().Contains(termLower));
+            var term = toolName.Trim();
+            query = db.Database.IsNpgsql()
+                ? query.Where(x => EF.Functions.ILike(x.ToolName, $"%{term}%"))
+                : query.Where(x => x.ToolName.Contains(term, StringComparison.OrdinalIgnoreCase));
         }
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(x => x.Status == status.Trim());

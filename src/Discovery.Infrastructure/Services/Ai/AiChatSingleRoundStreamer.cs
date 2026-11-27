@@ -130,14 +130,14 @@ public class AiChatSingleRoundStreamer
                 }, ct);
             }
 
-            history = await _messageRepository.GetRecentBySessionAsync(session.Id,
-                AiChatHelpers.ClampHistoryMessages(aiSettings), ct);
+            var historyLimit = AiChatHelpers.ClampHistoryMessages(aiSettings);
+            history = await _messageRepository.GetRecentBySessionAsync(session.Id, historyLimit + 12, ct);
             nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
             (systemPrompt, _) = await _promptBuilder.BuildAsync(agent, session, message, aiSettings, departmentId, ct,
                 await _capabilities.IsA2uiEnabledAsync(session.ClientId, session.SiteId, agentId, ct));
 
-            llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
+            llmMessages = AiChatHelpers.BuildCompactedLlmMessages(history, historyLimit);
             if (!string.IsNullOrWhiteSpace(systemNote))
                 llmMessages.Add(new LlmMessage("system", systemNote));
             // Guard de visão: só envia a imagem se o modelo aceitar (setting +
@@ -312,6 +312,7 @@ public class AiChatSingleRoundStreamer
             hasAgentToolCallPending = false;
             providerError = null;
 
+            var streamFilter = new AiChatStreamFilter(aiSettings);
             if (roundTools.Count > 0)
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
@@ -324,17 +325,23 @@ public class AiChatSingleRoundStreamer
                     if (AiChatStreamingOrchestrator.IsTextToken(evt))
                     {
                         contentBuilder.Append(evt.Content);
-                        yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
-                        anyTokenYielded = true;
+                        var safeToken = streamFilter.Push(evt.Content);
+                        if (!string.IsNullOrEmpty(safeToken))
+                        {
+                            yield return new AiChatStreamChunk(Type: "token", Content: safeToken);
+                            anyTokenYielded = true;
+                        }
                     }
                     else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
                     {
                         hasToolCalls = true;
-                        totalTokens = evt.TokensUsed;
+                        if (evt.TokensUsed is > 0)
+                            totalTokens = (totalTokens ?? 0) + evt.TokensUsed.Value;
 
+                        var roundPreamble = contentBuilder.ToString();
                         var assistantToolCalls = evt.ToolCalls.Select(tc =>
                             new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
-                        llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString(), ToolCalls: assistantToolCalls));
+                        llmMessages.Add(new LlmMessage("assistant", roundPreamble, ToolCalls: assistantToolCalls));
                         contentBuilder.Clear();
 
                         foreach (var toolCall in evt.ToolCalls)
@@ -462,7 +469,7 @@ public class AiChatSingleRoundStreamer
                             {
                                 var msgs = new List<AiChatMessage> { new() { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "user", Content = message, CreatedAt = startTime, TraceId = traceId } };
                                 if (agentToolCallsPending.Count > 0)
-                                    msgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "assistant", Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : string.Empty, ToolCallsJson = JsonSerializer.Serialize(agentToolCallsPending.Select(tc => new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })), CreatedAt = DateTime.UtcNow, TraceId = traceId });
+                                    msgs.Add(new AiChatMessage { Id = Guid.NewGuid(), SessionId = session.Id, SequenceNumber = nextSeq++, Role = "assistant", Content = roundPreamble, ToolCallsJson = JsonSerializer.Serialize(agentToolCallsPending.Select(tc => new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })), CreatedAt = DateTime.UtcNow, TraceId = traceId });
                                 await _messageRepository.CreateBatchAsync(msgs, ct);
                             }
                             catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao persistir user message do round 1", traceId); }
@@ -471,7 +478,17 @@ public class AiChatSingleRoundStreamer
                             yield break;
                         }
                     }
-                    else if (evt.Type == "done") { totalTokens = evt.TokensUsed; }
+                    else if (evt.Type == "done")
+                    {
+                        if (evt.TokensUsed is > 0)
+                            totalTokens = (totalTokens ?? 0) + evt.TokensUsed.Value;
+                    }
+                }
+                var tailSafe = streamFilter.Flush();
+                if (!string.IsNullOrEmpty(tailSafe))
+                {
+                    yield return new AiChatStreamChunk(Type: "token", Content: tailSafe);
+                    anyTokenYielded = true;
                 }
             }
             else
@@ -479,7 +496,17 @@ public class AiChatSingleRoundStreamer
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, streamOptions, ct))
                 {
                     contentBuilder.Append(token);
-                    yield return new AiChatStreamChunk(Type: "token", Content: token);
+                    var safeToken = streamFilter.Push(token);
+                    if (!string.IsNullOrEmpty(safeToken))
+                    {
+                        yield return new AiChatStreamChunk(Type: "token", Content: safeToken);
+                        anyTokenYielded = true;
+                    }
+                }
+                var tailSafe = streamFilter.Flush();
+                if (!string.IsNullOrEmpty(tailSafe))
+                {
+                    yield return new AiChatStreamChunk(Type: "token", Content: tailSafe);
                     anyTokenYielded = true;
                 }
             }
@@ -516,6 +543,11 @@ public class AiChatSingleRoundStreamer
                     continue;
                 }
 
+                if (_costControl is not null && costAcquired && !anyTokenYielded && !hasToolCalls)
+                {
+                    try { await _costControl.ReleaseAsync(scopeClientId, scopeSiteId, aiSettings, ct); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao liberar slot no CostControl", traceId); }
+                }
                 _logger.LogError("[{TraceId}] Provider stream error: {Error}", traceId, providerError);
                 yield return new AiChatStreamChunk(Type: "error", Error: providerError);
                 yield break;
@@ -665,13 +697,29 @@ public class AiChatSingleRoundStreamer
                     Seed: aiSettings.Seed,
                     ResponseFormat: aiSettings.ResponseFormat,
                     ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
+                var synthFilter = new AiChatStreamFilter(aiSettings);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt!, llmMessages, synthesisOptions, ct))
                 {
                     contentBuilder.Append(token);
-                    yield return new AiChatStreamChunk(Type: "token", Content: token);
+                    var safeToken = synthFilter.Push(token);
+                    if (!string.IsNullOrEmpty(safeToken))
+                    {
+                        yield return new AiChatStreamChunk(Type: "token", Content: safeToken);
+                        anyTokenYielded = true;
+                    }
+                }
+                var synthTail = synthFilter.Flush();
+                if (!string.IsNullOrEmpty(synthTail))
+                {
+                    yield return new AiChatStreamChunk(Type: "token", Content: synthTail);
                     anyTokenYielded = true;
                 }
-                fullContent = contentBuilder.ToString();
+                fullContent = AiChatGuardrails.ApplyOutputGuardrails(contentBuilder.ToString(), aiSettings);
+                var (synthClean, synthA2ui, _) = AiChatOutputPipeline.Process(fullContent,
+                    reason => _logger.LogWarning("[{TraceId}] A2UI (síntese) — {Reason}", traceId, reason));
+                fullContent = synthClean;
+                foreach (var a2uiJson in synthA2ui)
+                    yield return new AiChatStreamChunk(Type: "a2ui", Content: a2uiJson);
                 if (!string.IsNullOrWhiteSpace(fullContent)) break;
             }
 

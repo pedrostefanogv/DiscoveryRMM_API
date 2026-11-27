@@ -16,6 +16,70 @@ internal static class AiChatHelpers
         => settings.MaxHistoryMessages is >= 1 and <= 50 ? settings.MaxHistoryMessages : AiChatConstants.DefaultMaxHistoryMessages;
 
     /// <summary>
+    /// Compactação determinística de histórico longo: mantém as últimas
+    /// <paramref name="historyLimit"/> mensagens na íntegra e resume mensagens
+    /// anteriores em uma nota de sistema concisa (intenções do usuário + tools usadas).
+    /// </summary>
+    public static List<LlmMessage> BuildCompactedLlmMessages(
+        IReadOnlyList<Discovery.Core.Entities.AiChatMessage> history, int historyLimit)
+    {
+        if (history.Count <= historyLimit)
+            return AiChatToolOrchestrator.BuildLlmMessagesFromHistory([.. history]);
+
+        var omittedCount = history.Count - historyLimit;
+        var omitted = history.Take(omittedCount).ToList();
+        var recent = history.Skip(omittedCount).ToList();
+
+        var userTopics = omitted
+            .Where(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrWhiteSpace(m.Content))
+            .Select(m =>
+            {
+                var line = m.Content.Replace('\n', ' ').Trim();
+                return line.Length > 100 ? line[..100] + "..." : line;
+            })
+            .TakeLast(4)
+            .ToList();
+
+        var toolsUsed = omitted
+            .Where(m => !string.IsNullOrWhiteSpace(m.ToolCallsJson))
+            .SelectMany(m =>
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(m.ToolCallsJson!);
+                    return doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array
+                        ? doc.RootElement.EnumerateArray()
+                            .Select(e => e.TryGetProperty("name", out var n) ? n.GetString() : null)
+                            .Where(n => !string.IsNullOrWhiteSpace(n))
+                            .Cast<string>()
+                            .ToList()
+                        : new List<string>();
+                }
+                catch
+                {
+                    return new List<string>();
+                }
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        var parts = new List<string>
+        {
+            $"[RESUMO DA SESSÃO ANTERIOR — {omittedCount} mensagens antigas compactadas]"
+        };
+        if (userTopics.Count > 0)
+            parts.Add("Pedidos anteriores do usuário: " + string.Join(" | ", userTopics));
+        if (toolsUsed.Count > 0)
+            parts.Add("Ferramentas já executadas antes: " + string.Join(", ", toolsUsed));
+
+        var messages = new List<LlmMessage> { new("system", string.Join("\n", parts)) };
+        messages.AddRange(AiChatToolOrchestrator.BuildLlmMessagesFromHistory(recent));
+        return messages;
+    }
+
+    /// <summary>
     /// Teto de SAÍDA pedido explicitamente pela configuração do tenant.
     ///
     /// Retorna <c>0</c> para sinalizar "AUTOMÁTICO" — ou seja, "sem pedido

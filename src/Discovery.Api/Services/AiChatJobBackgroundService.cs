@@ -6,8 +6,10 @@ namespace Discovery.Api.Services;
 public sealed class AiChatJobBackgroundService : BackgroundService, IAiChatJobQueue
 {
     private const int RecoveryBatchSize = 100;
+    private const int MaxConcurrentJobs = 4;
 
     private readonly Channel<AiChatJobWorkItem> _queue = Channel.CreateUnbounded<AiChatJobWorkItem>();
+    private readonly SemaphoreSlim _concurrencyGate = new(MaxConcurrentJobs, MaxConcurrentJobs);
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<AiChatJobBackgroundService> _logger;
 
@@ -26,12 +28,30 @@ public sealed class AiChatJobBackgroundService : BackgroundService, IAiChatJobQu
     {
         await RecoverPendingJobsAsync(stoppingToken);
 
+        var inFlight = new List<Task>();
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var workItem = await _queue.Reader.ReadAsync(stoppingToken);
-                await ProcessWorkItemAsync(workItem, stoppingToken);
+                await _concurrencyGate.WaitAsync(stoppingToken);
+                var task = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ProcessWorkItemAsync(workItem, stoppingToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Unexpected error processing AI chat job {JobId}.", workItem.JobId);
+                    }
+                    finally
+                    {
+                        _concurrencyGate.Release();
+                    }
+                }, stoppingToken);
+                inFlight.Add(task);
+                inFlight.RemoveAll(t => t.IsCompleted);
             }
             catch (OperationCanceledException)
             {
@@ -42,6 +62,9 @@ public sealed class AiChatJobBackgroundService : BackgroundService, IAiChatJobQu
                 _logger.LogError(ex, "Unexpected error in AI chat job background service.");
             }
         }
+
+        if (inFlight.Count > 0)
+            await Task.WhenAll(inFlight);
     }
 
     private async Task RecoverPendingJobsAsync(CancellationToken cancellationToken)

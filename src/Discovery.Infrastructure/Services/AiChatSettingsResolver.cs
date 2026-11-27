@@ -33,6 +33,7 @@ public class AiChatSettingsResolver
             var credential = await _credentialResolver.ResolveAsync(resolved.ClientId.Value, siteId, ct);
             if (credential is not null)
             {
+                if (!string.IsNullOrWhiteSpace(credential.Provider)) ai.Provider = credential.Provider;
                 if (!string.IsNullOrWhiteSpace(credential.ApiKey)) ai.ApiKey = credential.ApiKey;
                 if (!string.IsNullOrWhiteSpace(credential.BaseUrl)) ai.BaseUrl = credential.BaseUrl;
                 if (!string.IsNullOrWhiteSpace(credential.EmbeddingBaseUrl)) ai.EmbeddingBaseUrl = credential.EmbeddingBaseUrl;

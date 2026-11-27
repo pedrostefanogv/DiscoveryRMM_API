@@ -82,10 +82,13 @@ public class OpenAiProvider : ILlmProvider
                 if (IsTransientStatusCode(response.StatusCode) && attempt < backoffMs.Length)
                 {
                     var status = (int)response.StatusCode;
+                    var delayMs = backoffMs[attempt] + Random.Shared.Next(50, 250);
+                    if (response.Headers.RetryAfter?.Delta is { } retryAfterDelta)
+                        delayMs = Math.Clamp((int)retryAfterDelta.TotalMilliseconds, 200, 10_000);
                     response.Dispose();
                     _logger.LogWarning("LLM retornou HTTP {Status} (tentativa {Attempt}/{Max}); aguardando {Delay}ms para retentar",
-                        status, attempt + 1, backoffMs.Length + 1, backoffMs[attempt]);
-                    await Task.Delay(backoffMs[attempt], ct);
+                        status, attempt + 1, backoffMs.Length + 1, delayMs);
+                    await Task.Delay(delayMs, ct);
                     continue;
                 }
                 return response;
@@ -712,6 +715,10 @@ public class OpenAiProvider : ILlmProvider
         var streamTerminated = false;
         var streamedChars = 0;
         string? line;
+        string? pendingFinishReason = null;
+        int? pendingTokensUsed = null;
+        var hasPendingTerminal = false;
+
         while ((line = await reader.ReadLineAsync(requestToken)) != null)
         {
             requestToken.ThrowIfCancellationRequested();
@@ -724,16 +731,20 @@ public class OpenAiProvider : ILlmProvider
             if (data == "[DONE]")
             {
                 streamTerminated = true;
-                // A2: alguns providers terminam o stream com [DONE] SEM
-                // finish_reason=tool_calls — sem isso as tool calls acumuladas
-                // eram descartadas silenciosamente e o loop parava.
                 if (pendingToolCalls.Count > 0)
                 {
                     yield return new LlmStreamEvent(Type: "tool_calls",
                         ToolCalls: pendingToolCalls.Values.Select(tc => new LlmToolCall(
-                            tc.Id, tc.Name, tc.Args.ToString())).ToList());
+                            tc.Id, tc.Name, tc.Args.ToString())).ToList(),
+                        TokensUsed: pendingTokensUsed,
+                        FinishReason: pendingFinishReason ?? "tool_calls");
                 }
-                yield return new LlmStreamEvent(Type: "done");
+                else
+                {
+                    yield return new LlmStreamEvent(Type: "done",
+                        TokensUsed: pendingTokensUsed,
+                        FinishReason: pendingFinishReason);
+                }
                 yield break;
             }
 
@@ -753,22 +764,62 @@ public class OpenAiProvider : ILlmProvider
             if (parsed is not null)
             {
                 if (parsed.Type == "token" && parsed.Content is not null)
-                    streamedChars += parsed.Content.Length;
-                yield return parsed;
-                if (parsed.Type is "tool_calls" or "done")
                 {
+                    streamedChars += parsed.Content.Length;
+                    yield return parsed;
+                    if (!string.IsNullOrEmpty(parsed.FinishReason))
+                    {
+                        hasPendingTerminal = true;
+                        pendingFinishReason ??= parsed.FinishReason;
+                        if (parsed.TokensUsed is > 0)
+                            pendingTokensUsed = parsed.TokensUsed;
+                    }
+                }
+                else if (parsed.Type == "usage")
+                {
+                    if (parsed.TokensUsed is > 0)
+                        pendingTokensUsed = parsed.TokensUsed;
+                }
+                else if (parsed.Type is "tool_calls" or "done")
+                {
+                    // Aguarda chunk trailing de usage ou [DONE] antes de encerrar,
+                    // pois OpenAI/OpenRouter enviam usage em chunk choices:[] logo após finish_reason.
                     streamTerminated = true;
-                    // finish_reason=length: o provider cortou a resposta no teto de
-                    // saída — é a assinatura de um payload (ex.: A2UI) truncado.
+                    hasPendingTerminal = true;
+                    pendingFinishReason ??= parsed.FinishReason;
+                    if (parsed.TokensUsed is > 0)
+                        pendingTokensUsed = parsed.TokensUsed;
                     if (string.Equals(parsed.FinishReason, "length", StringComparison.OrdinalIgnoreCase))
                     {
                         _logger.LogWarning(
                             "Provider encerrou por LIMITE DE SAÍDA (finish_reason=length) — resposta possivelmente TRUNCADA ({Chars} chars, model={Model})",
                             streamedChars, model);
                     }
-                    yield break;
+                }
+                else
+                {
+                    yield return parsed;
                 }
             }
+        }
+
+        if (hasPendingTerminal)
+        {
+            if (pendingToolCalls.Count > 0)
+            {
+                yield return new LlmStreamEvent(Type: "tool_calls",
+                    ToolCalls: pendingToolCalls.Values.Select(tc => new LlmToolCall(
+                        tc.Id, tc.Name, tc.Args.ToString())).ToList(),
+                    TokensUsed: pendingTokensUsed,
+                    FinishReason: pendingFinishReason ?? "tool_calls");
+            }
+            else
+            {
+                yield return new LlmStreamEvent(Type: "done",
+                    TokensUsed: pendingTokensUsed,
+                    FinishReason: pendingFinishReason);
+            }
+            yield break;
         }
 
         // Chegou aqui SEM [DONE]/finish_reason: o provider encerrou o stream no
@@ -828,10 +879,19 @@ public class OpenAiProvider : ILlmProvider
             return LlmStreamEvent.Error($"Provider stream error: {Shorten(msg, 400)}");
         }
 
+        int? tokensUsed = null;
+        if (root.TryGetProperty("usage", out var usageProp) && usageProp.ValueKind == JsonValueKind.Object
+            && usageProp.TryGetProperty("total_tokens", out var ttProp) && ttProp.ValueKind == JsonValueKind.Number)
+            tokensUsed = ttProp.GetInt32();
+
         if (!root.TryGetProperty("choices", out var choices)
             || choices.ValueKind != JsonValueKind.Array
             || choices.GetArrayLength() == 0)
-            return null;
+        {
+            return tokensUsed is > 0
+                ? new LlmStreamEvent(Type: "usage", TokensUsed: tokensUsed)
+                : null;
+        }
 
         var choice = choices[0];
         var hasDelta = choice.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object;
@@ -883,6 +943,7 @@ public class OpenAiProvider : ILlmProvider
                     if (fnDelta.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String)
                         existing.Args.Append(argsProp.GetString());
                 }
+                pendingToolCalls[index] = existing;
             }
         }
 
@@ -906,25 +967,21 @@ public class OpenAiProvider : ILlmProvider
         }
 
         // 3. content token. Prioridade sobre finish_reason: um chunk com
-        // content + finish não pode perder o texto (o finish é resolvido no
-        // [DONE]/próximo chunk, e o fim do enumerador também encerra o round).
+        // content + finish não pode perder o texto nem o finish_reason/usage.
         if (hasDelta && delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
         {
             var token = contentProp.GetString();
             if (!string.IsNullOrEmpty(token))
-                return new LlmStreamEvent(Type: "token", Content: token);
+                return new LlmStreamEvent(Type: "token", Content: token, TokensUsed: tokensUsed, FinishReason: finishReason);
         }
 
-        int? tokensUsed = null;
-        if (root.TryGetProperty("usage", out var usageProp) && usageProp.ValueKind == JsonValueKind.Object
-            && usageProp.TryGetProperty("total_tokens", out var ttProp) && ttProp.ValueKind == JsonValueKind.Number)
-            tokensUsed = ttProp.GetInt32();
-
-        // 4. finish_reason terminal: tool_calls emite as acumuladas; qualquer
-        // outro (stop/length/content_filter/...) encerra o round.
+        // 4. finish_reason terminal: se há tool calls acumuladas, emite-as mesmo
+        // que o provider envie finish_reason="stop" (comum em gateways OpenAI-compatible).
         if (!string.IsNullOrEmpty(finishReason))
         {
-            if (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase) && pendingToolCalls.Count > 0)
+            if (pendingToolCalls.Count > 0 &&
+                (string.Equals(finishReason, "tool_calls", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(finishReason, "stop", StringComparison.OrdinalIgnoreCase)))
             {
                 var parsedToolCalls = pendingToolCalls.Values.Select(tc => new LlmToolCall(
                     tc.Id, tc.Name, tc.Args.ToString())).ToList();
@@ -934,7 +991,9 @@ public class OpenAiProvider : ILlmProvider
             return new LlmStreamEvent(Type: "done", TokensUsed: tokensUsed, FinishReason: finishReason);
         }
 
-        return null;
+        return tokensUsed is > 0
+            ? new LlmStreamEvent(Type: "usage", TokensUsed: tokensUsed)
+            : null;
     }
     // DTOs internos para deserialização da resposta OpenAI
     private record OpenAiChatResponse(

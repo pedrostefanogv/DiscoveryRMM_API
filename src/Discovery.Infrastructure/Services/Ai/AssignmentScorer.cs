@@ -52,7 +52,10 @@ public static class AssignmentScorer
         var skill = SkillScore(candidate.SkillTags, ticket, candidate.SkillLevel);
         var affinity = Clamp(candidate.Affinity);
         var performance = PerformanceScore(candidate, ticket, metrics);
-        var load = departmentMaxOpen > 0 ? 1 - Clamp((double)metrics.OpenNow / departmentMaxOpen) : 1;
+        var effectiveCap = candidate.MaxOpenTickets is > 0
+            ? candidate.MaxOpenTickets.Value
+            : Math.Max(departmentMaxOpen, 1);
+        var load = 1 - Clamp((double)metrics.OpenNow / effectiveCap);
         var csat = metrics.CsatRatedCount >= 3 && metrics.CsatAverage.HasValue
             ? Clamp(metrics.CsatAverage.Value / 5.0)
             : 0.5;
@@ -70,13 +73,13 @@ public static class AssignmentScorer
         var overCapacity = candidate.MaxOpenTickets.HasValue
             && metrics.OpenNow >= candidate.MaxOpenTickets.Value;
 
-        var score = baseScore * weightFactor;
-        if (overCapacity) score -= 0.15;
+        var score = Clamp(baseScore * weightFactor);
+        if (overCapacity) score = Clamp(score - 0.15);
 
         return new AssignmentCandidateDto(
             candidate.UserId,
             candidate.UserName,
-            Clamp(score),
+            score,
             skill,
             affinity,
             performance,

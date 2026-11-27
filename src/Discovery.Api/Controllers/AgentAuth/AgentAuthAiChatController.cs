@@ -341,6 +341,7 @@ public class AgentAuthAiChatController : AgentAuthControllerBase
                     _logger.LogError(ex, "[ChatStream] Exceção não tratada. TraceId={TraceId}", traceId);
                     await WriteSseJsonAsync(HttpContext,
                         new { type = "error", error = "Erro interno ao processar o chat.", traceId, status }, ct);
+                    await HttpContext.Response.Body.FlushAsync(ct);
                 }
                 else
                 {
@@ -349,6 +350,7 @@ public class AgentAuthAiChatController : AgentAuthControllerBase
                         traceId, status);
                     await WriteSseJsonAsync(HttpContext,
                         new { type = "error", error = detail, traceId, status }, ct);
+                    await HttpContext.Response.Body.FlushAsync(ct);
                 }
             }
         }
@@ -462,11 +464,10 @@ public class AgentAuthAiChatController : AgentAuthControllerBase
             }
         }
 
-        var closed = trimmed + string.Concat(stack);
-        if (inStr) closed += "\"";
+        var closed = (inStr ? trimmed + "\"" : trimmed) + string.Concat(stack);
 
         // Só usa a versão fechada se for JSON válido; caso contrário, texto cru.
-        if (IsValidJson(closed) && !inStr)
+        if (IsValidJson(closed))
         {
             return closed;
         }

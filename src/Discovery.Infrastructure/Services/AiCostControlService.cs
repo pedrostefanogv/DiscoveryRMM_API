@@ -105,7 +105,7 @@ public class AiCostControlService : IAiCostControlService
         if (_redis?.IsConnected == true)
         {
             var used = await _redis.GetAsync(budgetKey);
-            var currentUsed = string.IsNullOrEmpty(used) ? 0 : int.Parse(used);
+            var currentUsed = long.TryParse(used, out var parsedUsed) ? parsedUsed : 0;
 
             if (currentUsed >= settings.TokenBudgetDaily)
             {
@@ -130,7 +130,7 @@ public class AiCostControlService : IAiCostControlService
         if (_redis?.IsConnected == true)
         {
             var count = await _redis.GetAsync(rateKey);
-            var currentCount = string.IsNullOrEmpty(count) ? 0 : int.Parse(count);
+            var currentCount = long.TryParse(count, out var parsedCount) ? parsedCount : 0;
 
             if (currentCount >= settings.RateLimitPerMinute)
             {
@@ -188,49 +188,60 @@ public class AiCostControlService : IAiCostControlService
         }
     }
 
-    public Task ReleaseAsync(
+    public async Task ReleaseAsync(
         Guid clientId,
         Guid siteId,
         AIIntegrationSettings settings,
         CancellationToken ct = default)
     {
         if (!settings.CostControlEnabled)
-            return Task.CompletedTask;
+            return;
 
         var scopeKey = $"{clientId}:{siteId}";
         var rateKey = $"ai:ratelimit:{scopeKey}";
 
         if (_redis?.IsConnected == true)
         {
-            // Decrementa 1 slot do rate limit (mínimo 0 — não deixa negativo).
-            // Redis INCRBY com -1 pode deixar negativo; clamp via Lua seria
-            // ideal, mas o guard no TryAcquireAsync (>= max) tolera valores
-            // negativos sem impacto funcional.
-            return _redis.IncrementByAsync(rateKey, -1);
+            // Só decrementa se a chave ainda existir e for > 0, evitando criar chave "-1" sem TTL.
+            var raw = await _redis.GetAsync(rateKey);
+            if (long.TryParse(raw, out var current) && current > 0)
+            {
+                await _redis.IncrementByAsync(rateKey, -1);
+                var ttl = await _redis.GetTtlSecondsAsync(rateKey);
+                if (ttl <= 0)
+                    await _redis.SetExpiryAsync(rateKey, 60);
+            }
+            return;
         }
 
         // Fallback local: decrementa o sliding window se possível.
         var window = _localRateLimits.GetOrAdd(rateKey, _ => new SlidingWindow());
         window.Decrement();
-        return Task.CompletedTask;
     }
 
     public class SlidingWindow
     {
+        private readonly object _lock = new();
         private long _count;
         private DateTime _windowStart = DateTime.UtcNow;
 
         public bool TryIncrement(int max)
         {
-            var now = DateTime.UtcNow;
-            if ((now - _windowStart).TotalMinutes >= 1)
+            lock (_lock)
             {
-                Interlocked.Exchange(ref _count, 0);
-                _windowStart = now;
-            }
+                var now = DateTime.UtcNow;
+                if ((now - _windowStart).TotalMinutes >= 1)
+                {
+                    _count = 0;
+                    _windowStart = now;
+                }
 
-            var newCount = Interlocked.Increment(ref _count);
-            return newCount <= max;
+                if (_count >= max)
+                    return false;
+
+                _count++;
+                return true;
+            }
         }
 
         /// <summary>
@@ -239,16 +250,10 @@ public class AiCostControlService : IAiCostControlService
         /// </summary>
         public void Decrement()
         {
-            // CompareExchange em loop garante que não fica negativo mesmo com
-            // decrementos concorrentes.
-            long initial, computed;
-            do
+            lock (_lock)
             {
-                initial = Volatile.Read(ref _count);
-                if (initial <= 0) return;
-                computed = initial - 1;
+                if (_count > 0) _count--;
             }
-            while (Interlocked.CompareExchange(ref _count, computed, initial) != initial);
         }
     }
 

@@ -54,8 +54,10 @@ public class KnowledgeMcpTool(
             "KnowledgeMcpTool.ExecuteInternalAsync: query={Query}, clientId={ClientId}, siteId={SiteId}, deptId={DeptId}, max={Max}",
             LogSanitizer.Sanitize(query), clientId, siteId, departmentId, maxResults);
 
-        // Configuração (compartilhada entre caminhos)
+        // Configuração (compartilhada entre caminhos) — não mutar o objeto do chamador
         var settings = aiSettings ?? await configurationResolver.GetAISettingsAsync();
+        var embBaseUrl = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;
+        var embApiKey = string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey;
 
         // Sobrescreve com credencial por escopo (Site > Client > Global) se disponível
         if (clientId.HasValue || siteId.HasValue)
@@ -64,19 +66,17 @@ public class KnowledgeMcpTool(
             if (credential is not null)
             {
                 if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingApiKey))
-                    settings.EmbeddingApiKey = credential.EffectiveEmbeddingApiKey;
+                    embApiKey = credential.EffectiveEmbeddingApiKey;
                 if (!string.IsNullOrWhiteSpace(credential.EffectiveEmbeddingBaseUrl))
-                    settings.EmbeddingBaseUrl = credential.EffectiveEmbeddingBaseUrl;
+                    embBaseUrl = credential.EffectiveEmbeddingBaseUrl;
             }
         }
 
         List<KnowledgeChunkSearchResult>? semanticResults = null;
 
-        // ── Tentativa de busca semântica ──
+        // ── Tentativa de busca híbrida (semântica + keyword com RRF) ──
         try
         {
-            var embBaseUrl = string.IsNullOrWhiteSpace(settings.EmbeddingBaseUrl) ? settings.BaseUrl : settings.EmbeddingBaseUrl;
-            var embApiKey = string.IsNullOrWhiteSpace(settings.EmbeddingApiKey) ? settings.ApiKey : settings.EmbeddingApiKey;
             var embedding = await embeddingProvider.GenerateEmbeddingAsync(
                 query,
                 settings.EmbeddingModel,
@@ -86,7 +86,7 @@ public class KnowledgeMcpTool(
             var vector = new Vector(embedding);
 
             semanticResults = await chunkRepository.SearchSemanticAsync(
-                vector, clientId, siteId, maxResults,
+                vector, clientId, siteId, Math.Max(maxResults * 2, maxResults),
                 minSimilarity: settings.MinSimilarityScore,
                 excludeArticleIds: excludeArticleIds,
                 departmentId: departmentId,
@@ -102,29 +102,70 @@ public class KnowledgeMcpTool(
                 LogSanitizer.Sanitize(query));
         }
 
-        // ── Resultados semânticos encontrados ──
-        if (semanticResults is { Count: > 0 })
-        {
-            var items = semanticResults.Select(r => BuildCitationResult(r, null, settings));
-            return JsonSerializer.Serialize(new { found = true, results = items });
-        }
-
-        // ── Fallback: busca keyword ──
+        List<Discovery.Core.Entities.KnowledgeArticle> keywordResults = [];
         try
         {
-            var keywordResults = await articleRepository.SearchKeywordAsync(
-                query, clientId, siteId, departmentId: departmentId, publishedOnly: true, ct, forAi: true);
-            if (keywordResults.Count == 0)
-                return await BuildEmptyResultAsync(clientId, siteId, ct);
-
-            var kwItems = keywordResults.Take(maxResults).Select(a => BuildKeywordCitation(a, settings));
-            return JsonSerializer.Serialize(new { found = true, results = kwItems });
+            keywordResults = await articleRepository.SearchKeywordAsync(
+                query, clientId, siteId, departmentId: departmentId, publishedOnly: true, ct, forAi: true,
+                excludeArticleIds: excludeArticleIds);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Erro ao executar KnowledgeMcpTool (busca keyword) para query={Query}", LogSanitizer.Sanitize(query));
-            return JsonSerializer.Serialize(new { found = false, error = "Erro ao consultar base de conhecimento." });
+            logger.LogWarning(ex, "[KnowledgeMcpTool] Falha na busca keyword para query={Query}", LogSanitizer.Sanitize(query));
         }
+
+        // ── Fusão RRF (Reciprocal Rank Fusion) quando há resultados semânticos e/ou keyword ──
+        if (semanticResults is { Count: > 0 } || keywordResults.Count > 0)
+        {
+            const double rrfK = 60.0;
+            var scores = new Dictionary<Guid, double>();
+            var bestChunkByArticle = new Dictionary<Guid, List<KnowledgeChunkSearchResult>>();
+            var kwByArticle = new Dictionary<Guid, Discovery.Core.Entities.KnowledgeArticle>();
+
+            if (semanticResults is not null)
+            {
+                for (var i = 0; i < semanticResults.Count; i++)
+                {
+                    var r = semanticResults[i];
+                    scores[r.ArticleId] = scores.GetValueOrDefault(r.ArticleId) + (1.0 / (rrfK + i + 1));
+                    if (!bestChunkByArticle.TryGetValue(r.ArticleId, out var list))
+                    {
+                        list = [];
+                        bestChunkByArticle[r.ArticleId] = list;
+                    }
+                    if (list.Count < 2) list.Add(r);
+                }
+            }
+
+            for (var i = 0; i < keywordResults.Count; i++)
+            {
+                var a = keywordResults[i];
+                scores[a.Id] = scores.GetValueOrDefault(a.Id) + (0.8 / (rrfK + i + 1));
+                kwByArticle.TryAdd(a.Id, a);
+            }
+
+            var fusedItems = new List<object>(maxResults);
+            foreach (var (articleId, _) in scores.OrderByDescending(kv => kv.Value))
+            {
+                if (fusedItems.Count >= maxResults) break;
+                if (bestChunkByArticle.TryGetValue(articleId, out var chunks))
+                {
+                    foreach (var chunk in chunks)
+                    {
+                        if (fusedItems.Count >= maxResults) break;
+                        fusedItems.Add(BuildCitationResult(chunk, null, settings));
+                    }
+                }
+                else if (kwByArticle.TryGetValue(articleId, out var art))
+                {
+                    fusedItems.Add(BuildKeywordCitation(art, settings));
+                }
+            }
+
+            return JsonSerializer.Serialize(new { found = true, results = fusedItems });
+        }
+
+        return await BuildEmptyResultAsync(clientId, siteId, ct);
     }
 
     /// <summary>
@@ -253,7 +294,7 @@ public class KnowledgeMcpTool(
     private static string TruncateContent(string? content)
     {
         var plain = KnowledgeImageMarkdown.StripTokens(content);
-        return plain.Length > 600 ? plain[..600] + "..." : plain;
+        return plain.Length > 1600 ? plain[..1600] + "..." : plain;
     }
 
     /// <summary>Deep link interno que abre o artigo direto no app (card do chat).</summary>

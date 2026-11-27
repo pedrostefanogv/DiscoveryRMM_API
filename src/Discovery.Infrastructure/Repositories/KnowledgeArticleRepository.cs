@@ -51,7 +51,7 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<List<KnowledgeArticle>> SearchKeywordAsync(
+    public Task<List<KnowledgeArticle>> SearchKeywordAsync(
         string queryText,
         Guid? clientId,
         Guid? siteId,
@@ -59,6 +59,17 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         bool publishedOnly = false,
         CancellationToken ct = default,
         bool forAi = false)
+        => SearchKeywordAsync(queryText, clientId, siteId, departmentId, publishedOnly, ct, forAi, excludeArticleIds: null);
+
+    public async Task<List<KnowledgeArticle>> SearchKeywordAsync(
+        string queryText,
+        Guid? clientId,
+        Guid? siteId,
+        Guid? departmentId,
+        bool publishedOnly,
+        CancellationToken ct,
+        bool forAi,
+        IReadOnlyCollection<Guid>? excludeArticleIds)
     {
         var terms = KnowledgeKeywordQuery.BuildTerms(queryText);
         if (terms.Count == 0)
@@ -73,9 +84,12 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
         if (forAi)
             query = query.Where(a => a.AiIndexingEnabled);
 
+        if (excludeArticleIds is { Count: > 0 })
+            query = query.Where(a => !excludeArticleIds.Contains(a.Id));
+
         query = ApplyKeywordTerms(query, terms);
 
-        // Filtro de escopo
+        // Filtro de escopo (paridade com HasAnyChunkAsync)
         query = (clientId, siteId) switch
         {
             (not null, not null) => query.Where(a =>
@@ -87,12 +101,37 @@ public class KnowledgeArticleRepository(DiscoveryDbContext db) : IKnowledgeArtic
                 (a.ClientId == clientId && a.SiteId == null) ||
                 (a.ClientId == null && a.SiteId == null)),
 
+            (null, not null) => query.Where(a =>
+                a.SiteId == siteId ||
+                (a.ClientId == null && a.SiteId == null)),
+
             _ => query.Where(a => a.ClientId == null && a.SiteId == null)
         };
 
         query = ApplyStatusVisibility(query, departmentId, publishedOnly, forAi);
 
-        return await query.OrderBy(a => a.Title).Take(20).ToListAsync(ct);
+        var candidates = await query.Take(40).ToListAsync(ct);
+
+        return candidates
+            .OrderByDescending(a => ScoreKeywordMatch(a, terms))
+            .ThenBy(a => a.Title)
+            .Take(20)
+            .ToList();
+    }
+
+    private static int ScoreKeywordMatch(KnowledgeArticle article, IReadOnlyList<string> terms)
+    {
+        var score = 0;
+        foreach (var term in terms)
+        {
+            if (article.Title.Contains(term, StringComparison.OrdinalIgnoreCase))
+                score += 3;
+            if (!string.IsNullOrEmpty(article.Category) && article.Category.Contains(term, StringComparison.OrdinalIgnoreCase))
+                score += 2;
+            if (article.Content.Contains(term, StringComparison.OrdinalIgnoreCase))
+                score += 1;
+        }
+        return score;
     }
 
     public async Task<List<KnowledgeArticle>> GetArticlesNeedingChunkingAsync(

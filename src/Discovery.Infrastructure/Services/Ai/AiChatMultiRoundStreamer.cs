@@ -96,10 +96,11 @@ public class AiChatMultiRoundStreamer
 
         var maxTokens = await _capabilities.ResolveChatMaxTokensAsync(session.SiteId, aiSettings, ct);
 
-        var history = await _messageRepository.GetRecentBySessionAsync(session.Id, AiChatHelpers.ClampHistoryMessages(aiSettings), ct);
+        var historyLimit = AiChatHelpers.ClampHistoryMessages(aiSettings);
+        var history = await _messageRepository.GetRecentBySessionAsync(session.Id, historyLimit + 12, ct);
         var nextSeq = history.Any() ? history.Max(m => m.SequenceNumber) + 1 : 1;
 
-        var llmMessages = AiChatToolOrchestrator.BuildLlmMessagesFromHistory(history);
+        var llmMessages = AiChatHelpers.BuildCompactedLlmMessages(history, historyLimit);
 
         if (!string.IsNullOrWhiteSpace(systemNote))
             llmMessages.Add(new LlmMessage("system", systemNote));
@@ -153,6 +154,9 @@ public class AiChatMultiRoundStreamer
                 "responda em texto/markdown e, se o clique pedia uma ação real (ex.: abrir pasta/app), execute a ferramenta correspondente normalmente."));
         }
 
+        // Round de síntese forçada sem tools após o orçamento esgotar.
+        bool budgetExhausted = false;
+
         if (toolResults is { Count: > 0 })
         {
             // B1: valida cada toolResult contra as tool calls pendentes emitidas
@@ -167,8 +171,9 @@ public class AiChatMultiRoundStreamer
                 try { pendingCalls = AiChatToolOrchestrator.ParseToolCallsFromJson(lastAssistantWithCalls.ToolCallsJson); }
                 catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao parsear ToolCallsJson para validação B1", traceId); }
             }
-            var pendingIds = new HashSet<string>(pendingCalls?.Select(c => c.Id) ?? [], StringComparer.OrdinalIgnoreCase);
-            var pendingNames = new HashSet<string>(pendingCalls?.Select(c => c.Name) ?? [], StringComparer.OrdinalIgnoreCase);
+            var pendingPairs = new HashSet<(string Id, string Name)>(
+                pendingCalls?.Select(c => (c.Id ?? string.Empty, c.Name ?? string.Empty)) ?? [],
+                new CaseInsensitiveTupleComparer());
 
             // B8-r2 (500 "Duplicate function_call_output", caso
             // call_856c0949dcd0b375_2 / sessão 01a1cd68: seq 16 e 17 com o MESMO
@@ -207,8 +212,7 @@ public class AiChatMultiRoundStreamer
                 // "a2ui_action" é a sentinela de interação com surfaces (não é
                 // tool call real) — permitida sempre.
                 var isA2uiAction = string.Equals(tr.Name, "a2ui_action", StringComparison.OrdinalIgnoreCase);
-                if (pendingCalls != null && !isA2uiAction
-                    && (!pendingIds.Contains(tr.CallId) || !pendingNames.Contains(tr.Name)))
+                if (!isA2uiAction && (pendingCalls == null || !pendingPairs.Contains((tr.CallId ?? string.Empty, tr.Name ?? string.Empty))))
                 {
                     _logger.LogWarning("[{TraceId}] ToolResult rejeitado (não corresponde a tool call pendente): CallId={CallId}, Name={Name}, SessionId={SessionId}",
                         traceId, tr.CallId, tr.Name, session.Id);
@@ -225,13 +229,13 @@ public class AiChatMultiRoundStreamer
                 // A sentinela a2ui_action é isenta nas duas checagens.
                 if (!isA2uiAction)
                 {
-                    if (answeredCallIds.Contains(tr.CallId))
+                    if (answeredCallIds.Contains(tr.CallId ?? string.Empty))
                     {
                         _logger.LogWarning("[{TraceId}] ToolResult descartado (call_id já respondido no histórico — evitar function_call_output duplicado): CallId={CallId}, Name={Name}, SessionId={SessionId}",
                             traceId, tr.CallId, tr.Name, session.Id);
                         continue;
                     }
-                    if (!acceptedCallIds.Add(tr.CallId))
+                    if (!acceptedCallIds.Add(tr.CallId ?? string.Empty))
                     {
                         _logger.LogWarning("[{TraceId}] ToolResult descartado (CallId duplicado dentro do próprio lote): CallId={CallId}, Name={Name}, SessionId={SessionId}",
                             traceId, tr.CallId, tr.Name, session.Id);
@@ -255,7 +259,7 @@ public class AiChatMultiRoundStreamer
                         traceId, tr.Name);
                 }
 
-                var wrapped = AiChatToolOrchestrator.WrapAgentToolError(tr.Result, tr.Name);
+                var wrapped = AiChatToolOrchestrator.WrapAgentToolError(tr.Result, tr.Name ?? string.Empty);
                 if (_auditService is not null)
                 {
                     var agentStatus = tr.Result.Contains("\"approved\":false", StringComparison.OrdinalIgnoreCase)
@@ -266,7 +270,7 @@ public class AiChatMultiRoundStreamer
                             : "success";
                     await _auditService.RecordAsync(new McpToolAuditLog
                     {
-                        ToolName = tr.Name,
+                        ToolName = tr.Name ?? string.Empty,
                         Origin = "agent",
                         ClientId = session.ClientId,
                         SiteId = session.SiteId,
@@ -282,7 +286,7 @@ public class AiChatMultiRoundStreamer
                 // Injeta uma mensagem user multimodal APÓS o tool message — é o
                 // formato aceito por OpenAI/OpenRouter para visão em tool calls.
                 var imageParts = sendScreenshotImages
-                    ? AiChatHelpers.BuildImagePartsFromToolResult(wrapped, tr.Name)
+                    ? AiChatHelpers.BuildImagePartsFromToolResult(wrapped, tr.Name ?? string.Empty)
                     : null;
                 // CRÍTICO (turno real de 2026-10-01 12:01Z): quando a imagem vai
                 // na mensagem multimodal, o CONTEÚDO da tool message NÃO pode
@@ -317,6 +321,7 @@ public class AiChatMultiRoundStreamer
             // usuário esperava mais um round inteiro para receber o mesmo erro.
             if (localWriteUnavailable)
             {
+                budgetExhausted = true;
                 llmMessages.Add(new LlmMessage("system", AiChatHelpers.LocalAgentWriteUnavailableNote));
                 _logger.LogWarning(
                     "[{TraceId}] Canal de gravação local indisponível (retryable=false) — nota anti-retry injetada e loop de ferramentas encerrado para SessionId={SessionId}",
@@ -410,8 +415,6 @@ public class AiChatMultiRoundStreamer
         // upgrade_package clicado nunca chegava ao agent (caso YogaDNS 4/3).
         var turnRound = AiChatTurnRound.Resolve(_memoryCache, session.Id,
             AiChatTurnRound.ResolveContinuesTurn(toolResults?.Select(tr => tr.Name)));
-        // Round de síntese forçada sem tools após o orçamento esgotar.
-        bool budgetExhausted = false;
         // true quando o orçamento estourou e o modelo vai PERGUNTAR ao usuário se
         // pode continuar (renovação) em vez de sintetizar uma resposta final.
         bool continuationRequested = false;
@@ -539,6 +542,7 @@ public class AiChatMultiRoundStreamer
             var localWriteStop = false;
             providerError = null;
 
+            var streamFilter = new AiChatStreamFilter(aiSettings);
             if (roundTools.Count > 0)
             {
                 await foreach (var evt in _llmProvider.StreamWithToolsAsync(systemPrompt, llmMessages, streamOptions, ct))
@@ -551,16 +555,22 @@ public class AiChatMultiRoundStreamer
                     if (AiChatStreamingOrchestrator.IsTextToken(evt))
                     {
                         contentBuilder.Append(evt.Content);
-                        yield return new AiChatStreamChunk(Type: "token", Content: evt.Content);
-                        anyTokenYielded = true;
+                        var safeToken = streamFilter.Push(evt.Content);
+                        if (!string.IsNullOrEmpty(safeToken))
+                        {
+                            yield return new AiChatStreamChunk(Type: "token", Content: safeToken);
+                            anyTokenYielded = true;
+                        }
                     }
                     else if (evt.Type == "tool_calls" && evt.ToolCalls is { Count: > 0 })
                     {
                         hasToolCalls = true;
-                        totalTokens = evt.TokensUsed;
+                        if (evt.TokensUsed is > 0)
+                            totalTokens = (totalTokens ?? 0) + evt.TokensUsed.Value;
+                        var roundPreamble = contentBuilder.ToString();
                         var assistantToolCalls = evt.ToolCalls.Select(tc =>
                             new LlmAssistantToolCall(tc.Id, tc.Name, tc.ArgumentsJson)).ToList();
-                        llmMessages.Add(new LlmMessage("assistant", contentBuilder.ToString(), ToolCalls: assistantToolCalls));
+                        llmMessages.Add(new LlmMessage("assistant", roundPreamble, ToolCalls: assistantToolCalls));
                         contentBuilder.Clear();
 
                         foreach (var tc in evt.ToolCalls)
@@ -609,7 +619,11 @@ public class AiChatMultiRoundStreamer
                                 if (tc.Name == "knowledge_search")
                                 {
                                     var kbQuery = AiChatHelpers.ExtractKbQuery(tc.ArgumentsJson);
-                                    if (!string.IsNullOrEmpty(kbQuery) && !executedKbQueries.Add(kbQuery)) continue;
+                                    if (!string.IsNullOrEmpty(kbQuery) && !executedKbQueries.Add(kbQuery))
+                                    {
+                                        llmMessages.Add(new LlmMessage("tool", """{"found":false,"message":"Busca já realizada neste turno. Use as informações já obtidas."}""", tc.Id, tc.Name));
+                                        continue;
+                                    }
                                 }
                                 var toolResult = await _mcpToolExecutor.ExecuteAsync(tc.Name, tc.ArgumentsJson,
                                     session.ClientId, session.SiteId, agentId, aiSettings, null, departmentId, session.Id, ct);
@@ -731,7 +745,7 @@ public class AiChatMultiRoundStreamer
                                     SessionId = session.Id,
                                     SequenceNumber = nextSeq,
                                     Role = "assistant",
-                                    Content = contentBuilder.Length > 0 ? contentBuilder.ToString() : string.Empty,
+                                    Content = roundPreamble,
                                     ToolCallsJson = JsonSerializer.Serialize(assistantToolCalls.Select(tc => new { id = tc.Id, name = tc.Name, arguments = tc.ArgumentsJson })),
                                     CreatedAt = DateTime.UtcNow,
                                     TraceId = traceId
@@ -743,7 +757,17 @@ public class AiChatMultiRoundStreamer
                             yield break;
                         }
                     }
-                    else if (evt.Type == "done") { totalTokens = evt.TokensUsed; }
+                    else if (evt.Type == "done")
+                    {
+                        if (evt.TokensUsed is > 0)
+                            totalTokens = (totalTokens ?? 0) + evt.TokensUsed.Value;
+                    }
+                }
+                var tailSafe = streamFilter.Flush();
+                if (!string.IsNullOrEmpty(tailSafe))
+                {
+                    yield return new AiChatStreamChunk(Type: "token", Content: tailSafe);
+                    anyTokenYielded = true;
                 }
             }
 
@@ -759,6 +783,11 @@ public class AiChatMultiRoundStreamer
         // (o controller repassa ao agent) em vez de seguir para a síntese.
         if (providerError is not null)
         {
+            if (_costControl is not null && costAcquired && !anyTokenYielded && !hasToolCalls)
+            {
+                try { await _costControl.ReleaseAsync(session.ClientId, session.SiteId, aiSettings, ct); }
+                catch (Exception ex) { _logger.LogWarning(ex, "[{TraceId}] Falha ao liberar slot no CostControl (multi-round)", traceId); }
+            }
             _logger.LogError("[{TraceId}] Provider stream error (multi-round): {Error}", traceId, providerError);
             yield return new AiChatStreamChunk(Type: "error", Error: providerError);
             yield break;
@@ -893,11 +922,23 @@ public class AiChatMultiRoundStreamer
                     PresencePenalty: AiChatHelpers.ClampPenalty(aiSettings.PresencePenalty),
                     Seed: aiSettings.Seed,
                     ResponseFormat: aiSettings.ResponseFormat,
-                    ReasoningEnabled: aiSettings.ReasoningEnabled, ReasoningEffort: aiSettings.ReasoningEffort);
+                    ReasoningEnabled: aiSettings.ReasoningEnabled,
+                    ReasoningEffort: string.IsNullOrWhiteSpace(aiSettings.ReasoningEffort) ? "low" : aiSettings.ReasoningEffort);
+                var synthFilter = new AiChatStreamFilter(aiSettings);
                 await foreach (var token in _llmProvider.StreamAsync(systemPrompt, llmMessages, synthesisOptions, ct))
                 {
                     contentBuilder.Append(token);
-                    yield return new AiChatStreamChunk(Type: "token", Content: token);
+                    var safeToken = synthFilter.Push(token);
+                    if (!string.IsNullOrEmpty(safeToken))
+                    {
+                        yield return new AiChatStreamChunk(Type: "token", Content: safeToken);
+                        anyTokenYielded = true;
+                    }
+                }
+                var synthTail = synthFilter.Flush();
+                if (!string.IsNullOrEmpty(synthTail))
+                {
+                    yield return new AiChatStreamChunk(Type: "token", Content: synthTail);
                     anyTokenYielded = true;
                 }
                 fullContent = contentBuilder.ToString();
@@ -941,5 +982,17 @@ public class AiChatMultiRoundStreamer
 
         yield return new AiChatStreamChunk(Type: "done", SessionId: session.Id,
             TokensUsed: totalTokens, LatencyMs: (int)stopwatch.ElapsedMilliseconds);
+    }
+
+    private sealed class CaseInsensitiveTupleComparer : IEqualityComparer<(string Id, string Name)>
+    {
+        public bool Equals((string Id, string Name) x, (string Id, string Name) y) =>
+            string.Equals(x.Id, y.Id, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Id, string Name) obj) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Id ?? string.Empty),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Name ?? string.Empty));
     }
 }

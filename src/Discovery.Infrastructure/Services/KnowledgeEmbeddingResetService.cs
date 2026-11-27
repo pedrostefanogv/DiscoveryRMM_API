@@ -36,6 +36,8 @@ public class KnowledgeEmbeddingResetService(
             "Iniciando reset de embeddings da KB para nova dimensão={Dim}. Todos os chunks serão reprocessados.",
             newDimensions);
 
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+
         // 1. Invalida todos os embeddings
         var affected = await db.Database.ExecuteSqlRawAsync(
             "UPDATE knowledge_article_chunks SET embedding = NULL, embedding_generated_at = NULL",
@@ -111,6 +113,8 @@ public class KnowledgeEmbeddingResetService(
         server.UpdatedAt = DateTime.UtcNow;
         server.UpdatedBy = updatedBy;
         await serverRepo.UpdateAsync(server);
+
+        await transaction.CommitAsync(ct);
 
         logger.LogInformation(
             "Reset concluído. current_embedding_dimensions atualizado para {Dim}. KB será reprocessada pelo background service.",

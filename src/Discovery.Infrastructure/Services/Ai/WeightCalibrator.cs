@@ -74,8 +74,9 @@ public static class WeightCalibrator
                 if (!sample.ChosenSubScores.TryGetValue(dimension, out var chosen)) continue;
                 if (!sample.PoolMedianSubScores.TryGetValue(dimension, out var median)) continue;
 
-                if (chosen >= median) { samplesHigh++; if (sample.Overridden) overridesHigh++; }
-                else { samplesLow++; if (sample.Overridden) overridesLow++; }
+                // Ignora empates exatos (comum em dimensões esparsas no cold-start) para não prender tudo em samplesHigh
+                if (chosen > median + 1e-6) { samplesHigh++; if (sample.Overridden) overridesHigh++; }
+                else if (chosen < median - 1e-6) { samplesLow++; if (sample.Overridden) overridesLow++; }
             }
 
             double strength = 0;
