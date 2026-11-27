@@ -188,6 +188,14 @@ builder.Services.AddSingleton<WingetManifestParser>();
 // Sync de catálogo em background (singleton: mantém estado de jobs/último resultado entre requests)
 builder.Services.AddSingleton<AppCatalogBackgroundSyncService>();
 
+// Rebuild do agente em background (singleton por processo): o endpoint responde
+// 202 na hora, disparos concorrentes aderem ao build em andamento e o build NÃO
+// é cancelado quando o cliente HTTP desconecta (só no shutdown da aplicação).
+// Antes disso o rebuild era síncrono no request e o timeout do script de update
+// matava a árvore do build, que recomeçava do zero a cada retentativa.
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.IAgentRebuildExecutor, Discovery.Infrastructure.Services.MediatorAgentRebuildExecutor>();
+builder.Services.AddSingleton<Discovery.Infrastructure.Services.AgentRebuildCoordinator>();
+
 // ── Observabilidade de plataforma (singletons) ─────────────────────────────
 // Telemetria NATS: probe TCP + RTT cacheados e atualizados em background; o
 // endpoint do dashboard nunca faz I/O de rede por request com o cache quente.

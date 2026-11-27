@@ -471,7 +471,7 @@ public class F02TenantIsolationTests
         Assert.That((await agentSensorsCtrl.GetAll(AgentB1, scopeSiteA1, agentRepo, siteRepo, CancellationToken.None) as ObjectResult)?.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
 
         // AgentUpdatesController (403 on AgentB1)
-        var agentUpdatesCtrl = new AgentUpdatesController(mediator);
+        var agentUpdatesCtrl = new AgentUpdatesController(mediator, AgentRebuildTestSupport.CreateCoordinator());
         Assert.That((await agentUpdatesCtrl.GetAgentEvents(AgentB1, scopeSiteA1, agentRepo, siteRepo) as ObjectResult)?.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
 
         // AgentAlertsController (403 on cross-tenant Create / GetById / Notify)

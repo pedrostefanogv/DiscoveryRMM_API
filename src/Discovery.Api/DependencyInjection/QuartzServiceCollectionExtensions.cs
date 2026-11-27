@@ -103,8 +103,11 @@ public static class QuartzServiceCollectionExtensions
             // Cadência default: 6h. Piso de 15 min protege contra config agressiva
             // (clone/pull + import são custosos para rodar em loop curto).
             var manifestsIntervalMin = Math.Max(15, configuration.GetValue<int?>("AppCatalog:Winget:ManifestsPollIntervalMinutes") ?? 360);
-            // Primeira execução logo após o startup (catch-up pós restart/deploy); 0 = no start do scheduler.
-            var manifestsStartupDelayMin = Math.Max(0, configuration.GetValue<int?>("AppCatalog:Winget:StartupSyncDelayMinutes") ?? 2);
+            // Primeira execução após o startup (catch-up pós restart/deploy); 0 = no start do scheduler.
+            // Default 10 min (era 2): um import pode disparar a manutenção git do clone do
+            // winget-pkgs, que satura o disco; disparar isso 2 min depois do startup colidia
+            // com o rebuild do agente recém-disparado pelo update (incidente 2026-11-27).
+            var manifestsStartupDelayMin = Math.Max(0, configuration.GetValue<int?>("AppCatalog:Winget:StartupSyncDelayMinutes") ?? 10);
 
             if (manifestsEnabled && !manifestsSource.Equals("feed", StringComparison.OrdinalIgnoreCase))
             {

@@ -1,6 +1,7 @@
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using Discovery.Infrastructure.Services;
 
 namespace Discovery.Api.Services;
 
@@ -16,17 +17,20 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
+    private readonly AgentRebuildCoordinator _rebuildCoordinator;
     private readonly ILogger<AgentPackagePrebuildHostedService> _logger;
 
     public AgentPackagePrebuildHostedService(
         IServiceProvider serviceProvider,
         IConfiguration configuration,
         IHostApplicationLifetime hostApplicationLifetime,
+        AgentRebuildCoordinator rebuildCoordinator,
         ILogger<AgentPackagePrebuildHostedService> logger)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
         _hostApplicationLifetime = hostApplicationLifetime;
+        _rebuildCoordinator = rebuildCoordinator;
         _logger = logger;
     }
 
@@ -62,71 +66,99 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
 
         try
         {
+            if (_rebuildCoordinator.IsRunning)
+            {
+                _logger.LogInformation("Agent prebuild startup skipped: an agent rebuild is already running in the coordinator.");
+                return;
+            }
+
             await using var scope = _serviceProvider.CreateAsyncScope();
             var packageService = scope.ServiceProvider.GetRequiredService<IAgentPackageService>();
             var agentUpdateService = scope.ServiceProvider.GetRequiredService<IAgentUpdateService>();
-            var syncInvalidationPublisher = scope.ServiceProvider.GetRequiredService<ISyncInvalidationPublisher>();
 
-            _logger.LogInformation("Agent prebuild: starting clean base binary build...");
-            // C4: forceRebuild=false - com true, PrebuildBaseBinaryAsync DELETAVA os binarios antes
-            // de checar, anulando o early-return e forcando rebuild completo a cada restart do servico.
-            // O rebuild explicito continua disponivel via RebuildAgentCommand (nao afetado).
-            await packageService.PrebuildBaseBinaryAsync(forceRebuild: false, stoppingToken);
-
-            _logger.LogInformation("Agent prebuild: generating update installer artifact...");
-            var (content, fileName) = await packageService.BuildUpdateInstallerAsync(stoppingToken);
             var version = await ResolveStartupBuildVersionAsync(packageService, agentUpdateService, activeProfile, stoppingToken);
-            var contentType = ResolveConfigForProfile(activeProfile, "InstallerContentType")
-                ?? "application/x-msdownload";
-
-            await using var stream = new MemoryStream(content, writable: false);
             var commitHash = await packageService.GetAgentCommitHashAsync(stoppingToken);
-            var publishedBuild = await agentUpdateService.RefreshCurrentBuildAsync(
-                version: version,
+            var currentBuild = await agentUpdateService.GetCurrentBuildAsync(
                 platform: "windows",
                 architecture: "amd64",
                 artifactType: AgentReleaseArtifactType.Installer,
-                fileName: fileName,
-                contentType: contentType,
-                content: stream,
-                signatureThumbprint: null,
-                commitHash: commitHash,
-                actor: StartupBuildActor,
+                cancellationToken: stoppingToken);
+            var currentLocalPath = await agentUpdateService.GetCurrentBuildLocalPathAsync(
+                platform: "windows",
+                architecture: "amd64",
+                artifactType: AgentReleaseArtifactType.Installer,
                 cancellationToken: stoppingToken);
 
-            await syncInvalidationPublisher.PublishGlobalAsync(
-                SyncResourceType.AgentUpdate,
-                "agent-build-refreshed-startup",
-                cancellationToken: stoppingToken);
+            var hasKnownCommit = !string.IsNullOrWhiteSpace(commitHash)
+                && !string.Equals(commitHash, "unknown", StringComparison.OrdinalIgnoreCase);
 
-            _logger.LogInformation(
-                "Agent prebuild startup published stage2 build successfully. BuildId={BuildId}, version={Version}, commitHash={CommitHash}, file={FileName}",
-                publishedBuild.Id,
-                publishedBuild.Version,
-                publishedBuild.CommitHash,
-                publishedBuild.FileName);
+            var stage2AlreadyUpToDate = currentBuild is not null
+                && string.Equals(currentBuild.Version, version, StringComparison.OrdinalIgnoreCase)
+                && hasKnownCommit
+                && string.Equals(currentBuild.CommitHash, commitHash, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(currentLocalPath)
+                && File.Exists(currentLocalPath);
 
-            try
+            if (stage2AlreadyUpToDate)
             {
-                _logger.LogInformation("Agent prebuild: warming generic zero-touch installer cache...");
-                var genericArtifact = await packageService.GetGenericInstallerArtifactAsync(cancellationToken: stoppingToken);
-
+                await packageService.PrebuildBaseBinaryAsync(forceRebuild: false, stoppingToken);
                 _logger.LogInformation(
-                    "Agent prebuild startup warmed generic zero-touch installer cache successfully. File={FileName}, size={SizeBytes} bytes, s3Key={S3Key}",
-                    genericArtifact.FileName,
-                    genericArtifact.SizeBytes,
-                    genericArtifact.S3ObjectKey ?? "(none)");
+                    "Agent prebuild startup skipped stage2 rebuild/publication: current build is already up to date (BuildId={BuildId}, version={Version}, commitHash={CommitHash}).",
+                    currentBuild!.Id,
+                    currentBuild.Version,
+                    currentBuild.CommitHash);
+
+                try
+                {
+                    _logger.LogInformation("Agent prebuild: warming generic zero-touch installer cache...");
+                    var genericArtifact = await packageService.GetGenericInstallerArtifactAsync(forceRebuild: false, cancellationToken: stoppingToken);
+
+                    _logger.LogInformation(
+                        "Agent prebuild startup warmed generic zero-touch installer cache successfully. File={FileName}, size={SizeBytes} bytes, s3Key={S3Key}",
+                        genericArtifact.FileName,
+                        genericArtifact.SizeBytes,
+                        genericArtifact.S3ObjectKey ?? "(none)");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Do not fail startup/stage2 publication due to zero-touch warmup issues.
+                    _logger.LogWarning(ex, "Agent prebuild startup failed to warm generic zero-touch installer cache.");
+                }
+
+                return;
             }
-            catch (Exception ex)
+
+            var (started, status) = _rebuildCoordinator.TryStart(StartupBuildActor);
+            if (!started)
             {
-                // Do not fail startup/stage2 publication due to zero-touch warmup issues.
-                _logger.LogWarning(ex, "Agent prebuild startup failed to warm generic zero-touch installer cache.");
+                _logger.LogInformation(
+                    "Agent prebuild startup joined running rebuild in coordinator. RunId={RunId}",
+                    status.RunId);
+                return;
             }
 
             _logger.LogInformation(
-                "Agent prebuild on startup finished successfully. Stage2 installer generated: {FileName} ({SizeBytes} bytes)",
-                fileName,
-                content.Length);
+                "Agent prebuild startup queued rebuild in coordinator. RunId={RunId}, targetVersion={Version}, commitHash={CommitHash}",
+                status.RunId,
+                version,
+                commitHash);
+
+            if (status.RunId is { } runId)
+            {
+                var final = await _rebuildCoordinator.WaitForCompletionAsync(runId, stoppingToken);
+                if (final.State == AgentRebuildState.Succeeded && final.Build is { } publishedBuild)
+                {
+                    _logger.LogInformation(
+                        "Agent prebuild startup finished via coordinator. BuildId={BuildId}, version={Version}, file={FileName}",
+                        publishedBuild.Id,
+                        publishedBuild.Version,
+                        publishedBuild.FileName);
+                }
+                else if (final.State == AgentRebuildState.Failed)
+                {
+                    _logger.LogWarning("Agent prebuild startup failed via coordinator: {Error}", final.Error ?? "unknown");
+                }
+            }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {

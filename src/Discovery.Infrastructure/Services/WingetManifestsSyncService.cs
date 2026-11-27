@@ -25,8 +25,12 @@ public sealed class WingetManifestsSyncOptions
     /// <summary>
     /// Atraso (minutos) da primeira execução após o startup — catch-up pós restart/deploy.
     /// 0 = dispara assim que o scheduler inicia.
+    ///
+    /// Default 10 min (era 2): o import pode disparar a manutenção git do clone, que
+    /// satura o disco; rodar isso 2 min depois do startup colidia com o rebuild do
+    /// agente que o update acaba de disparar (incidente 2026-11-27).
     /// </summary>
-    public int StartupSyncDelayMinutes { get; set; } = 2;
+    public int StartupSyncDelayMinutes { get; set; } = 10;
 
     /// <summary>
     /// Grau máximo de paralelismo do parse dos manifests. 0 = auto (núcleos da máquina).
@@ -42,6 +46,13 @@ public sealed class WingetManifestsSyncOptions
     public string RepoUrl { get; set; } = "https://github.com/microsoft/winget-pkgs.git";
     public string Branch { get; set; } = "master";
     public int GitTimeoutSeconds { get; set; } = 900;
+
+    /// <summary>
+    /// Roda a manutenção git (gc) em prioridade baixa (nice 19 + ionice idle) para
+    /// não roubar I/O de disco de builds no mesmo host. Default: true.
+    /// </summary>
+    public bool GcLowPriority { get; set; } = true;
+
     public bool Enabled { get; set; } = true;
 }
 
@@ -64,6 +75,7 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
     private readonly IAppPackageRepository _appPackageRepository;
     private readonly WingetManifestParser _parser;
     private readonly ILogger<WingetManifestsSyncService> _logger;
+    private readonly AgentRebuildCoordinator? _rebuildCoordinator;
 
     /// <summary>Serializa execuções (Quartz job + trigger manual podem concorrer).</summary>
     private static readonly SemaphoreSlim SyncGate = new(1, 1);
@@ -72,13 +84,15 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
         IConfiguration configuration,
         IAppPackageRepository appPackageRepository,
         WingetManifestParser parser,
-        ILogger<WingetManifestsSyncService> logger)
+        ILogger<WingetManifestsSyncService> logger,
+        AgentRebuildCoordinator? rebuildCoordinator = null)
     {
         _options = configuration.GetSection(WingetManifestsSyncOptions.SectionName).Get<WingetManifestsSyncOptions>()
                    ?? new WingetManifestsSyncOptions();
         _appPackageRepository = appPackageRepository;
         _parser = parser;
         _logger = logger;
+        _rebuildCoordinator = rebuildCoordinator;
     }
 
     public async Task<AppCatalogSyncResultDto> SyncFromManifestsAsync(CancellationToken cancellationToken = default)
@@ -128,8 +142,21 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
 
             var upserted = await ImportAsync(versionDirs, commitDate, cancellationToken);
 
-            // gc somente após import real (execuções no-op não pagam este custo).
-            await RunGitAsync(["gc", "--prune=now"], cancellationToken, logErrorsAsWarning: true);
+            // Manutenção do clone com custo limitado, só após import real (execuções
+            // no-op não pagam este custo). `gc --auto` (não `--prune=now`) repacka
+            // apenas quando os limiares são atingidos: o antigo `--prune=now` forçava
+            // `repack -a -l` do pack inteiro (~270MB) a cada import, levava 13-17min
+            // num host de 2 vCPU e saturava o disco — travando o rebuild do agente que
+            // o update dispara logo em seguida (incidente 2026-11-27). Prioridade baixa
+            // para não competir com o build pelo I/O.
+            if (_rebuildCoordinator?.IsRunning == true)
+            {
+                _logger.LogInformation("Winget manifests sync: git gc pulado neste ciclo porque há um rebuild do agente em andamento.");
+            }
+            else
+            {
+                await RunGitAsync(["gc", "--auto", "--quiet"], cancellationToken, logErrorsAsWarning: true, lowPriority: _options.GcLowPriority);
+            }
 
             stopwatch.Stop();
             _logger.LogInformation(
@@ -477,9 +504,9 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
 
     // ── Execução de git ──────────────────────────────────────────────────
 
-    private async Task RunGitAsync(string[] args, CancellationToken ct, bool logErrorsAsWarning = false)
+    private async Task RunGitAsync(string[] args, CancellationToken ct, bool logErrorsAsWarning = false, bool lowPriority = false)
     {
-        var (ok, output) = await TryRunGitAsync(args, ct);
+        var (ok, output) = await TryRunGitAsync(args, ct, lowPriority);
         if (!ok)
         {
             if (logErrorsAsWarning)
@@ -489,7 +516,7 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
         }
     }
 
-    private async Task<(bool Ok, string Output)> TryRunGitAsync(string[] args, CancellationToken ct)
+    private async Task<(bool Ok, string Output)> TryRunGitAsync(string[] args, CancellationToken ct, bool lowPriority = false)
     {
         var psi = new System.Diagnostics.ProcessStartInfo
         {
@@ -500,6 +527,20 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
             CreateNoWindow = true,
             WorkingDirectory = Directory.Exists(_options.ClonePath) ? _options.ClonePath : null
         };
+
+        if (lowPriority)
+        {
+            // nice/ionice são POSIX; onde não existirem o git roda direto (best-effort).
+            var prefix = LowPriorityGitPrefix();
+            if (prefix.Count > 0)
+            {
+                psi.FileName = prefix[0];
+                for (var i = 1; i < prefix.Count; i++)
+                    psi.ArgumentList.Add(prefix[i]);
+                psi.ArgumentList.Add("git");
+            }
+        }
+
         foreach (var arg in args)
             psi.ArgumentList.Add(arg);
 
@@ -511,14 +552,16 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
-        var timeoutMs = _options.GitTimeoutSeconds * 1000;
-        var exitTask = process.WaitForExitAsync(CancellationToken.None);
-        var delayTask = Task.Delay(timeoutMs, CancellationToken.None);
-        var completed = exitTask == await Task.WhenAny(exitTask, delayTask);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linkedCts.CancelAfter(TimeSpan.FromSeconds(_options.GitTimeoutSeconds));
 
-        if (!completed)
+        try
         {
-            // Timeout OU cancelamento externo: mata a árvore inteira para não deixar git órfão.
+            await process.WaitForExitAsync(linkedCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Timeout OU cancelamento externo: mata a árvore inteira imediatamente para não deixar git órfão.
             try { process.Kill(entireProcessTree: true); } catch { /* já encerrado */ }
 
             if (ct.IsCancellationRequested)
@@ -531,6 +574,33 @@ public class WingetManifestsSyncService : IWingetManifestsSyncService
         var stderr = await stderrTask;
         var ok = process.ExitCode == 0;
         return (ok, ok ? stdout : $"{stdout}{Environment.NewLine}{stderr}".Trim());
+    }
+
+    /// <summary>
+    /// Prefixo nice/ionice para comandos git de manutenção. Vazio quando o host não
+    /// tem essas ferramentas (ex.: Windows) — o chamador então roda o git direto.
+    /// </summary>
+    private static List<string> LowPriorityGitPrefix()
+    {
+        var prefix = new List<string>();
+        if (OperatingSystem.IsWindows())
+            return prefix;
+
+        if (File.Exists("/usr/bin/nice") || File.Exists("/bin/nice"))
+        {
+            prefix.Add("nice");
+            prefix.Add("-n");
+            prefix.Add("19");
+        }
+
+        if (File.Exists("/usr/bin/ionice") || File.Exists("/bin/ionice"))
+        {
+            prefix.Add("ionice");
+            prefix.Add("-c");
+            prefix.Add("3");
+        }
+
+        return prefix;
     }
 
     private static string Truncate(string value, int max = 500) =>

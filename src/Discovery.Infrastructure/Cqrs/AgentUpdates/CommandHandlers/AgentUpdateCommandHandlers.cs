@@ -112,6 +112,15 @@ public sealed class RebuildAgentCommandHandler(
             "agent-build-rebuilt",
             cancellationToken: ct);
 
+        try
+        {
+            await agentPackageService.GetGenericInstallerArtifactAsync(forceRebuild: true, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Agent rebuild: falha ao atualizar cache do instalador genérico (stage2 já publicado).");
+        }
+
         return Result<AgentBuildDto>.Success(new AgentBuildDto(
             build.Id, build.Version, build.Platform, build.Architecture,
             build.FileName, build.Sha256, build.CreatedAt, null));

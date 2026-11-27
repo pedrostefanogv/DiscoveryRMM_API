@@ -214,4 +214,64 @@ public class WingetManifestsSyncServiceTests
         Assert.That(result.PackagesUpserted, Is.EqualTo(1), "catálogo vazio deve disparar carga completa");
         Assert.That(repo.BulkCalls, Is.Not.Empty);
     }
+
+    [Test]
+    public async Task Sync_WhenAgentRebuildIsRunning_SkipsGitGcAndCompletesImport()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "winget-sync-tests", Guid.NewGuid().ToString("N"));
+        var origin = Path.Combine(root, "origin");
+        var clone = Path.Combine(root, "clone");
+        Directory.CreateDirectory(origin);
+
+        RunGit(origin, "init", "-b", "master");
+        WriteManifest(origin, "One.App", "1.0.0");
+        RunGit(origin, "add", "-A");
+        RunGit(origin, "-c", "user.email=test@local", "-c", "user.name=test", "commit", "-m", "init");
+
+        var repo = new FakeAppPackageRepository();
+        IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["AppCatalog:Winget:ClonePath"] = clone,
+            ["AppCatalog:Winget:RepoUrl"] = new Uri(origin).AbsoluteUri,
+            ["AppCatalog:Winget:Branch"] = "master",
+            ["AppCatalog:Winget:GitTimeoutSeconds"] = "60",
+        }).Build();
+
+        var coordinator = AgentRebuildTestSupport.CreateCoordinator();
+        // Usa um executor bloqueado para manter IsRunning=true durante o sync.
+        var blockingTcs = new TaskCompletionSource<Discovery.Core.Cqrs.AgentUpdates.Queries.AgentBuildDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blockingCoordinator = new AgentRebuildCoordinator(
+            new BlockingExecutor(blockingTcs.Task),
+            new NoopLifetime(),
+            NullLogger<AgentRebuildCoordinator>.Instance);
+        var (started, _) = blockingCoordinator.TryStart("test");
+        Assert.That(started, Is.True);
+        Assert.That(blockingCoordinator.IsRunning, Is.True);
+
+        var service = new WingetManifestsSyncService(
+            config,
+            repo,
+            new WingetManifestParser(),
+            NullLogger<WingetManifestsSyncService>.Instance,
+            blockingCoordinator);
+
+        var result = await service.SyncFromManifestsAsync();
+        Assert.That(result.Success, Is.True, result.Error);
+        Assert.That(result.PackagesUpserted, Is.EqualTo(1));
+
+        blockingTcs.SetCanceled();
+    }
+
+    private sealed class BlockingExecutor(Task<Discovery.Core.Cqrs.AgentUpdates.Queries.AgentBuildDto> task) : IAgentRebuildExecutor
+    {
+        public Task<Discovery.Core.Cqrs.AgentUpdates.Queries.AgentBuildDto> ExecuteAsync(string actor, CancellationToken cancellationToken) => task;
+    }
+
+    private sealed class NoopLifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication() { }
+    }
 }

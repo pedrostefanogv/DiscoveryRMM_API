@@ -4,6 +4,22 @@
 # ── Update: shared defaults loader ────────────────────────────────────────
 
 load_update_defaults() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  if sudo test -f "$env_file"; then
+    local env_branch env_clean env_refresh_infra env_keep_releases env_rebuild_timeout
+    env_branch="$(sudo awk -F= '/^DISCOVERY_GIT_BRANCH=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    env_clean="$(sudo awk -F= '/^DISCOVERY_CLEAN_BUILD=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    env_refresh_infra="$(sudo awk -F= '/^DISCOVERY_REFRESH_INFRA_CONFIG=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    env_keep_releases="$(sudo awk -F= '/^DISCOVERY_KEEP_RELEASES=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+    env_rebuild_timeout="$(sudo awk -F= '/^DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+
+    if [[ -z "${DISCOVERY_GIT_BRANCH:-}" && -z "${DISCOVERY_RELEASE_CHANNEL:-}" && -n "$env_branch" ]]; then DISCOVERY_GIT_BRANCH="$env_branch"; fi
+    if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" && -n "$env_clean" ]]; then DISCOVERY_CLEAN_BUILD="$env_clean"; fi
+    if [[ -z "${DISCOVERY_REFRESH_INFRA_CONFIG:-}" && -n "$env_refresh_infra" ]]; then DISCOVERY_REFRESH_INFRA_CONFIG="$env_refresh_infra"; fi
+    if [[ -z "${DISCOVERY_KEEP_RELEASES:-}" && -n "$env_keep_releases" ]]; then DISCOVERY_KEEP_RELEASES="$env_keep_releases"; fi
+    if [[ -z "${DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS:-}" && -n "$env_rebuild_timeout" ]]; then DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS="$env_rebuild_timeout"; fi
+  fi
+
   DISCOVERY_GIT_REPO="${DISCOVERY_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_API}"
   DISCOVERY_AGENT_GIT_REPO="${DISCOVERY_AGENT_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Agent}"
   DISCOVERY_SITE_GIT_REPO="${DISCOVERY_SITE_GIT_REPO:-https://github.com/pedrostefanogv/DiscoveryRMM_Site}"
@@ -27,10 +43,8 @@ load_update_defaults() {
   validate_dotnet_runtime "$DISCOVERY_DOTNET_RUNTIME"
 
   DISCOVERY_SITE_API_URL="${DISCOVERY_SITE_API_URL:-}"
-  if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]] && sudo test -f /etc/discovery-api/discovery.env; then
-    DISCOVERY_CLEAN_BUILD="$(sudo awk -F= '/^DISCOVERY_CLEAN_BUILD=/{sub("^[^=]*=",""); print; exit}' /etc/discovery-api/discovery.env 2>/dev/null || true)"
-  fi
   case "${DISCOVERY_CLEAN_BUILD:-1}" in 0|1) ;; *) DISCOVERY_CLEAN_BUILD="1" ;; esac
+  export DISCOVERY_CLEAN_BUILD
   load_existing_site_realtime_defaults
   normalize_site_realtime_settings
   update_site_realtime_environment_file
@@ -120,19 +134,36 @@ update_agent() {
   # Revalida o CLI do Wails a partir do go.mod atualizado do agent (v2<->v3 e
   # upgrade/downgrade de versao beta).
   ensure_wails_toolchain
-  _trigger_agent_rebuild_via_api
+  # Nao-bloqueante: falha ao disparar o rebuild do agent nao deve abortar o update.
+  _trigger_agent_rebuild_via_api || warn "Falha ao disparar rebuild do agent (nao-bloqueante)"
 }
 
 # ── Trigger agent rebuild via the HTTP rebuild endpoint ─────────────────
 
+# Dispara o rebuild do agente pela API (assincrono) e ACOMPANHA o status.
+#
+# Historico (incidente 2026-11-27): o endpoint era sincrono e este script usava
+# --max-time 300 + 5 retentativas. Quando o build passava de 300s (disco saturado
+# pela manutencao git do clone do winget), o cancelamento do request matava a
+# arvore do build no servidor e a retentativa recomecava do zero — o update ficava
+# "agarrado" por ~25min e terminava sem publicar o build. Agora:
+#   - o POST responde 202 na hora (o build roda em background na API);
+#   - disparo concorrente adere ao build em andamento (nao reinicia);
+#   - o script consulta GET .../status ate concluir (timeout configuravel);
+#   - se estourar o tempo de espera, NAO reinicia nem mata nada: apenas avisa,
+#     porque o build continua no servidor.
+# Overrides: DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS (default 1800),
+#            DISCOVERY_AGENT_REBUILD_POLL_SECONDS (default 15).
 _trigger_agent_rebuild_via_api() {
   local api_url="http://127.0.0.1:8080"
   local rebuild_endpoint="${api_url}/api/v1/agent-updates/build/rebuild"
-  local curl_timeout=300
+  local status_endpoint="${rebuild_endpoint}/status"
+  local poll_interval="${DISCOVERY_AGENT_REBUILD_POLL_SECONDS:-15}"
+  local max_wait="${DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS:-1800}"
 
   if sudo systemctl is-active --quiet discovery-api.service 2>/dev/null; then :; else
     warn "Servico discovery-api nao esta rodando; impossivel disparar rebuild do agent"
-    return
+    return 1
   fi
 
   # Wait for the API to actually answer requests before triggering the rebuild.
@@ -142,7 +173,7 @@ _trigger_agent_rebuild_via_api() {
   log "Aguardando API responder (readiness)..."
   local readiness_ok=0
   for _ in $(seq 1 60); do
-    if curl -sf -o /dev/null --max-time 5 --connect-timeout 2 "http://127.0.0.1:8080/health" 2>/dev/null; then
+    if curl -sf -o /dev/null --max-time 5 --connect-timeout 2 "${api_url}/health" 2>/dev/null; then
       readiness_ok=1
       break
     fi
@@ -150,54 +181,109 @@ _trigger_agent_rebuild_via_api() {
   done
   if [[ "$readiness_ok" -ne 1 ]]; then
     warn "API nao ficou pronta em 120s; rebuild do agent nao disparado"
-    return
+    return 1
   fi
 
-  log "Disparando rebuild do agent via API (sem restart)..."
-  local response http_code retry=0 max_retries=5
-
-  while [[ $retry -lt $max_retries ]]; do
-    response="$(curl -s -w '\n%{http_code}' -X POST "$rebuild_endpoint" \
+  log "Disparando rebuild do agent via API (assincrono, sem restart)..."
+  local response http_code body
+  if ! response="$(curl -s -w '\n%{http_code}' -X POST "$rebuild_endpoint" \
       -H "Content-Type: application/json" \
-      --max-time "$curl_timeout" \
+      --max-time 60 \
       --connect-timeout 5 \
-      2>&1)" && break
-
-    retry=$((retry + 1))
-    if [[ $retry -lt $max_retries ]]; then
-      log "API ainda nao respondeu (tentativa $retry/$max_retries). Aguardando 3s..."
-      sleep 3
-    fi
-  done
-
-  if [[ -z "$response" ]]; then
-    warn "Falha ao conectar na API em $api_url para rebuild do agent apos $max_retries tentativas"
-    return
+      2>&1)"; then
+    warn "Falha ao conectar na API em ${api_url} para disparar o rebuild do agent"
+    return 1
   fi
 
   http_code="$(printf '%s' "$response" | tail -n 1)"
-  local body; body="$(printf '%s' "$response" | sed '$d')"
+  body="$(printf '%s' "$response" | sed '$d')"
 
-  if [[ "$http_code" == "200" ]]; then
-    local build_id build_version build_file build_platform build_arch
-    build_id="$(echo "$body" | grep -o '"buildId":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    build_version="$(echo "$body" | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    build_file="$(echo "$body" | grep -o '"fileName":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    build_platform="$(echo "$body" | grep -o '"platform":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    build_arch="$(echo "$body" | grep -o '"architecture":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
-    log "Agent rebuild concluido com sucesso (sem downtime da API)"
-    log "Build publicado: version=${build_version:-?}, platform=${build_platform:-?}/${build_arch:-?}, file=${build_file:-?}, id=${build_id:-?}"
-  elif [[ "$http_code" == "403" ]]; then
-    warn "Rebuild do agent rejeitado (HTTP 403) — endpoint so aceita localhost. Resposta: ${body}"
+  case "$http_code" in
+    200|202) : ;;
+    403)
+      warn "Rebuild do agent rejeitado (HTTP 403) — endpoint so aceita localhost. Resposta: ${body}"
+      return 1
+      ;;
+    *)
+      warn "Rebuild do agent falhou ao iniciar (HTTP ${http_code}). Resposta: ${body}"
+      return 1
+      ;;
+  esac
+
+  local run_id already_running
+  run_id="$(printf '%s' "$body" | grep -o '"runId":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  already_running="$(printf '%s' "$body" | grep -o '"alreadyRunning":[a-z]*' | head -1 | cut -d: -f2 || true)"
+
+  if [[ "$already_running" == "true" ]]; then
+    log "Ja existe rebuild do agent em andamento (runId=${run_id:-?}); acompanhando sem reiniciar"
   else
-    warn "Rebuild do agent falhou (HTTP ${http_code}). Resposta: ${body}"
+    log "Rebuild do agent iniciado em background (runId=${run_id:-?})"
   fi
+
+  log "Aguardando conclusao do rebuild do agent (timeout ${max_wait}s, consulta a cada ${poll_interval}s)..."
+  local waited=0 state="" last_state="" status_body="" status_run_id=""
+  while [[ "$waited" -lt "$max_wait" ]]; do
+    sleep "$poll_interval"
+    waited=$((waited + poll_interval))
+
+    status_body="$(curl -s --max-time 15 --connect-timeout 5 "$status_endpoint" 2>/dev/null || true)"
+    state="$(printf '%s' "$status_body" | grep -o '"state":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+    status_run_id="$(printf '%s' "$status_body" | grep -o '"runId":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+
+    # Se a API reiniciou durante a espera, o run que estavamos acompanhando sumiu.
+    if [[ -n "$run_id" && -n "$status_run_id" && "$status_run_id" != "$run_id" ]]; then
+      warn "O rebuild acompanhado (${run_id}) nao esta mais ativo (a API reiniciou?). Estado atual: ${state:-?}"
+      return 0
+    fi
+
+    case "$state" in
+      Running)
+        if [[ "$state" != "$last_state" ]]; then
+          log "Rebuild do agent em andamento (${waited}s)..."
+        fi
+        ;;
+      Succeeded)
+        local build_id build_version build_file build_platform build_arch
+        build_id="$(printf '%s' "$status_body" | grep -o '"buildId":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+        build_version="$(printf '%s' "$status_body" | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+        build_file="$(printf '%s' "$status_body" | grep -o '"fileName":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+        build_platform="$(printf '%s' "$status_body" | grep -o '"platform":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+        build_arch="$(printf '%s' "$status_body" | grep -o '"architecture":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+        log "Agent rebuild concluido com sucesso (sem downtime da API) em ${waited}s"
+        log "Build publicado: version=${build_version:-?}, platform=${build_platform:-?}/${build_arch:-?}, file=${build_file:-?}, id=${build_id:-?}"
+        return 0
+        ;;
+      Failed)
+        local build_error
+        build_error="$(printf '%s' "$status_body" | grep -o '"error":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+        warn "Rebuild do agent falhou: ${build_error:-erro desconhecido}"
+        return 1
+        ;;
+      *)
+        # Estado ainda indisponivel (API reiniciando?) — segue tentando.
+        ;;
+    esac
+
+    last_state="$state"
+  done
+
+  warn "Rebuild do agent ainda em andamento apos ${max_wait}s; o build continua no servidor e NAO sera reiniciado. Status: ${status_endpoint}"
+  return 0
 }
 
 update_all_components() {
   clone_or_update_repo "$DISCOVERY_GIT_REPO" "$DISCOVERY_API_SOURCE"
   clone_or_update_repo "$DISCOVERY_SITE_GIT_REPO" "$DISCOVERY_SITE_SOURCE"
+
+  local agent_commit_before="" agent_commit_after=""
+  if sudo test -d "$DISCOVERY_AGENT_SRC/.git"; then
+    agent_commit_before="$(sudo -u discovery-api git -C "$DISCOVERY_AGENT_SRC" rev-parse --short=8 HEAD 2>/dev/null || true)"
+  fi
   clone_or_update_repo "$DISCOVERY_AGENT_GIT_REPO" "$DISCOVERY_AGENT_SRC"
+  if sudo test -d "$DISCOVERY_AGENT_SRC/.git"; then
+    agent_commit_after="$(sudo -u discovery-api git -C "$DISCOVERY_AGENT_SRC" rev-parse --short=8 HEAD 2>/dev/null || true)"
+  fi
+
   # Revalida o CLI do Wails a partir do go.mod atualizado do agent antes do rebuild.
   ensure_wails_toolchain
   publish_api
@@ -231,7 +317,11 @@ update_all_components() {
       warn "Configuracao do nginx invalida; reload pulado (verifique: sudo nginx -t)."
     fi
   fi
-  _trigger_agent_rebuild_via_api || warn "Falha ao disparar rebuild do agent (nao-bloqueante)"
+  if [[ -n "$agent_commit_before" && "$agent_commit_before" == "$agent_commit_after" && "${DISCOVERY_FORCE_AGENT_REBUILD:-0}" != "1" ]]; then
+    log "Repositorio do agent sem alteracoes (commit ${agent_commit_after}); pulando rebuild forcado (use DISCOVERY_FORCE_AGENT_REBUILD=1 para forcar)."
+  else
+    _trigger_agent_rebuild_via_api || warn "Falha ao disparar rebuild do agent (nao-bloqueante)"
+  fi
 }
 
 # ── Update: scope selector ────────────────────────────────────────────────
@@ -602,6 +692,7 @@ apply_maintenance_mode() {
     echo "6) Trocar provedor de certificado TLS (self-signed/ZeroSSL/Let's Encrypt)"
     echo "7) Limpeza de dados (builds antigos, temp, journal, cache)"
     echo "8) Regravar/atualizar a configuracao do object storage (forcado)"
+    echo "9) Configuracoes avancadas de build e update (build incremental, updates do SO, branch, retencao)"
     echo "0) Voltar / Sair"
     echo "Dica: digite 'voltar' (ou '<') para retornar ao menu anterior."
     echo "----------------------------------------"
@@ -655,6 +746,8 @@ apply_maintenance_mode() {
       8)
         force_refresh_object_storage
         pause_maintenance_menu ;;
+      9)
+        configure_update_build_settings ;;
       0|sair|exit|q|quit)
         log "Saindo do modo de manutencao"
         return 0 ;;
@@ -958,4 +1051,159 @@ cleanup_temp_files() {
   # Temp do sistema (arquivos com mais de 7 dias)
   sudo find /tmp -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null || true
   echo "[cleanup] temp files limpos"
+}
+
+# ── Configuracoes avancadas de build e update (menu de manutencao, opcao 9) ──
+
+configure_update_build_settings() {
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  sudo test -f "$env_file" || fail "Arquivo de ambiente da API nao encontrado: $env_file"
+
+  _read_env_or_default() {
+    local key="$1" fallback="$2" val=""
+    val="$(sudo awk -F= -v k="$key" '$1 == k { sub("^[^=]*=",""); print; exit }' "$env_file" 2>/dev/null || true)"
+    printf '%s' "${val:-$fallback}"
+  }
+
+  _persist_env_updates() {
+    local tmp_file; tmp_file="$(mktemp)"
+    sudo cat "$env_file" > "$tmp_file"
+    while (( $# >= 2 )); do
+      local k="$1" v="$2"
+      shift 2
+      if grep -q "^${k}=" "$tmp_file" 2>/dev/null; then
+        sed -i "s|^${k}=.*|${k}=${v}|" "$tmp_file"
+      else
+        printf '%s=%s\n' "$k" "$v" >> "$tmp_file"
+      fi
+    done
+    sudo install -m 640 -o root -g discovery-api "$tmp_file" "$env_file"
+    rm -f "$tmp_file"
+  }
+
+  local clean_build_initial
+  clean_build_initial="$(_read_env_or_default "DISCOVERY_CLEAN_BUILD" "1")"
+  local clean_build_changed=0
+
+  while true; do
+    local cur_clean cur_os_updates cur_branch cur_nginx cur_keep cur_timeout
+    cur_clean="$(_read_env_or_default "DISCOVERY_CLEAN_BUILD" "1")"
+    cur_os_updates="$(_read_env_or_default "DISCOVERY_APPLY_SYSTEM_UPDATES" "1")"
+    cur_branch="$(_read_env_or_default "DISCOVERY_GIT_BRANCH" "release")"
+    cur_nginx="$(_read_env_or_default "DISCOVERY_REFRESH_INFRA_CONFIG" "1")"
+    cur_keep="$(_read_env_or_default "DISCOVERY_KEEP_RELEASES" "5")"
+    cur_timeout="$(_read_env_or_default "DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS" "1800")"
+
+    local clean_label="Limpo (1)"
+    [[ "$cur_clean" == "0" ]] && clean_label="Incremental (0)"
+    local os_label="Ativo (1)"
+    [[ "$cur_os_updates" == "0" ]] && os_label="Desativado (0)"
+    local nginx_label="Sim (1)"
+    [[ "$cur_nginx" == "0" ]] && nginx_label="Nao (0)"
+
+    wizard_header "Configuracoes avancadas de build e update" "Manutencao"
+    echo "Arquivo: $env_file"
+    echo "1) Modo de build (API/portal/Go): $clean_label"
+    echo "2) Updates automaticos do SO (apt): $os_label"
+    echo "3) Canal/branch de update: $cur_branch"
+    echo "4) Regenerar config do Nginx no update: $nginx_label"
+    echo "5) Releases antigas mantidas para rollback: $cur_keep"
+    echo "6) Timeout de espera do rebuild do agente (s): $cur_timeout"
+    echo "0) Voltar"
+    echo "----------------------------------------"
+
+    local opt
+    read -r -p "Opcao [0]: " opt
+    if is_wizard_back_input "$opt"; then
+      break
+    fi
+    opt="${opt:-0}"
+
+    case "$opt" in
+      1)
+        local new_clean="0"
+        [[ "$cur_clean" == "0" ]] && new_clean="1"
+        _persist_env_updates "DISCOVERY_CLEAN_BUILD" "$new_clean"
+        DISCOVERY_CLEAN_BUILD="$new_clean"
+        clean_build_changed=1
+        if [[ "$new_clean" == "0" ]]; then
+          log "Modo de build alterado para Incremental (DISCOVERY_CLEAN_BUILD=0)."
+        else
+          log "Modo de build alterado para Limpo (DISCOVERY_CLEAN_BUILD=1)."
+        fi
+        ;;
+      2)
+        local new_os="0"
+        [[ "$cur_os_updates" == "0" ]] && new_os="1"
+        _persist_env_updates "DISCOVERY_APPLY_SYSTEM_UPDATES" "$new_os"
+        DISCOVERY_APPLY_SYSTEM_UPDATES="$new_os"
+        log "Updates automaticos do SO alterado para: $new_os"
+        ;;
+      3)
+        local new_branch
+        read -r -p "Nova branch/canal [$cur_branch]: " new_branch
+        new_branch="$(printf '%s' "${new_branch:-$cur_branch}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        if [[ "$new_branch" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+          _persist_env_updates "DISCOVERY_GIT_BRANCH" "$new_branch"
+          DISCOVERY_GIT_BRANCH="$new_branch"
+          log "Branch de update alterada para: $new_branch"
+        else
+          warn "Branch invalida: '$new_branch'. Use apenas letras, numeros, '.', '_', '/' ou '-'."
+        fi
+        ;;
+      4)
+        local new_nginx="0"
+        [[ "$cur_nginx" == "0" ]] && new_nginx="1"
+        _persist_env_updates "DISCOVERY_REFRESH_INFRA_CONFIG" "$new_nginx"
+        DISCOVERY_REFRESH_INFRA_CONFIG="$new_nginx"
+        log "Regenerar Nginx no update alterado para: $new_nginx"
+        ;;
+      5)
+        local new_keep
+        read -r -p "Quantidade de releases para manter (>= 2) [$cur_keep]: " new_keep
+        new_keep="${new_keep:-$cur_keep}"
+        if [[ "$new_keep" =~ ^[0-9]+$ ]] && (( new_keep >= 2 )); then
+          _persist_env_updates "DISCOVERY_KEEP_RELEASES" "$new_keep"
+          DISCOVERY_KEEP_RELEASES="$new_keep"
+          log "Retencao de releases alterada para: $new_keep"
+        else
+          warn "Valor invalido: '$new_keep'. Informe um inteiro >= 2."
+        fi
+        ;;
+      6)
+        local new_timeout
+        read -r -p "Timeout do rebuild do agente em segundos (>= 120) [$cur_timeout]: " new_timeout
+        new_timeout="${new_timeout:-$cur_timeout}"
+        if [[ "$new_timeout" =~ ^[0-9]+$ ]] && (( new_timeout >= 120 )); then
+          _persist_env_updates "DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS" "$new_timeout"
+          DISCOVERY_AGENT_REBUILD_TIMEOUT_SECONDS="$new_timeout"
+          log "Timeout de rebuild do agente alterado para: ${new_timeout}s"
+        else
+          warn "Valor invalido: '$new_timeout'. Informe um inteiro >= 120."
+        fi
+        ;;
+      0)
+        break
+        ;;
+      *)
+        echo "Opcao invalida: $opt" >&2
+        ;;
+    esac
+  done
+
+  local clean_build_final
+  clean_build_final="$(_read_env_or_default "DISCOVERY_CLEAN_BUILD" "1")"
+  if [[ "$clean_build_changed" -eq 1 && "$clean_build_final" != "$clean_build_initial" ]]; then
+    echo
+    warn "DISCOVERY_CLEAN_BUILD foi alterado; o cache Go do rebuild do agente na API le essa variavel no startup."
+    local restart_choice
+    read -r -p "Reiniciar discovery-api agora para aplicar na API? (s/N): " restart_choice
+    restart_choice="$(printf '%s' "${restart_choice:-n}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$restart_choice" in
+      s|sim|y|yes|1)
+        sudo systemctl restart discovery-api && log "discovery-api reiniciada." || warn "Falha ao reiniciar discovery-api." ;;
+      *)
+        log "Restart nao executado. Quando puder, rode: sudo systemctl restart discovery-api" ;;
+    esac
+  fi
 }

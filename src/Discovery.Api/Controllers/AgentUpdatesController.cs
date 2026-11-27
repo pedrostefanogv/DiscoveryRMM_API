@@ -6,6 +6,7 @@ using Discovery.Core.Enums.Identity;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
 using Discovery.Core.Interfaces.Auth;
+using Discovery.Infrastructure.Services;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,7 +15,7 @@ namespace Discovery.Api.Controllers;
 
 [ApiController]
 [Route("api/v{version:apiVersion}/agent-updates")]
-public class AgentUpdatesController(IMediator mediator) : ControllerBase
+public class AgentUpdatesController(IMediator mediator, AgentRebuildCoordinator rebuildCoordinator) : ControllerBase
 {
     private static async Task<IActionResult?> EnsureAgentAccessAsync(
         Guid agentId,
@@ -72,6 +73,15 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     /// Triggers a full agent rebuild from source (sync + build binary + publish stage2 installer).
     /// Does not require file upload — the server rebuilds from the configured agent repository.
     ///
+    /// Assíncrono por padrão: responde 202 imediatamente e o build roda em background
+    /// (acompanhe em GET build/rebuild/status). Disparos concorrentes NÃO reiniciam o
+    /// build: quem chega durante um rebuild em andamento apenas adere a ele
+    /// (alreadyRunning=true) — a retentativa do script de update não recomeça o build.
+    ///
+    /// ?wait=true preserva o contrato síncrono antigo (usado pela UI): espera a
+    /// conclusão e devolve o build publicado. Mesmo nesse modo o build NÃO é
+    /// cancelado se o cliente HTTP desconectar.
+    ///
     /// Access control:
     /// - Direct loopback connections (scripts running on the server) are allowed without authentication.
     /// - Authenticated admin users calling through the frontend/proxy are also allowed.
@@ -81,31 +91,62 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
     /// </summary>
     [HttpPost("build/rebuild")]
     [AllowAnonymous]
-    public async Task<IActionResult> Rebuild(CancellationToken ct)
+    public async Task<IActionResult> Rebuild([FromQuery] bool wait = false, CancellationToken ct = default)
     {
-        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+        if (EnsureRebuildAccess() is { } denied)
+            return denied;
 
-        // Allow direct loopback connections (scripts running on the server).
-        var hasProxyHeaders = HttpContext.Request.Headers.ContainsKey("X-Forwarded-For")
-                           || HttpContext.Request.Headers.ContainsKey("X-Forwarded-Host")
-                           || HttpContext.Request.Headers.ContainsKey("X-Real-IP");
-        var isLocalhost = remoteIp is not null && IPAddress.IsLoopback(remoteIp) && !hasProxyHeaders;
+        var actor = IsLoopbackWithoutProxyHeaders()
+            ? "localhost-script"
+            : $"user:{HttpContext.Items["UserId"]}";
 
-        // Allow authenticated users (frontend via proxy with valid JWT or API key).
-        var isAuthenticated = HttpContext.Items["UserId"] is Guid;
+        var (started, status) = rebuildCoordinator.TryStart(actor);
+        var runId = status.RunId;
 
-        if (!isLocalhost && !isAuthenticated)
+        if (!wait)
         {
-            return StatusCode(403, new
+            return Accepted(new
             {
-                message = "Acesso negado. Este endpoint requer conexão direta de localhost ou autenticação de administrador."
+                message = started
+                    ? "Agent rebuild started in the background."
+                    : "Agent rebuild already in progress; joined the running build.",
+                runId,
+                state = status.State.ToString(),
+                actor = status.Actor,
+                startedAt = status.StartedAt,
+                alreadyRunning = !started,
+                statusUrl = RebuildStatusUrl
             });
         }
 
-        var actor = isLocalhost ? "localhost-script" : $"user:{HttpContext.Items["UserId"]}";
-        var r = await mediator.Send(new RebuildAgentCommand(actor), ct);
-        return r.Match<IActionResult>(
-            build => Ok(new
+        if (runId is null)
+        {
+            return StatusCode(500, new
+            {
+                errors = new[] { new { Code = "REBUILD_NOT_STARTED", Message = "Could not start the agent rebuild." } }
+            });
+        }
+
+        AgentRebuildSnapshot final;
+        try
+        {
+            final = await rebuildCoordinator.WaitForCompletionAsync(runId.Value, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cliente desconectou: o build continua em background de propósito.
+            return Accepted(new
+            {
+                message = "Client disconnected; the rebuild continues in the background.",
+                runId,
+                state = rebuildCoordinator.GetStatus().State.ToString(),
+                statusUrl = RebuildStatusUrl
+            });
+        }
+
+        if (final.State == AgentRebuildState.Succeeded && final.Build is { } build)
+        {
+            return Ok(new
             {
                 message = "Agent rebuild completed successfully.",
                 buildId = build.Id,
@@ -114,9 +155,78 @@ public class AgentUpdatesController(IMediator mediator) : ControllerBase
                 architecture = build.Architecture,
                 fileName = build.FileName,
                 sha256 = build.Sha256,
-                publishedAt = build.PublishedAt
-            }),
-            e => StatusCode(500, new { errors = e.Select(x => new { x.Code, x.Message }) }));
+                publishedAt = build.PublishedAt,
+                runId
+            });
+        }
+
+        return StatusCode(500, new
+        {
+            errors = new[] { new { Code = "REBUILD_FAILED", Message = final.Error ?? "Agent rebuild failed." } }
+        });
+    }
+
+    /// <summary>
+    /// Status do rebuild do agente: se há build em andamento e o resultado do último run.
+    /// Mesma regra de acesso do POST (loopback direto ou admin autenticado).
+    /// </summary>
+    [HttpGet("build/rebuild/status")]
+    [AllowAnonymous]
+    public IActionResult GetRebuildStatus()
+    {
+        if (EnsureRebuildAccess() is { } denied)
+            return denied;
+
+        var status = rebuildCoordinator.GetStatus();
+        return Ok(new
+        {
+            runId = status.RunId,
+            state = status.State.ToString(),
+            running = status.IsRunning,
+            actor = status.Actor,
+            startedAt = status.StartedAt,
+            finishedAt = status.FinishedAt,
+            elapsedSeconds = status.ElapsedSeconds,
+            error = status.Error,
+            build = status.Build is null ? null : new
+            {
+                buildId = status.Build.Id,
+                version = status.Build.Version,
+                platform = status.Build.Platform,
+                architecture = status.Build.Architecture,
+                fileName = status.Build.FileName,
+                sha256 = status.Build.Sha256,
+                publishedAt = status.Build.PublishedAt
+            }
+        });
+    }
+
+    private const string RebuildStatusUrl = "/api/v1/agent-updates/build/rebuild/status";
+
+    /// <summary>
+    /// Conexão direta de loopback (scripts na própria máquina). Headers de proxy
+    /// desqualificam: request vindo pelo Nginx não é confiável como local.
+    /// </summary>
+    private bool IsLoopbackWithoutProxyHeaders()
+    {
+        var remoteIp = HttpContext.Connection.RemoteIpAddress;
+        var hasProxyHeaders = HttpContext.Request.Headers.ContainsKey("X-Forwarded-For")
+                           || HttpContext.Request.Headers.ContainsKey("X-Forwarded-Host")
+                           || HttpContext.Request.Headers.ContainsKey("X-Real-IP");
+        return remoteIp is not null && IPAddress.IsLoopback(remoteIp) && !hasProxyHeaders;
+    }
+
+    private IActionResult? EnsureRebuildAccess()
+    {
+        // Loopback direto (script) OU usuário autenticado (frontend via proxy).
+        var authorized = IsLoopbackWithoutProxyHeaders() || HttpContext.Items["UserId"] is Guid;
+        if (authorized)
+            return null;
+
+        return StatusCode(403, new
+        {
+            message = "Acesso negado. Este endpoint requer conexão direta de localhost ou autenticação de administrador."
+        });
     }
 
     [HttpGet("agents/{agentId:guid}/events")]

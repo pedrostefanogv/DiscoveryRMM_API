@@ -523,8 +523,14 @@ prompt_selfupdate_settings() {
     current_apply_updates="$(resolve_apply_system_updates_value)"
   fi
 
+  local env_file="${DISCOVERY_ENV_FILE:-/etc/discovery-api/discovery.env}"
+  if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" ]] && sudo test -f "$env_file"; then
+    DISCOVERY_CLEAN_BUILD="$(sudo awk -F= '/^DISCOVERY_CLEAN_BUILD=/{sub("^[^=]*=",""); print; exit}' "$env_file" 2>/dev/null || true)"
+  fi
+
   if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
     DISCOVERY_CLEAN_BUILD="${DISCOVERY_CLEAN_BUILD:-1}"
+    case "$DISCOVERY_CLEAN_BUILD" in 0|1) ;; *) DISCOVERY_CLEAN_BUILD="1" ;; esac
     DISCOVERY_APPLY_SYSTEM_UPDATES="${current_apply_updates:-1}"
     case "$DISCOVERY_APPLY_SYSTEM_UPDATES" in 0|1) ;; *) DISCOVERY_APPLY_SYSTEM_UPDATES="1" ;; esac
     return 0
@@ -556,12 +562,12 @@ prompt_selfupdate_settings() {
   fi
 
   if [[ -z "${DISCOVERY_CLEAN_BUILD:-}" || "${WIZARD_REPROMPT:-0}" -eq 1 ]]; then
-    local clean_default="1"
-    [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "0" ]] && clean_default="2"
+    local clean_default="2"
+    [[ "${DISCOVERY_CLEAN_BUILD:-1}" == "0" ]] && clean_default="1"
     echo
-    echo "Modo de build para os updates manuais:"
-    echo "  1) Limpo (remove cache antes do build)"
-    echo "  2) Incremental (mais rapido, sem limpeza de cache)"
+    echo "Ativar build incremental para os updates manuais (API, portal e cache Go)?"
+    echo "  1) Sim - Incremental (recomendado: mais rapido, reaproveita cache .NET/npm/Go)"
+    echo "  2) Nao - Limpo (remove caches antes de cada build)"
     local clean_build_choice
     while true; do
       read -r -p "Escolha [$clean_default]: " clean_build_choice
@@ -569,12 +575,15 @@ prompt_selfupdate_settings() {
         return "${WIZARD_BACK_RC:-10}"
       fi
       clean_build_choice="${clean_build_choice:-$clean_default}"
+      clean_build_choice="$(printf '%s' "$clean_build_choice" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
       case "$clean_build_choice" in
-        1) DISCOVERY_CLEAN_BUILD="1"; break ;;
-        2) DISCOVERY_CLEAN_BUILD="0"; break ;;
-        *) echo "Opcao invalida: '$clean_build_choice'. Digite 1 ou 2 (ou 'voltar')." >&2 ;;
+        1|s|sim|y|yes|incremental) DISCOVERY_CLEAN_BUILD="0"; break ;;
+        2|n|nao|não|no|limpo|clean) DISCOVERY_CLEAN_BUILD="1"; break ;;
+        *) echo "Opcao invalida: '$clean_build_choice'. Digite 1 (incremental) ou 2 (limpo) (ou 'voltar')." >&2 ;;
       esac
     done
+  else
+    case "$DISCOVERY_CLEAN_BUILD" in 0|1) ;; *) DISCOVERY_CLEAN_BUILD="1" ;; esac
   fi
 }
 

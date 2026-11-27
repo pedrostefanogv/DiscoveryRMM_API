@@ -35,9 +35,16 @@ public sealed class WingetManifestsSyncJob : IJob
             return;
         }
 
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var rebuildCoordinator = scope.ServiceProvider.GetService<AgentRebuildCoordinator>();
+        if (rebuildCoordinator?.IsRunning == true)
+        {
+            logger.LogInformation("Winget manifests sync agendado pulado neste ciclo: há um rebuild do agente em andamento.");
+            return;
+        }
+
         logger.LogInformation("Winget manifests sync starting...");
 
-        await using var scope = scopeFactory.CreateAsyncScope();
         var syncService = scope.ServiceProvider.GetRequiredService<IWingetManifestsSyncService>();
         var statusStore = scope.ServiceProvider.GetRequiredService<IAppCatalogSyncStatusStore>();
 
