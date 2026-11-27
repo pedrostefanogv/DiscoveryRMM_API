@@ -26,6 +26,14 @@ public class KnowledgeController(
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
 
+    private string ResolveActor(string? requestedActor)
+    {
+        var authenticated = HttpContext?.Items["Username"] as string;
+        if (!string.IsNullOrWhiteSpace(authenticated))
+            return authenticated.Trim();
+        return string.IsNullOrWhiteSpace(requestedActor) ? "api" : requestedActor.Trim();
+    }
+
     [HttpGet]
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.View, ScopeSource.Global)]
     public async Task<IActionResult> GetAll(
@@ -87,7 +95,7 @@ public class KnowledgeController(
     {
         var result = await mediator.Send(new CreateKnowledgeArticleCommand(
             request.Title, request.Content, request.Category, request.Tags,
-            request.CreatedBy, request.ClientId, request.SiteId, request.DepartmentId, request.AiIndexingEnabled), ct);
+            ResolveActor(request.CreatedBy), request.ClientId, request.SiteId, request.DepartmentId, request.AiIndexingEnabled), ct);
         return result.Match<IActionResult>(
             success: article => CreatedAtAction(nameof(GetById), new { id = article.Id, version = "v1" }, article),
             failure: errors => BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
@@ -98,7 +106,7 @@ public class KnowledgeController(
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateArticleRequest request, CancellationToken ct)
     {
         var result = await mediator.Send(new UpdateKnowledgeArticleCommand(
-            id, request.Title, request.Content, request.Category, request.Tags, request.LastEditedBy,
+            id, request.Title, request.Content, request.Category, request.Tags, ResolveActor(request.LastEditedBy),
             request.ClientId, request.SiteId, request.DepartmentId, request.AiIndexingEnabled, request.UpdateScope), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
@@ -133,7 +141,7 @@ public class KnowledgeController(
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Publish(Guid id, [FromBody] PublishArticleRequest request, CancellationToken ct)
     {
-        var result = await mediator.Send(new PublishKnowledgeArticleCommand(id, request.Status, request.LastEditedBy, request.ChangeSummary), ct);
+        var result = await mediator.Send(new PublishKnowledgeArticleCommand(id, request.Status, ResolveActor(request.LastEditedBy), request.ChangeSummary), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 
@@ -141,7 +149,7 @@ public class KnowledgeController(
     [RequirePermission(ResourceType.KnowledgeBase, ActionType.Edit, ScopeSource.Global)]
     public async Task<IActionResult> Unpublish(Guid id, [FromQuery] string? lastEditedBy = null, CancellationToken ct = default)
     {
-        var result = await mediator.Send(new UnpublishKnowledgeArticleCommand(id, lastEditedBy), ct);
+        var result = await mediator.Send(new UnpublishKnowledgeArticleCommand(id, ResolveActor(lastEditedBy)), ct);
         return result.Match<IActionResult>(success: Ok, failure: errors => errors[0].Code == "NotFound" ? NotFound() : BadRequest(new { errors = errors.Select(e => new { e.Code, e.Message }) }));
     }
 

@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Discovery.Api.Controllers;
 using Discovery.Core.Configuration;
+using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.AgentAuth.Knowledge;
 using Discovery.Core.Cqrs.Knowledge.Commands;
 using Discovery.Core.DTOs;
@@ -12,6 +14,9 @@ using Discovery.Infrastructure.Cqrs.Knowledge;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Repositories;
 using Discovery.Infrastructure.Services;
+using MediatR;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Pgvector;
@@ -245,6 +250,67 @@ public class KnowledgeAiControlTests
         Assert.That(r1.IsSuccess, Is.False);
         Assert.That(r2.IsSuccess, Is.True);
         Assert.That(queueRepo.Enqueued, Is.EqualTo(new[] { enabled.Id }));
+    }
+
+    [Test]
+    public async Task KnowledgeController_uses_authenticated_username_when_CreatedBy_or_LastEditedBy_is_null()
+    {
+        var mediator = new CapturingMediator();
+        var controller = new KnowledgeController(
+            mediator,
+            null!, null!, null!, null!)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+        controller.HttpContext.Items["Username"] = "pedro.admin";
+
+        await controller.Create(
+            new CreateArticleRequest("Artigo", "Conteúdo completo", null, null, CreatedBy: null, null, null),
+            CancellationToken.None);
+        var createCmd = mediator.Sent.OfType<CreateKnowledgeArticleCommand>().Single();
+        Assert.That(createCmd.CreatedBy, Is.EqualTo("pedro.admin"));
+
+        await controller.Update(
+            Guid.NewGuid(),
+            new UpdateArticleRequest("Artigo", "Conteúdo atualizado", null, null, LastEditedBy: null),
+            CancellationToken.None);
+        var updateCmd = mediator.Sent.OfType<UpdateKnowledgeArticleCommand>().Single();
+        Assert.That(updateCmd.LastEditedBy, Is.EqualTo("pedro.admin"));
+    }
+
+    private sealed class CapturingMediator : IMediator
+    {
+        public List<object> Sent { get; } = [];
+
+        public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
+        {
+            Sent.Add(request);
+            if (typeof(TResponse) == typeof(Result<ArticleResponse>))
+            {
+                var dto = new ArticleResponse(
+                    Guid.NewGuid(), "Artigo", "Conteúdo", null, [], "pedro.admin", "pedro.admin",
+                    DateTime.UtcNow, "Draft", "Global", "global", null, null, null, null, null,
+                    0, null, 0, false, DateTime.UtcNow, DateTime.UtcNow);
+                return Task.FromResult((TResponse)(object)Result<ArticleResponse>.Success(dto));
+            }
+            return Task.FromResult(default(TResponse)!);
+        }
+
+        public Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default) where TRequest : IRequest
+            => Task.CompletedTask;
+        public Task<object?> Send(object request, CancellationToken cancellationToken = default)
+            => Task.FromResult<object?>(null);
+        public IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+        public IAsyncEnumerable<object?> CreateStream(object request, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+        public Task Publish(object notification, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+        public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification
+            => Task.CompletedTask;
     }
 
     private sealed class ReducedDbContext(DbContextOptions<DiscoveryDbContext> options)
