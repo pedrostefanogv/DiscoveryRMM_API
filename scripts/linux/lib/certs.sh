@@ -37,6 +37,56 @@ setup_jwt_signing_keys() {
   rm -f "$private_tmp" "$public_tmp"
 }
 
+setup_agent_mtls_ca() {
+  local cert_dir="/etc/discovery-api/certs"
+  local ca_cert_path="$cert_dir/agent-ca.crt"
+  local ca_key_path="$cert_dir/agent-ca.key"
+
+  sudo install -d -m 750 -o root -g discovery-api "$cert_dir"
+
+  if sudo test -s "$ca_cert_path" && sudo test -s "$ca_key_path"; then
+    log "CA mTLS de agents ja existe; mantendo arquivos atuais"
+    sudo chmod 644 "$ca_cert_path"
+    sudo chmod 640 "$ca_key_path"
+    sudo chown root:discovery-api "$ca_cert_path" "$ca_key_path" 2>/dev/null || true
+    return 0
+  fi
+
+  log "Gerando CA mTLS interna de agents (ECDSA P-256, 10 anos)"
+  local ca_conf; ca_conf="$(mktemp)"
+  local key_tmp; key_tmp="$(mktemp)"
+  local cert_tmp; cert_tmp="$(mktemp)"
+
+  cat > "$ca_conf" <<'EOF'
+[req]
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_ca
+
+[dn]
+CN = DiscoveryRMM Internal Agent CA
+O = DiscoveryRMM
+
+[v3_ca]
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+EOF
+
+  if ! openssl ecparam -name prime256v1 -genkey -noout -out "$key_tmp" \
+    || ! openssl req -x509 -new -nodes -key "$key_tmp" -sha256 -days 3650 \
+         -config "$ca_conf" -extensions v3_ca -out "$cert_tmp"; then
+    rm -f "$ca_conf" "$key_tmp" "$cert_tmp"
+    warn "Falha ao gerar CA mTLS de agents via openssl."
+    return 1
+  fi
+
+  sudo install -m 640 -o root -g discovery-api "$key_tmp" "$ca_key_path"
+  sudo install -m 644 -o root -g discovery-api "$cert_tmp" "$ca_cert_path"
+  rm -f "$ca_conf" "$key_tmp" "$cert_tmp"
+}
+
 setup_self_signed_proxy_certificate() {
   local cert_path="/etc/discovery-api/certs/api-internal.crt"
   local key_path="/etc/discovery-api/certs/api-internal.key"

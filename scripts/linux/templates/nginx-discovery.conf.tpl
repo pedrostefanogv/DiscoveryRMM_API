@@ -57,9 +57,7 @@ __REDIRECT_RULES__
 
   ssl_certificate /etc/discovery-api/certs/api-internal.crt;
   ssl_certificate_key /etc/discovery-api/certs/api-internal.key;
-  ssl_client_certificate /etc/discovery-api/certs/agent-ca.crt;
-  ssl_verify_client optional;
-  ssl_verify_depth 2;
+__AGENT_MTLS_DIRECTIVES__
 
   # TLS moderno apenas (defaults antigos do nginx incluem TLS 1.0/1.1).
   ssl_protocols TLSv1.2 TLSv1.3;

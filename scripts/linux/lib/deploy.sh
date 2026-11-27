@@ -1167,6 +1167,22 @@ OSEOF
   fi
   [[ -f "$NGINX_TEMPLATE_PATH" ]] || fail "Template Nginx nao encontrado: $NGINX_TEMPLATE_PATH"
 
+  if declare -F setup_agent_mtls_ca >/dev/null 2>&1; then
+    setup_agent_mtls_ca || warn "Falha ao garantir CA mTLS de agents (prosseguindo sem ssl_client_certificate)"
+  fi
+
+  local agent_mtls_directives=""
+  if sudo test -s /etc/discovery-api/certs/agent-ca.crt; then
+    agent_mtls_directives="$(cat <<'MTLS_EOF'
+  ssl_client_certificate /etc/discovery-api/certs/agent-ca.crt;
+  ssl_verify_client optional;
+  ssl_verify_depth 2;
+MTLS_EOF
+)"
+  else
+    warn "CA mTLS /etc/discovery-api/certs/agent-ca.crt ausente; mantendo nginx sem ssl_client_certificate."
+  fi
+
   local rendered_conf; rendered_conf="$(mktemp)"
   awk \
     -v server_name_list="$server_name_list" \
@@ -1174,12 +1190,17 @@ OSEOF
     -v nats_ws_port="${NATS_WS_PORT:-8081}" \
     -v redirect_rules="$redirect_rules" \
     -v object_storage_location="$object_storage_location" \
+    -v agent_mtls_directives="$agent_mtls_directives" \
     '{
       gsub("__SERVER_NAME_LIST__", server_name_list)
       gsub("__DISCOVERY_SITE_CURRENT__", discovery_site_current)
       gsub("__NATS_WS_PORT__", nats_ws_port)
       if ($0 ~ /__REDIRECT_RULES__/) {
         if (length(redirect_rules) > 0) { printf "%s", redirect_rules }
+        next
+      }
+      if ($0 ~ /__AGENT_MTLS_DIRECTIVES__/) {
+        if (length(agent_mtls_directives) > 0) { printf "%s\n", agent_mtls_directives }
         next
       }
       # Storage: mesmo bloco de location nos dois vhosts (443 e 80). No vhost 80
@@ -1229,7 +1250,13 @@ OSEOF
     warn "Server names localhost/127.0.0.1 declarados em outros configs do nginx (nginx ignora duplicados): $conflict_files"
   fi
 
-  sudo nginx -t
+  if ! sudo nginx -t; then
+    if sudo test -f /etc/nginx/sites-available/discovery-rmm.bak; then
+      warn "nginx -t falhou; restaurando /etc/nginx/sites-available/discovery-rmm.bak para manter o proxy ativo."
+      sudo cp -f /etc/nginx/sites-available/discovery-rmm.bak /etc/nginx/sites-available/discovery-rmm
+    fi
+    return 1
+  fi
   sudo systemctl enable nginx
   sudo systemctl restart nginx
 }

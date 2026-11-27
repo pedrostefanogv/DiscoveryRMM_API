@@ -386,6 +386,7 @@ main() {
   write_environment_file
   setup_proxy_certificate
   setup_jwt_signing_keys
+  setup_agent_mtls_ca
   setup_cloudflare_tunnel
   setup_zerossl_renewal_timer
   setup_letsencrypt_renewal_timer
