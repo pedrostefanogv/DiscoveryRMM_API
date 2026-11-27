@@ -442,6 +442,12 @@ public class AiChatService : IAiChatService
         CancellationToken ct = default)
         => ExecuteTicketPromptAsync(systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, images, ct);
 
+    public Task<LlmResponse> ProcessProcedurePromptAsync(
+        string procedureKey, string defaultSystemPrompt, string userMessage, Guid siteId,
+        int maxTokens, double temperature, Guid? departmentId = null, string? responseFormat = null,
+        IReadOnlyList<string>? images = null, CancellationToken ct = default)
+        => ExecuteTicketPromptAsync(defaultSystemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, images, ct, procedureKey);
+
     /// <summary>
     /// Execução única dos prompts de ticket: resolve credenciais/escopo, aplica o
     /// teto de tokens efetivo e respeita rate limit + budget diário de IA
@@ -450,11 +456,20 @@ public class AiChatService : IAiChatService
     /// </summary>
     private async Task<LlmResponse> ExecuteTicketPromptAsync(
         string systemPrompt, string userMessage, Guid siteId, int maxTokens, double temperature,
-        string? responseFormat, IReadOnlyList<string>? images, CancellationToken ct)
+        string? responseFormat, IReadOnlyList<string>? images, CancellationToken ct, string? procedureKey = null)
     {
         var (aiSettings, clientId) = await ResolveScopeAsync(siteId, ct);
         if (!aiSettings.Enabled || string.IsNullOrWhiteSpace(aiSettings.ApiKey)) throw new InvalidOperationException("IA não configurada.");
         if (!aiSettings.ChatAIEnabled) throw new InvalidOperationException("Chat IA desabilitado.");
+        var effectiveSystemPrompt = string.IsNullOrWhiteSpace(procedureKey)
+            ? systemPrompt
+            : aiSettings.ResolveProcedurePrompt(procedureKey, systemPrompt);
+        if (string.Equals(procedureKey, "auto_assignment", StringComparison.OrdinalIgnoreCase)
+            && !effectiveSystemPrompt.Contains("chosenUserId", StringComparison.OrdinalIgnoreCase))
+        {
+            effectiveSystemPrompt += "\n\nResponda APENAS com JSON válido, sem markdown, no formato: " +
+                "{\"chosenUserId\":\"<uuid de um candidato>\",\"confidence\":<0..1>,\"difficulty\":<1..5>,\"rationale\":\"<1-3 frases explicando a escolha>\"}";
+        }
 
         // Orçamento de tokens AUTOMÁTICO para todos os fluxos de IA de ticket:
         // menor entre o pedido, a configuração do tenant, a capacidade real do
@@ -517,7 +532,7 @@ public class AiChatService : IAiChatService
             try
             {
                 response = await _llmProvider.CompleteAsync(
-                    systemPrompt, [BuildUserMessage(userMessage, imageParts)], options, ct);
+                    effectiveSystemPrompt, [BuildUserMessage(userMessage, imageParts)], options, ct);
             }
             catch (Exception ex) when (imageParts is not null
                                        && ex is not AiUsageLimitException
@@ -529,7 +544,7 @@ public class AiChatService : IAiChatService
                     "Provedor recusou as imagens do chamado ({Message}); repetindo sem imagens.",
                     ex.Message);
                 response = await _llmProvider.CompleteAsync(
-                    systemPrompt, [new LlmMessage("user", userMessage)], options, ct);
+                    effectiveSystemPrompt, [new LlmMessage("user", userMessage)], options, ct);
             }
 
             if (acquired && response.TokensUsed > 0)
@@ -624,7 +639,9 @@ public class AiChatService : IAiChatService
 
         var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agentId, scopeClientId, scopeSiteId, ct);
         // Dedupe por nome (KB + agent): função repetida no payload é ambígua.
-        return AiChatToolOrchestrator.MergeDistinctTools(serverTools, agentTools);
+        return AiChatToolOrchestrator.ApplyToolPromptOverrides(
+            AiChatToolOrchestrator.MergeDistinctTools(serverTools, agentTools),
+            aiSettings.ToolPromptOverrides);
     }
 
     private async Task<int> CalculateConversationTokens(Guid sessionId, CancellationToken ct)

@@ -31,9 +31,22 @@ public interface IAgentPackageService
     /// Builds a generic (zero-touch) NSIS installer with no URL or deploy token embedded.
     /// The agent starts in P2P auto-provisioning mode — it discovers the server via
     /// peer discovery and self-registers. No API endpoint or token is needed at install time.
-    /// Result is cached in memory with a configurable TTL.
+    /// Result is cached on disk keyed by (version+commit+profile).
     /// </summary>
     Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retorna o caminho em disco e metadados do instalador genérico (zero-touch),
+    /// evitando carregar o binário inteiro em RAM a cada download e sem expirar por
+    /// tempo quando versão/commit/perfil não mudaram.
+    /// </summary>
+    Task<GenericInstallerArtifact> GetGenericInstallerArtifactAsync(bool forceRebuild = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lê apenas os metadados do cache em disco do instalador zero-touch sem disparar
+    /// nenhuma build. Retorna null se ainda não houver artefato em cache.
+    /// </summary>
+    Task<GenericInstallerMetadata?> GetCachedGenericInstallerMetadataAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Builds a NSIS installer executable for agent self-update flow.
@@ -68,3 +81,23 @@ public interface IAgentPackageService
     /// </summary>
     Task<AgentRepositorySyncResult> SyncRepositoryAsync(string branch, CancellationToken cancellationToken = default);
 }
+
+public sealed record GenericInstallerArtifact(
+    string LocalPath,
+    string FileName,
+    long SizeBytes,
+    string Sha256,
+    string Version,
+    string CommitHash,
+    string CacheKey,
+    string? S3ObjectKey);
+
+public sealed record GenericInstallerMetadata(
+    string FileName,
+    long SizeBytes,
+    string Sha256,
+    string Version,
+    string CommitHash,
+    string CacheKey,
+    string? S3ObjectKey,
+    DateTime CreatedAtUtc);

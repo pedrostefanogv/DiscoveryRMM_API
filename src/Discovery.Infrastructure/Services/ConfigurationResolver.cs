@@ -206,6 +206,7 @@ public class ConfigurationResolver : IConfigurationResolver
         var chatAi = ResolveValue("ChatAIEnabled", blocked, site?.ChatAIEnabled, client?.ChatAIEnabled, server.ChatAIEnabled);
         var knowledge = ResolveValue("KnowledgeBaseEnabled", blocked, site?.KnowledgeBaseEnabled, client?.KnowledgeBaseEnabled, server.KnowledgeBaseEnabled);
         var updatesTab = ResolveValue("UpdatesTabEnabled", blocked, site?.UpdatesTabEnabled, client?.UpdatesTabEnabled, server.UpdatesTabEnabled);
+        var filesTab = ResolveValue("FilesTabEnabled", blocked, site?.FilesTabEnabled, client?.FilesTabEnabled, server.FilesTabEnabled);
         var zeroTouch = ResolveValue("ZeroTouchEnabled", blocked, site?.ZeroTouchEnabled, client?.ZeroTouchEnabled, server.ZeroTouchEnabled);
         var knowledgeEmbedding = ResolveValue("KnowledgeEmbeddingEnabled", blocked, site?.KnowledgeEmbeddingEnabled, client?.KnowledgeEmbeddingEnabled, server.KnowledgeEmbeddingEnabled);
 
@@ -296,6 +297,7 @@ public class ConfigurationResolver : IConfigurationResolver
             ChatAIEnabled = chatAi.Value,
             KnowledgeBaseEnabled = knowledge.Value,
             UpdatesTabEnabled = updatesTab.Value,
+            FilesTabEnabled = filesTab.Value,
             ZeroTouchEnabled = zeroTouch.Value,
             KnowledgeEmbeddingEnabled = knowledgeEmbedding.Value,
             DepartmentAuthShadowMode = departmentAuthShadow.Value,
@@ -339,6 +341,7 @@ public class ConfigurationResolver : IConfigurationResolver
         resolved.Inheritance["ChatAIEnabled"] = (int)chatAi.Source;
         resolved.Inheritance["KnowledgeBaseEnabled"] = (int)knowledge.Source;
         resolved.Inheritance["UpdatesTabEnabled"] = (int)updatesTab.Source;
+        resolved.Inheritance["FilesTabEnabled"] = (int)filesTab.Source;
         resolved.Inheritance["ZeroTouchEnabled"] = (int)zeroTouch.Source;
         resolved.Inheritance["KnowledgeEmbeddingEnabled"] = (int)knowledgeEmbedding.Source;
         resolved.Inheritance["DepartmentAuthShadowMode"] = (int)departmentAuthShadow.Source;

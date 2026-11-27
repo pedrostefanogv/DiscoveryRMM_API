@@ -109,12 +109,13 @@ public sealed class AgentPackagePrebuildHostedService : BackgroundService
             try
             {
                 _logger.LogInformation("Agent prebuild: warming generic zero-touch installer cache...");
-                var (genericContent, genericFileName) = await packageService.BuildGenericInstallerAsync(cancellationToken: stoppingToken);
+                var genericArtifact = await packageService.GetGenericInstallerArtifactAsync(cancellationToken: stoppingToken);
 
                 _logger.LogInformation(
-                    "Agent prebuild startup warmed generic zero-touch installer cache successfully. File={FileName}, size={SizeBytes} bytes",
-                    genericFileName,
-                    genericContent.LongLength);
+                    "Agent prebuild startup warmed generic zero-touch installer cache successfully. File={FileName}, size={SizeBytes} bytes, s3Key={S3Key}",
+                    genericArtifact.FileName,
+                    genericArtifact.SizeBytes,
+                    genericArtifact.S3ObjectKey ?? "(none)");
             }
             catch (Exception ex)
             {

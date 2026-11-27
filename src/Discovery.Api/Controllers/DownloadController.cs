@@ -79,16 +79,16 @@ public class DownloadController : ControllerBase
     {
         try
         {
-            var (content, fileName) = await _agentPackageService.BuildGenericInstallerAsync(cancellationToken: ct);
+            var artifact = await _agentPackageService.GetGenericInstallerArtifactAsync(cancellationToken: ct);
 
             await _loggingService.LogInfoAsync(
                 LogType.Agent,
                 LogSource.Api,
                 "deploy.installer.generic_download",
-                new { fileName, sizeBytes = content.LongLength },
+                new { fileName = artifact.FileName, sizeBytes = artifact.SizeBytes, version = artifact.Version },
                 cancellationToken: ct);
 
-            return File(content, "application/x-msdownload", fileName);
+            return PhysicalFile(artifact.LocalPath, "application/x-msdownload", artifact.FileName, enableRangeProcessing: true);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("project path does not exist", StringComparison.OrdinalIgnoreCase))
         {

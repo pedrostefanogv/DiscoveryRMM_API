@@ -174,8 +174,13 @@ public sealed class ObjectStorageTelemetry
 /// </summary>
 public sealed class InstrumentedObjectStorageProvider(
     Discovery.Core.Interfaces.IObjectStorageService inner,
-    ObjectStorageTelemetry telemetry) : Discovery.Core.Interfaces.IObjectStorageService
+    ObjectStorageTelemetry telemetry) : Discovery.Core.Interfaces.IObjectStorageService, IDisposable
 {
+    public void Dispose()
+    {
+        if (inner is IDisposable disposable)
+            disposable.Dispose();
+    }
     public Task<Discovery.Core.ValueObjects.StorageObject> UploadAsync(
         string objectKey, Stream content, string contentType, CancellationToken cancellationToken = default)
         => MeasureAsync("upload",
@@ -224,8 +229,14 @@ public sealed class InstrumentedObjectStorageProvider(
     public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
         => MeasureAsync("presign", () => inner.GetPresignedDownloadUrlAsync(objectKey, ttl, cancellationToken));
 
+    public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, string? downloadFileName, string? responseContentType = null, CancellationToken cancellationToken = default)
+        => MeasureAsync("presign", () => inner.GetPresignedDownloadUrlAsync(objectKey, ttl, downloadFileName, responseContentType, cancellationToken));
+
     public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
         => MeasureAsync("presign", () => inner.GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, cancellationToken));
+
+    public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, long? contentLengthBytes, CancellationToken cancellationToken = default)
+        => MeasureAsync("presign", () => inner.GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, contentLengthBytes, cancellationToken));
 
     public Task<Discovery.Core.ValueObjects.StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
         => MeasureAsync("head", () => inner.GetMetadataAsync(objectKey, cancellationToken));

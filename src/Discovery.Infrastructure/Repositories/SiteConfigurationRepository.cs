@@ -53,6 +53,7 @@ public class SiteConfigurationRepository : ISiteConfigurationRepository
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
         existingConfig.UpdatesTabEnabled = config.UpdatesTabEnabled;
+        existingConfig.FilesTabEnabled = config.FilesTabEnabled;
         existingConfig.AgentHomeTab = config.AgentHomeTab;
         existingConfig.ZeroTouchEnabled = config.ZeroTouchEnabled;
         existingConfig.KnowledgeEmbeddingEnabled = config.KnowledgeEmbeddingEnabled;

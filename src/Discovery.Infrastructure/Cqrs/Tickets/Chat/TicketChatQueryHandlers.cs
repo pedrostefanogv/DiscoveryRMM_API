@@ -29,7 +29,9 @@ public sealed class GetTicketChatMessagesQueryHandler(
     public async Task<Result<IReadOnlyList<TicketChatMessageDto>>> Handle(GetTicketChatMessagesQuery query, CancellationToken ct)
     {
         var limit = query.Limit <= 0 ? 200 : Math.Min(query.Limit, 500);
-        var messages = await chatRepository.GetMessagesAsync(query.SessionId, query.AfterSequence, limit, ct);
+        var messages = query.BeforeSequence is > 0
+            ? await chatRepository.GetMessagesBeforeAsync(query.SessionId, query.BeforeSequence.Value, limit, ct)
+            : await chatRepository.GetMessagesAsync(query.SessionId, query.AfterSequence, limit, ct);
         if (messages.Count == 0)
             return Result<IReadOnlyList<TicketChatMessageDto>>.Success([]);
 

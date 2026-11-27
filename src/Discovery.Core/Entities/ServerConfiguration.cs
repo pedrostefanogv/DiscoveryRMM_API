@@ -55,6 +55,24 @@ public class ServerConfiguration
     public bool UpdatesTabEnabled { get; set; } = true;
 
     /// <summary>
+    /// Kill switch da aba "Arquivos" do painel do agent. Default TRUE (global —
+    /// herdável e sobrescritível por cliente e site).
+    /// </summary>
+    public bool FilesTabEnabled { get; set; } = true;
+
+    /// <summary>Habilita o portal público aberto em /download (opt-in, default false).</summary>
+    public bool PublicDownloadPageEnabled { get; set; } = false;
+
+    /// <summary>Habilita o download do instalador Zero-Touch no portal público /download (opt-in, default false).</summary>
+    public bool PublicDownloadZeroTouchEnabled { get; set; } = false;
+
+    /// <summary>Título customizado exibido no portal público /download.</summary>
+    public string? PublicDownloadTitle { get; set; }
+
+    /// <summary>Descrição/instruções exibidas no portal público /download.</summary>
+    public string? PublicDownloadDescription { get; set; }
+
+    /// <summary>
     /// Página inicial do agent: id da aba que o painel abre ao iniciar
     /// (ver <see cref="AgentHomeTabCatalog"/>). Global — pode ser sobrescrita por
     /// cliente e por site; quando a aba está desabilitada para o agent, ele cai

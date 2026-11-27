@@ -31,7 +31,10 @@ public class TicketChatController(
     ITicketQueryService ticketQueryService,
     IAttachmentService attachmentService,
     IAttachmentRepository attachmentRepository,
-    ITicketChatPresenceService presenceService) : ControllerBase
+    ITicketChatPresenceService presenceService,
+    ITicketChatRepository chatRepository,
+    ITicketChatEnvelopePublisher envelopePublisher,
+    IChatUserNameResolver? userNameResolver = null) : ControllerBase
 {
     private const string ChatEntityType = "TicketChat";
 
@@ -70,7 +73,7 @@ public class TicketChatController(
     /// <summary>Snapshot incremental das mensagens de uma sessão do chamado.</summary>
     [HttpGet("sessions/{sessionId:guid}/messages")]
     [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
-    public async Task<IActionResult> GetMessages(Guid ticketId, Guid sessionId, [FromQuery] long afterSequence = 0, [FromQuery] int limit = 200, CancellationToken ct = default)
+    public async Task<IActionResult> GetMessages(Guid ticketId, Guid sessionId, [FromQuery] long afterSequence = 0, [FromQuery] int limit = 200, CancellationToken ct = default, [FromQuery] long? beforeSequence = null)
     {
         if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.View, ct))
             return NotFound();
@@ -79,7 +82,7 @@ public class TicketChatController(
         if (ownershipError is not null)
             return ownershipError;
 
-        var result = await mediator.Send(new GetTicketChatMessagesQuery(sessionId, afterSequence, limit), ct);
+        var result = await mediator.Send(new GetTicketChatMessagesQuery(sessionId, afterSequence, limit, beforeSequence), ct);
         return result.ToActionResult();
     }
 
@@ -207,6 +210,76 @@ public class TicketChatController(
         return result.ToActionResult();
     }
 
+    /// <summary>Sinal efêmero de "digitando..." para o agent.</summary>
+    [HttpPost("sessions/{sessionId:guid}/typing")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> SendTyping(Guid ticketId, Guid sessionId, [FromBody] TicketChatTypingRequest request, CancellationToken ct = default)
+    {
+        if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
+            return NotFound();
+
+        var session = await chatRepository.GetByIdAsync(sessionId, ct);
+        if (session is null || session.TicketId != ticketId)
+            return NotFound();
+
+        if (session.Status != TicketChatSessionStatus.Active)
+            return Conflict(new { code = "session_not_active", error = "A conversa não está ativa." });
+
+        var displayName = userNameResolver is not null
+            ? await userNameResolver.ResolveAsync(CurrentUserId, CurrentUserName, ct)
+            : CurrentUserName;
+        await envelopePublisher.PublishTypingAsync(session, "support", displayName, request?.IsTyping ?? true, ct);
+        return NoContent();
+    }
+
+    /// <summary>Solicita uma ação assistida (ex.: captura de tela) ao usuário final.</summary>
+    [HttpPost("sessions/{sessionId:guid}/assisted-action")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> RequestAssistedAction(Guid ticketId, Guid sessionId, [FromBody] TicketChatAssistedActionRequest request, CancellationToken ct = default)
+    {
+        if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
+            return NotFound();
+
+        var (ownershipError, _) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
+
+        var result = await mediator.Send(new RequestTicketChatAssistedActionCommand(
+            sessionId,
+            request?.ActionType ?? string.Empty,
+            CurrentUserId,
+            CurrentUserName), ct);
+
+        if (result.IsFailure && string.Equals(result.Errors[0].Code, "Conflict", StringComparison.Ordinal))
+            return Conflict(new { code = result.Errors[0].Message, error = DescribeConflict(result.Errors[0].Message) });
+
+        return result.ToActionResult();
+    }
+
+    /// <summary>Transfere a conversa ativa para outro técnico.</summary>
+    [HttpPost("sessions/{sessionId:guid}/transfer")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> TransferSession(Guid ticketId, Guid sessionId, [FromBody] TransferTicketChatRequest request, CancellationToken ct = default)
+    {
+        if (!await accessGuard.CanAccessTicketAsync(ticketId, ActionType.Edit, ct))
+            return NotFound();
+
+        var (ownershipError, _) = await ResolveSessionAsync(ticketId, sessionId, ct);
+        if (ownershipError is not null)
+            return ownershipError;
+
+        var result = await mediator.Send(new TransferTicketChatSessionCommand(
+            sessionId,
+            request?.TargetUserId ?? Guid.Empty,
+            CurrentUserId,
+            CurrentUserName), ct);
+
+        if (result.IsFailure && string.Equals(result.Errors[0].Code, "Conflict", StringComparison.Ordinal))
+            return Conflict(new { code = result.Errors[0].Message, error = DescribeConflict(result.Errors[0].Message) });
+
+        return result.ToActionResult();
+    }
+
     // ── Anexos (fluxo presigned já existente) ─────────────────────────────
 
     /// <summary>Prepara o upload direto no object storage para um anexo do chat.</summary>
@@ -319,10 +392,20 @@ public class TicketChatController(
             return NotFound();
 
         var attachment = await attachmentRepository.GetByIdAsync(attachmentId, ct);
-        if (attachment is null
-            || attachment.IsDeleted
-            || !string.Equals(attachment.EntityType, ChatEntityType, StringComparison.OrdinalIgnoreCase)
-            || attachment.EntityId != ticketId)
+        if (attachment is null || attachment.IsDeleted)
+            return NotFound();
+
+        var matchesTicket =
+            string.Equals(attachment.EntityType, ChatEntityType, StringComparison.OrdinalIgnoreCase)
+            && attachment.EntityId == ticketId;
+
+        if (!matchesTicket && string.Equals(attachment.EntityType, "SupportChat", StringComparison.OrdinalIgnoreCase))
+        {
+            var adHocSession = await chatRepository.GetByIdAsync(attachment.EntityId, ct);
+            matchesTicket = adHocSession?.TicketId == ticketId;
+        }
+
+        if (!matchesTicket)
         {
             return NotFound();
         }
@@ -392,3 +475,9 @@ public record SendTicketChatMessageRequest(
     string Body,
     IReadOnlyList<Guid>? AttachmentIds = null,
     Guid? ClientMessageId = null);
+
+public record TicketChatTypingRequest(bool IsTyping = true);
+
+public record TicketChatAssistedActionRequest(string ActionType);
+
+public record TransferTicketChatRequest(Guid TargetUserId);

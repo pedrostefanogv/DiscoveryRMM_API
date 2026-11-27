@@ -386,7 +386,9 @@ public class AiChatMultiRoundStreamer
             ? await _mcpToolExecutor.GetAvailableToolsAsync(session.ClientId, session.SiteId, agentId, ct)
             : new List<LlmTool>();
         var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agentId, session.ClientId, session.SiteId, ct);
-        var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
+        var availableTools = AiChatToolOrchestrator.ApplyToolPromptOverrides(
+            AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools),
+            aiSettings.ToolPromptOverrides);
 
         // FIX-3: guarda de capacidade de TOOLS (espelha a de visão). Um modelo
         // sem function calling recebia todos os schemas e o provedor devolvia 400

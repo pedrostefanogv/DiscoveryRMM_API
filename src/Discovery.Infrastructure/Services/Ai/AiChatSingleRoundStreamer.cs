@@ -231,7 +231,9 @@ public class AiChatSingleRoundStreamer
         var agentTools = await _toolOrchestrator.GetAgentToolsForScopeAsync(agentId, scopeClientId, scopeSiteId, ct);
         // Dedupe por nome: KB + agent podem colidir e função repetida no payload do
         // provedor é ambígua (a OpenAI recusa).
-        var availableTools = AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools);
+        var availableTools = AiChatToolOrchestrator.ApplyToolPromptOverrides(
+            AiChatToolOrchestrator.MergeDistinctTools(kbTools, agentTools),
+            aiSettings.ToolPromptOverrides);
         if (availableTools.Count > 0 && !await _capabilities.ShouldSendToolsAsync(aiSettings, scopeClientId, scopeSiteId, ct))
         {
             _logger.LogInformation("[{TraceId}] Modelo {Model} não suporta tools no catálogo — omitindo {Count} tools no round 1.",

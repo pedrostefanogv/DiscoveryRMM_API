@@ -26,7 +26,8 @@ public static class AgentHomeTabCatalog
         "updates",
         "chat",
         "support",
-        "knowledge"
+        "knowledge",
+        "files"
     ];
 
     private static readonly HashSet<string> ValidTabSet = new(ValidTabs, StringComparer.OrdinalIgnoreCase);

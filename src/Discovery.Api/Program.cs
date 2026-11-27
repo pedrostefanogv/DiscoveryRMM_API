@@ -177,6 +177,8 @@ builder.Services.AddScoped<Discovery.Core.Interfaces.Auth.IScopeContext, Discove
 // Factory resolve IObjectStorageService dynamically based on ServerConfiguration
 builder.Services.AddScoped<IObjectStorageService>(sp =>
     sp.GetRequiredService<IObjectStorageProviderFactory>().CreateObjectStorageService());
+builder.Services.AddScoped<IManagedFileService, ManagedFileService>();
+builder.Services.AddScoped<IFileLinkService, FileLinkService>();
 
 // Special singletons
 builder.Services.AddSingleton<ChocolateyApiClient>();

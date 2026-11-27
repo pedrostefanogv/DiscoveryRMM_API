@@ -63,6 +63,29 @@ public class AIIntegrationSettings
     /// <summary>Prompt base configurável para o assistente</summary>
     public string? PromptTemplate { get; set; }
 
+    /// <summary>Overrides opcionais de system prompt por procedimento interno (ticket_triage, ticket_summary, ticket_suggest_reply, ticket_draft_kb, auto_assignment, auto_ticket_enrichment).</summary>
+    public Dictionary<string, string>? ProcedurePrompts { get; set; }
+
+    /// <summary>Overrides opcionais de descrição/instrução por ferramenta MCP (chave = nome da tool).</summary>
+    public Dictionary<string, string>? ToolPromptOverrides { get; set; }
+
+    /// <summary>Resolve o system prompt efetivo de um procedimento interno, usando o override configurado quando não vazio.</summary>
+    public string ResolveProcedurePrompt(string procedureKey, string defaultPrompt)
+    {
+        if (ProcedurePrompts is null || ProcedurePrompts.Count == 0 || string.IsNullOrWhiteSpace(procedureKey))
+            return defaultPrompt;
+
+        foreach (var kv in ProcedurePrompts)
+        {
+            if (string.Equals(kv.Key, procedureKey, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(kv.Value))
+            {
+                return kv.Value.Trim();
+            }
+        }
+        return defaultPrompt;
+    }
+
     /// <summary>Temperatura de geração para respostas</summary>
     public double Temperature { get; set; } = 0.7;
 

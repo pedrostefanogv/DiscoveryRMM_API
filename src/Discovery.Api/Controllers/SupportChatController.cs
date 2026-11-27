@@ -37,7 +37,9 @@ public class SupportChatController(
     IScopeContext scopeContext,
     ITicketChatPresenceService presenceService,
     IAttachmentService attachmentService,
-    IAttachmentRepository attachmentRepository) : ControllerBase
+    IAttachmentRepository attachmentRepository,
+    ITicketChatEnvelopePublisher? envelopePublisher = null,
+    IChatUserNameResolver? userNameResolver = null) : ControllerBase
 {
     /// <summary>Anexos de conversa vinculada a CHAMADO (compatível com o histórico já gravado).</summary>
     private const string TicketChatEntityType = "TicketChat";
@@ -120,12 +122,13 @@ public class SupportChatController(
         Guid sessionId,
         [FromQuery] long afterSequence = 0,
         [FromQuery] int limit = 200,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [FromQuery] long? beforeSequence = null)
     {
         if (await ResolveSessionAsync(sessionId, ActionType.View, ct) is null)
             return NotFound();
 
-        var result = await mediator.Send(new GetTicketChatMessagesQuery(sessionId, afterSequence, limit), ct);
+        var result = await mediator.Send(new GetTicketChatMessagesQuery(sessionId, afterSequence, limit, beforeSequence), ct);
         return result.ToActionResult();
     }
 
@@ -164,6 +167,98 @@ public class SupportChatController(
             return NotFound();
 
         var result = await mediator.Send(new EndTicketChatSessionCommand(sessionId, "support", "support_closed"), ct);
+        return result.ToActionResult();
+    }
+
+    /// <summary>Sinal efêmero de "digitando..." para o agent.</summary>
+    [HttpPost("sessions/{sessionId:guid}/typing")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> SendTyping(Guid sessionId, [FromBody] TicketChatTypingRequest request, CancellationToken ct = default)
+    {
+        var session = await ResolveSessionAsync(sessionId, ActionType.Edit, ct);
+        if (session is null)
+            return NotFound();
+
+        if (RequireActiveSession(session) is { } inactive)
+            return inactive;
+
+        if (envelopePublisher is not null)
+        {
+            var displayName = userNameResolver is not null
+                ? await userNameResolver.ResolveAsync(CurrentUserId, CurrentUserName, ct)
+                : CurrentUserName;
+            await envelopePublisher.PublishTypingAsync(session, "support", displayName, request?.IsTyping ?? true, ct);
+        }
+        return NoContent();
+    }
+
+    /// <summary>Solicita uma ação assistida (ex.: captura de tela) ao usuário final.</summary>
+    [HttpPost("sessions/{sessionId:guid}/assisted-action")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> RequestAssistedAction(Guid sessionId, [FromBody] TicketChatAssistedActionRequest request, CancellationToken ct = default)
+    {
+        if (await ResolveSessionAsync(sessionId, ActionType.Edit, ct) is null)
+            return NotFound();
+
+        var result = await mediator.Send(new RequestTicketChatAssistedActionCommand(
+            sessionId,
+            request?.ActionType ?? string.Empty,
+            CurrentUserId,
+            CurrentUserName), ct);
+
+        if (result.IsFailure && string.Equals(result.Errors[0].Code, "Conflict", StringComparison.Ordinal))
+            return Conflict(new { code = result.Errors[0].Message, error = DescribeConflict(result.Errors[0].Message) });
+
+        return result.ToActionResult();
+    }
+
+    /// <summary>Transfere a conversa ativa/pendente para outro técnico.</summary>
+    [HttpPost("sessions/{sessionId:guid}/transfer")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> TransferSession(Guid sessionId, [FromBody] TransferTicketChatRequest request, CancellationToken ct = default)
+    {
+        if (await ResolveSessionAsync(sessionId, ActionType.Edit, ct) is null)
+            return NotFound();
+
+        var result = await mediator.Send(new TransferTicketChatSessionCommand(
+            sessionId,
+            request?.TargetUserId ?? Guid.Empty,
+            CurrentUserId,
+            CurrentUserName), ct);
+
+        if (result.IsFailure && string.Equals(result.Errors[0].Code, "Conflict", StringComparison.Ordinal))
+            return Conflict(new { code = result.Errors[0].Message, error = DescribeConflict(result.Errors[0].Message) });
+
+        return result.ToActionResult();
+    }
+
+    /// <summary>Converte a conversa avulsa em um novo chamado ou vincula a um chamado existente.</summary>
+    [HttpPost("sessions/{sessionId:guid}/link-ticket")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> LinkToTicket(Guid sessionId, [FromBody] LinkSupportChatToTicketRequest request, CancellationToken ct = default)
+    {
+        if (await ResolveSessionAsync(sessionId, ActionType.Edit, ct) is null)
+            return NotFound();
+
+        if (request?.ExistingTicketId is { } existingTicketId && existingTicketId != Guid.Empty
+            && !await accessGuard.CanAccessTicketAsync(existingTicketId, ActionType.Edit, ct))
+        {
+            return NotFound();
+        }
+
+        var result = await mediator.Send(new LinkSupportChatToTicketCommand(
+            sessionId,
+            request?.ExistingTicketId,
+            request?.Title,
+            request?.Description,
+            request?.Priority ?? TicketPriority.Medium,
+            request?.DepartmentId,
+            CurrentUserId,
+            CurrentUserName), ct);
+
+        if (result.IsFailure && string.Equals(result.Errors[0].Code, "Conflict", StringComparison.Ordinal))
+            return Conflict(new { code = result.Errors[0].Message, error = DescribeConflict(result.Errors[0].Message) });
+
         return result.ToActionResult();
     }
 
@@ -324,10 +419,13 @@ public class SupportChatController(
 
         var scope = ResolveAttachmentScope(session);
         var attachment = await attachmentRepository.GetByIdAsync(attachmentId, ct);
-        if (attachment is null
-            || attachment.IsDeleted
-            || !string.Equals(attachment.EntityType, scope.EntityType, StringComparison.OrdinalIgnoreCase)
-            || attachment.EntityId != scope.EntityId)
+        if (attachment is null || attachment.IsDeleted)
+            return NotFound();
+
+        var matchesScope =
+            (string.Equals(attachment.EntityType, scope.EntityType, StringComparison.OrdinalIgnoreCase) && attachment.EntityId == scope.EntityId)
+            || (string.Equals(attachment.EntityType, AdHocChatEntityType, StringComparison.OrdinalIgnoreCase) && attachment.EntityId == session.Id);
+        if (!matchesScope)
         {
             return NotFound();
         }
@@ -442,6 +540,14 @@ public class SupportChatController(
         "invite_expired" => "O convite expirou. Inicie uma nova conversa.",
         "invite_cooldown" => "Aguarde alguns segundos antes de reenviar o convite.",
         "session_not_active" => "A conversa não está ativa.",
+        "already_linked" => "Esta conversa já está vinculada a um chamado.",
         _ => "Não foi possível concluir a operação."
     };
 }
+
+public record LinkSupportChatToTicketRequest(
+    Guid? ExistingTicketId = null,
+    string? Title = null,
+    string? Description = null,
+    TicketPriority Priority = TicketPriority.Medium,
+    Guid? DepartmentId = null);

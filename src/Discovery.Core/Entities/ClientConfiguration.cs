@@ -45,6 +45,12 @@ public class ClientConfiguration
     public bool? UpdatesTabEnabled { get; set; }
 
     /// <summary>
+    /// Kill switch da aba "Arquivos" do painel do agent para este cliente
+    /// (null = herda do servidor, default global true).
+    /// </summary>
+    public bool? FilesTabEnabled { get; set; }
+
+    /// <summary>
     /// Página inicial do agent para este cliente (null/vazio = herda servidor).
     /// Ids aceitos em <see cref="AgentHomeTabCatalog"/>.
     /// </summary>

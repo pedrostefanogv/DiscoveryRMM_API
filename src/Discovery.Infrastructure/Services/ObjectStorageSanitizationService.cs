@@ -1,5 +1,7 @@
 using Discovery.Core.Interfaces;
 using Discovery.Core.ValueObjects;
+using Discovery.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Discovery.Infrastructure.Services;
@@ -32,7 +34,8 @@ public sealed class ObjectStorageSanitizationService(
     IObjectStorageProviderFactory storageFactory,
     IAppPackageRepository packages,
     ILogger<ObjectStorageSanitizationService> logger,
-    ObjectStorageSanitizationGate? gate = null) : IObjectStorageSanitizationService
+    ObjectStorageSanitizationGate? gate = null,
+    DiscoveryDbContext? db = null) : IObjectStorageSanitizationService
 {
     /// <summary>Teto de objetos varridos por execução (proteção de memória/tempo).</summary>
     public const int MaxScanObjects = 200_000;
@@ -40,8 +43,11 @@ public sealed class ObjectStorageSanitizationService(
     /// <summary>Idade mínima padrão (horas) para um objeto sem vínculo ser órfão.</summary>
     public const int DefaultMinAgeHours = 24;
 
-    /// <summary>Prefixo dos assets da loja — o ÚNICO que esta limpeza pode apagar.</summary>
+    /// <summary>Prefixo dos assets da loja.</summary>
     public const string CustomAssetsPrefix = "app-store/custom/";
+
+    /// <summary>Prefixos da Central de Arquivos / File Drop.</summary>
+    public static readonly string[] FileHubPrefixes = ["file-hub/", "client-uploads/"];
 
     private const int SampleLimit = 25;
 
@@ -85,9 +91,10 @@ public sealed class ObjectStorageSanitizationService(
 
         var needsFullInventory = wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.BucketInventory);
         var needsOrphanSweep = wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.OrphanCustomAssets);
+        var needsFileHubSweep = wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.OrphanFileHubAssets);
 
         var storage = await storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
-        var listing = needsFullInventory
+        var listing = needsFullInventory || (needsOrphanSweep && needsFileHubSweep)
             ? await storage.ListObjectsAsync(null, MaxScanObjects, cancellationToken)
             : needsOrphanSweep
                 ? await storage.ListObjectsAsync(CustomAssetsPrefix, MaxScanObjects, cancellationToken)
@@ -105,6 +112,12 @@ public sealed class ObjectStorageSanitizationService(
         {
             results.Add(await SweepOrphanCustomAssetsAsync(
                 storage, listing.Items, minAge, dryRun, cancellationToken));
+        }
+
+        if (needsFileHubSweep)
+        {
+            results.Add(await SweepOrphanFileHubAssetsAsync(
+                storage, listing.Items, needsFullInventory || needsOrphanSweep, minAge, dryRun, cancellationToken));
         }
 
         if (wanted is null || wanted.Contains(ObjectStorageSanitizationChecks.IncompleteMultipartUploads))
@@ -270,10 +283,104 @@ public sealed class ObjectStorageSanitizationService(
             Samples: samples);
     }
 
+    private async Task<ObjectStorageSanitizationCheckResult> SweepOrphanFileHubAssetsAsync(
+        IObjectStorageService storage,
+        IReadOnlyList<StorageObjectInfo> fullListing,
+        bool hasFullListing,
+        int minAgeHours,
+        bool dryRun,
+        CancellationToken cancellationToken)
+    {
+        const string title = "Arquivos do File Hub sem vínculo";
+        if (db is null)
+        {
+            return new ObjectStorageSanitizationCheckResult(
+                Key: ObjectStorageSanitizationChecks.OrphanFileHubAssets,
+                Title: title,
+                Examined: 0, Found: 0, Fixed: 0, Skipped: 0, HasMore: false, Error: null, FoundBytes: 0, FixedBytes: 0, Samples: []);
+        }
+
+        IReadOnlyList<StorageObjectInfo> items;
+        if (hasFullListing)
+        {
+            items = fullListing
+                .Where(item => FileHubPrefixes.Any(p => item.ObjectKey.StartsWith(p, StringComparison.Ordinal)))
+                .ToArray();
+        }
+        else
+        {
+            var collected = new List<StorageObjectInfo>();
+            foreach (var prefix in FileHubPrefixes)
+            {
+                var part = await storage.ListObjectsAsync(prefix, MaxScanObjects, cancellationToken);
+                collected.AddRange(part.Items);
+            }
+            items = collected;
+        }
+
+        var referenced = await db.ManagedFiles.AsNoTracking()
+            .Where(f => f.DeletedAt == null)
+            .Select(f => f.StorageObjectKey)
+            .ToHashSetAsync(StringComparer.Ordinal, cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        var orphans = new List<StorageObjectInfo>();
+        var skipped = 0;
+
+        foreach (var item in items)
+        {
+            if (referenced.Contains(item.ObjectKey))
+                continue;
+            if (item.LastModifiedUtc is not { } modifiedAt || now - modifiedAt < TimeSpan.FromHours(minAgeHours))
+            {
+                skipped++;
+                continue;
+            }
+            orphans.Add(item);
+        }
+
+        var foundBytes = orphans.Sum(o => o.SizeBytes);
+        var samples = orphans.OrderByDescending(o => o.SizeBytes).Take(SampleLimit)
+            .Select(o => $"{o.ObjectKey} ({FormatBytes(o.SizeBytes)})").ToList();
+
+        if (dryRun || orphans.Count == 0)
+        {
+            return new ObjectStorageSanitizationCheckResult(
+                Key: ObjectStorageSanitizationChecks.OrphanFileHubAssets,
+                Title: title,
+                Examined: items.Count, Found: orphans.Count, Fixed: 0, Skipped: skipped,
+                HasMore: false, Error: null, FoundBytes: foundBytes, FixedBytes: 0, Samples: samples);
+        }
+
+        var deleted = 0;
+        long deletedBytes = 0;
+        var failures = new List<string>();
+        foreach (var orphan in orphans)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await storage.DeleteAsync(orphan.ObjectKey, cancellationToken);
+                deleted++;
+                deletedBytes += orphan.SizeBytes;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failures.Add($"{orphan.ObjectKey}: {ex.Message}");
+            }
+        }
+
+        return new ObjectStorageSanitizationCheckResult(
+            Key: ObjectStorageSanitizationChecks.OrphanFileHubAssets,
+            Title: title,
+            Examined: items.Count, Found: orphans.Count, Fixed: deleted, Skipped: skipped + failures.Count,
+            HasMore: false, Error: failures.Count > 0 ? string.Join(" | ", failures.Take(5)) : null,
+            FoundBytes: foundBytes, FixedBytes: deletedBytes, Samples: samples);
+    }
+
     /// <summary>
-    /// Sessões de multipart sob app-store/custom/ mais antigas que a idade mínima
-    /// são ABORTADAS (o storage descarta as partes). A idade mínima é a proteção
-    /// de um upload em andamento: sessão com menos de minAge não é tocada.
+    /// Sessões de multipart sob app-store/custom/, file-hub/ e client-uploads/ mais antigas que a idade mínima
+    /// são ABORTADAS (o storage descarta as partes).
     /// </summary>
     private async Task<ObjectStorageSanitizationCheckResult> SweepIncompleteMultipartUploadsAsync(
         IObjectStorageService storage,
@@ -281,24 +388,28 @@ public sealed class ObjectStorageSanitizationService(
         bool dryRun,
         CancellationToken cancellationToken)
     {
-        const string title = "Uploads multipart incompletos da loja";
+        const string title = "Uploads multipart incompletos";
 
-        IReadOnlyList<MultipartUploadSessionInfo> sessions;
+        var sessions = new List<MultipartUploadSessionInfo>();
         string? listError = null;
-        try
+        string[] prefixes = [CustomAssetsPrefix, .. FileHubPrefixes];
+        foreach (var prefix in prefixes)
         {
-            sessions = await storage.ListMultipartUploadSessionsAsync(CustomAssetsPrefix, MaxScanObjects, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Falha ao listar sessões de multipart no object storage.");
-            sessions = [];
-            listError = ex.Message;
+            try
+            {
+                var found = await storage.ListMultipartUploadSessionsAsync(prefix, MaxScanObjects, cancellationToken);
+                sessions.AddRange(found);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Falha ao listar sessões de multipart no object storage para {Prefix}.", prefix);
+                listError ??= ex.Message;
+            }
         }
 
         var now = DateTimeOffset.UtcNow;
         var candidates = sessions
-            .Where(session => session.ObjectKey.StartsWith(CustomAssetsPrefix, StringComparison.Ordinal))
+            .Where(session => prefixes.Any(p => session.ObjectKey.StartsWith(p, StringComparison.Ordinal)))
             .Where(session => now - session.InitiatedUtc >= TimeSpan.FromHours(minAgeHours))
             .ToArray();
         var skipped = sessions.Count - candidates.Length;

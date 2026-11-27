@@ -2,6 +2,7 @@ using Discovery.Core.Configuration;
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Tickets.Chat.Commands;
 using Discovery.Core.Cqrs.Tickets.Chat.Dtos;
+using Discovery.Core.Cqrs.Tickets.Commands;
 using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
@@ -355,6 +356,9 @@ public sealed class RetryTicketChatInviteCommandHandler(
             session.StartedByName ?? string.Empty,
             session.InviteExpiresAt?.ToString("O"));
 
+        // Persiste antes de despachar no NATS: evita enviar convite ao agent se a gravação falhar.
+        await chatRepository.UpdateSessionAsync(session, ct);
+
         await commandDispatcher.DispatchAsync(new AgentCommand
         {
             AgentId = session.AgentId.Value,
@@ -362,7 +366,6 @@ public sealed class RetryTicketChatInviteCommandHandler(
             Payload = payload
         }, ct);
 
-        await chatRepository.UpdateSessionAsync(session, ct);
         return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
     }
 }
@@ -629,7 +632,8 @@ public sealed class EndTicketChatSessionCommandHandler(
     ITicketChatRepository chatRepository,
     ITicketChatEnvelopePublisher envelopePublisher,
     IActivityLogService activityLog,
-    ILogger<EndTicketChatSessionCommandHandler> logger)
+    ILogger<EndTicketChatSessionCommandHandler> logger,
+    ISupportChatSummaryService? summaryService = null)
     : IRequestHandler<EndTicketChatSessionCommand, Result<TicketChatSessionDto>>
 {
     public async Task<Result<TicketChatSessionDto>> Handle(EndTicketChatSessionCommand cmd, CancellationToken ct)
@@ -687,6 +691,11 @@ public sealed class EndTicketChatSessionCommandHandler(
             "Support chat session {SessionId} ended (by={EndedBy}, reason={Reason})",
             session.Id, session.EndedBy, session.EndReason);
 
+        if (session.TicketId is not null)
+        {
+            summaryService?.ScheduleSessionSummary(session.Id);
+        }
+
         return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
     }
 
@@ -697,4 +706,210 @@ public sealed class EndTicketChatSessionCommandHandler(
             "system" => TicketChatEndedBy.System,
             _ => TicketChatEndedBy.Support
         };
+}
+
+/// <summary>Solicita uma ação assistida (print/diagnóstico) ao usuário final no chat.</summary>
+public sealed class RequestTicketChatAssistedActionCommandHandler(
+    ITicketChatRepository chatRepository,
+    ITicketChatEnvelopePublisher envelopePublisher,
+    IChatUserNameResolver userNameResolver)
+    : IRequestHandler<RequestTicketChatAssistedActionCommand, Result<TicketChatMessageDto>>
+{
+    public async Task<Result<TicketChatMessageDto>> Handle(RequestTicketChatAssistedActionCommand cmd, CancellationToken ct)
+    {
+        var session = await chatRepository.GetByIdAsync(cmd.SessionId, ct);
+        if (session is null)
+            return Result<TicketChatMessageDto>.Failure(Error.NotFound("Sessão de chat não encontrada."));
+
+        if (session.Status != TicketChatSessionStatus.Active)
+            return Result<TicketChatMessageDto>.Failure(Error.Conflict("session_not_active"));
+
+        var actionType = (cmd.ActionType ?? string.Empty).Trim().ToLowerInvariant();
+        string systemText;
+        string label;
+        switch (actionType)
+        {
+            case "request_screenshot":
+                systemText = "O suporte solicitou uma captura de tela.";
+                label = "O suporte solicitou uma captura de tela.";
+                break;
+            case "request_diagnostics":
+                systemText = "O suporte solicitou a coleta de diagnóstico.";
+                label = "O suporte solicitou a coleta de diagnóstico.";
+                break;
+            default:
+                return Result<TicketChatMessageDto>.Failure(Error.Validation("actionType", "Ação assistida inválida."));
+        }
+
+        var requesterName = await userNameResolver.ResolveAsync(cmd.RequestedByUserId, cmd.RequestedByName ?? string.Empty, ct);
+        var systemMessage = new TicketChatMessage
+        {
+            Id = Guid.NewGuid(),
+            SessionId = session.Id,
+            ClientMessageId = Guid.NewGuid(),
+            AuthorKind = TicketChatAuthorKind.System,
+            AuthorUserId = cmd.RequestedByUserId,
+            AuthorName = string.IsNullOrWhiteSpace(requesterName) ? null : requesterName.Trim(),
+            Body = systemText,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        var (saved, _) = await chatRepository.AppendMessageAsync(session.Id, systemMessage, [], ct);
+        await envelopePublisher.PublishMessageToAgentAsync(session, saved, ct);
+        await envelopePublisher.PublishAssistedActionToAgentAsync(session, actionType, requesterName, label, ct);
+        await envelopePublisher.PublishActivitySignalAsync(session, saved, ct);
+
+        return Result<TicketChatMessageDto>.Success(TicketChatMapper.MapMessages([saved], []).First());
+    }
+}
+
+/// <summary>Vincula uma conversa avulsa a um chamado existente ou cria um novo chamado.</summary>
+public sealed class LinkSupportChatToTicketCommandHandler(
+    ITicketChatRepository chatRepository,
+    ITicketQueryService ticketQueryService,
+    IMediator mediator,
+    IActivityLogService activityLog,
+    ITicketChatEnvelopePublisher envelopePublisher,
+    IChatUserNameResolver userNameResolver)
+    : IRequestHandler<LinkSupportChatToTicketCommand, Result<TicketChatSessionDto>>
+{
+    public async Task<Result<TicketChatSessionDto>> Handle(LinkSupportChatToTicketCommand cmd, CancellationToken ct)
+    {
+        var session = await chatRepository.GetByIdAsync(cmd.SessionId, ct);
+        if (session is null)
+            return Result<TicketChatSessionDto>.Failure(Error.NotFound("Sessão de chat não encontrada."));
+
+        if (session.TicketId is not null)
+            return Result<TicketChatSessionDto>.Failure(Error.Conflict("already_linked"));
+
+        Guid targetTicketId;
+        string ticketLabel;
+
+        if (cmd.ExistingTicketId is { } existingId && existingId != Guid.Empty)
+        {
+            var ticket = await ticketQueryService.GetTicketByIdAsync(existingId, ct);
+            if (ticket is null || ticket.ClientId != session.ClientId)
+                return Result<TicketChatSessionDto>.Failure(Error.NotFound("Chamado não encontrado."));
+
+            targetTicketId = ticket.Id;
+            ticketLabel = string.IsNullOrWhiteSpace(ticket.Title) ? ticket.Id.ToString() : ticket.Title;
+        }
+        else
+        {
+            var title = string.IsNullOrWhiteSpace(cmd.Title)
+                ? "Atendimento via chat de suporte"
+                : cmd.Title.Trim();
+            var description = string.IsNullOrWhiteSpace(cmd.Description)
+                ? $"Chamado criado a partir da sessão de chat de suporte ({session.Id})."
+                : cmd.Description.Trim();
+
+            var created = await mediator.Send(new CreateTicketCommand(
+                Title: title,
+                Description: description,
+                Priority: cmd.Priority,
+                ClientId: session.ClientId,
+                SiteId: session.SiteId,
+                AgentId: session.AgentId,
+                DepartmentId: cmd.DepartmentId,
+                WorkflowProfileId: null,
+                AssignedToUserId: cmd.RequestedByUserId ?? session.StartedByUserId,
+                Category: "Suporte",
+                RequesterUserId: cmd.RequestedByUserId ?? session.StartedByUserId), ct);
+
+            if (created.IsFailure || created.Value is null)
+                return Result<TicketChatSessionDto>.Failure(created.Errors);
+
+            targetTicketId = created.Value.Id;
+            ticketLabel = created.Value.Title;
+        }
+
+        session.TicketId = targetTicketId;
+        await chatRepository.UpdateSessionAsync(session, ct);
+
+        var actorName = await userNameResolver.ResolveAsync(cmd.RequestedByUserId, cmd.RequestedByName ?? string.Empty, ct);
+        await activityLog.LogActivityAsync(
+            targetTicketId,
+            TicketActivityType.ChatStarted,
+            cmd.RequestedByUserId,
+            comment: $"Sessão de chat avulso vinculada ao chamado por {actorName}");
+
+        var systemMessage = new TicketChatMessage
+        {
+            Id = Guid.NewGuid(),
+            SessionId = session.Id,
+            ClientMessageId = Guid.NewGuid(),
+            AuthorKind = TicketChatAuthorKind.System,
+            Body = $"Conversa vinculada ao chamado: {ticketLabel}.",
+            CreatedAt = DateTime.UtcNow
+        };
+        var (saved, _) = await chatRepository.AppendMessageAsync(session.Id, systemMessage, [], ct);
+        await envelopePublisher.PublishMessageToAgentAsync(session, saved, ct);
+        await envelopePublisher.PublishActivitySignalAsync(session, saved, ct);
+        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
+
+        return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
+    }
+}
+
+/// <summary>Transfere uma sessão de chat ativa/pendente para outro técnico.</summary>
+public sealed class TransferTicketChatSessionCommandHandler(
+    ITicketChatRepository chatRepository,
+    IChatUserNameResolver userNameResolver,
+    ITicketChatEnvelopePublisher envelopePublisher,
+    INotificationService notificationService,
+    ILogger<TransferTicketChatSessionCommandHandler> logger)
+    : IRequestHandler<TransferTicketChatSessionCommand, Result<TicketChatSessionDto>>
+{
+    public async Task<Result<TicketChatSessionDto>> Handle(TransferTicketChatSessionCommand cmd, CancellationToken ct)
+    {
+        if (cmd.TargetUserId == Guid.Empty)
+            return Result<TicketChatSessionDto>.Failure(Error.Validation("targetUserId", "Técnico de destino é obrigatório."));
+
+        var session = await chatRepository.GetByIdAsync(cmd.SessionId, ct);
+        if (session is null)
+            return Result<TicketChatSessionDto>.Failure(Error.NotFound("Sessão de chat não encontrada."));
+
+        if (session.Status is not (TicketChatSessionStatus.Active or TicketChatSessionStatus.Pending))
+            return Result<TicketChatSessionDto>.Failure(Error.Conflict("session_not_active"));
+
+        var fromName = await userNameResolver.ResolveAsync(cmd.RequestedByUserId, cmd.RequestedByName ?? "suporte", ct);
+        var targetName = await userNameResolver.ResolveAsync(cmd.TargetUserId, "suporte", ct);
+
+        session.StartedByUserId = cmd.TargetUserId;
+        session.StartedByName = string.IsNullOrWhiteSpace(targetName) ? session.StartedByName : targetName.Trim();
+        await chatRepository.UpdateSessionAsync(session, ct);
+
+        var systemMessage = new TicketChatMessage
+        {
+            Id = Guid.NewGuid(),
+            SessionId = session.Id,
+            ClientMessageId = Guid.NewGuid(),
+            AuthorKind = TicketChatAuthorKind.System,
+            Body = $"Atendimento transferido para {session.StartedByName} por {fromName}.",
+            CreatedAt = DateTime.UtcNow
+        };
+        var (saved, _) = await chatRepository.AppendMessageAsync(session.Id, systemMessage, [], ct);
+
+        await envelopePublisher.PublishMessageToAgentAsync(session, saved, ct);
+        await envelopePublisher.PublishActivitySignalAsync(session, saved, ct);
+        await envelopePublisher.PublishSessionStatusSignalAsync(session, ct);
+
+        try
+        {
+            await notificationService.PublishAsync(new NotificationPublishRequest(
+                EventType: "ticket_chat_transferred",
+                Topic: "ticket-chat",
+                Title: "Chat de suporte transferido para você",
+                Message: $"{fromName} transferiu um atendimento ao vivo para você.",
+                Severity: NotificationSeverity.Informational,
+                Payload: new { ticketId = session.TicketId, sessionId = session.Id, agentId = session.AgentId, tab = "chat" },
+                RecipientUserId: cmd.TargetUserId), ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Falha ao notificar técnico {TargetUserId} sobre transferência do chat {SessionId}", cmd.TargetUserId, session.Id);
+        }
+
+        return Result<TicketChatSessionDto>.Success(TicketChatMapper.MapSession(session));
+    }
 }

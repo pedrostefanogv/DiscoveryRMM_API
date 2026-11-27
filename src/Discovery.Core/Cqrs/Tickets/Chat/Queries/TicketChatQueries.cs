@@ -7,8 +7,8 @@ namespace Discovery.Core.Cqrs.Tickets.Chat.Queries;
 public sealed record GetTicketChatStateQuery(Guid TicketId)
     : IQuery<Result<TicketChatStateDto>>;
 
-/// <summary>Snapshot incremental das mensagens (carregamento inicial e reconciliação).</summary>
-public sealed record GetTicketChatMessagesQuery(Guid SessionId, long AfterSequence, int Limit)
+/// <summary>Snapshot incremental das mensagens (carregamento inicial, reconciliação e paginação reversa).</summary>
+public sealed record GetTicketChatMessagesQuery(Guid SessionId, long AfterSequence, int Limit, long? BeforeSequence = null)
     : IQuery<Result<IReadOnlyList<TicketChatMessageDto>>>;
 
 /// <summary>Conversas anteriores do chamado (somente leitura no console web).</summary>

@@ -132,7 +132,24 @@ public static class RateLimitingServiceCollectionExtensions
                         });
                 }
 
-                if (path.StartsWithSegments("/api/v1/download", StringComparison.OrdinalIgnoreCase))
+                if (path.StartsWithSegments("/api/v1/public", StringComparison.OrdinalIgnoreCase)
+                    && path.Value?.EndsWith("/verify", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return RateLimitPartition.GetFixedWindowLimiter(
+                        partitionKey: $"public-passcode:{ip}",
+                        factory: _ => new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 10,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0,
+                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                            AutoReplenishment = true
+                        });
+                }
+
+                if (path.StartsWithSegments("/api/v1/download", StringComparison.OrdinalIgnoreCase)
+                    || path.StartsWithSegments("/api/v1/public/downloads", StringComparison.OrdinalIgnoreCase)
+                    || path.StartsWithSegments("/api/v1/public/uploads", StringComparison.OrdinalIgnoreCase))
                 {
                     return RateLimitPartition.GetFixedWindowLimiter(
                         partitionKey: $"download:{ip}",

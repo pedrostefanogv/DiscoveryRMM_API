@@ -19,6 +19,7 @@ namespace Discovery.Infrastructure.Services;
 public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
 {
     private const string CacheKey = "object-storage:service";
+    private readonly SemaphoreSlim _cacheBuildLock = new(1, 1);
     private readonly IServerConfigurationRepository _serverConfigRepository;
     private readonly IMemoryCache _cache;
     private readonly ILogger<ObjectStorageProviderFactory> _logger;
@@ -165,32 +166,41 @@ public class ObjectStorageProviderFactory : IObjectStorageProviderFactory
 
     public async Task<IObjectStorageService> CreateObjectStorageServiceAsync(CancellationToken cancellationToken = default)
     {
-        _ = cancellationToken;
-
         if (_cache.TryGetValue<IObjectStorageService>(CacheKey, out var cachedService) && cachedService is not null)
             return cachedService;
 
-        var config = await _serverConfigRepository.GetAsync() ??
-            await _serverConfigRepository.GetOrCreateDefaultAsync();
-        var settings = ResolveSettings(config);
-        var errors = settings.Validate();
-        var internalErrors = InternalModeMissingCredentialsErrors(config);
-        if (internalErrors.Count > 0)
-            errors = internalErrors;
-        if (errors.Count > 0)
+        await _cacheBuildLock.WaitAsync(cancellationToken);
+        try
         {
-            _logger.LogWarning(
-                "Object storage não está configurado. Operações de storage serão indisponíveis. Erros: {Errors}",
-                string.Join("; ", errors));
-            var notConfigured = new NotConfiguredObjectStorageProvider(errors);
-            _cache.Set(CacheKey, notConfigured, TimeSpan.FromSeconds(15));
-            return notConfigured;
-        }
+            if (_cache.TryGetValue<IObjectStorageService>(CacheKey, out cachedService) && cachedService is not null)
+                return cachedService;
 
-        _logger.LogInformation("Creating ObjectStorageService using MinIO S3-compatible provider");
-        var service = CreateMinioStorageService(settings);
-        _cache.Set(CacheKey, service, TimeSpan.FromMinutes(5));
-        return service;
+            var config = await _serverConfigRepository.GetAsync() ??
+                await _serverConfigRepository.GetOrCreateDefaultAsync();
+            var settings = ResolveSettings(config);
+            var errors = settings.Validate();
+            var internalErrors = InternalModeMissingCredentialsErrors(config);
+            if (internalErrors.Count > 0)
+                errors = internalErrors;
+            if (errors.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Object storage não está configurado. Operações de storage serão indisponíveis. Erros: {Errors}",
+                    string.Join("; ", errors));
+                var notConfigured = new NotConfiguredObjectStorageProvider(errors);
+                _cache.Set(CacheKey, notConfigured, TimeSpan.FromSeconds(15));
+                return notConfigured;
+            }
+
+            _logger.LogInformation("Creating ObjectStorageService using MinIO S3-compatible provider");
+            var service = CreateMinioStorageService(settings);
+            _cache.Set(CacheKey, service, TimeSpan.FromMinutes(5));
+            return service;
+        }
+        finally
+        {
+            _cacheBuildLock.Release();
+        }
     }
 
     public void InvalidateCache()
@@ -372,7 +382,13 @@ file sealed class NotConfiguredObjectStorageProvider : IObjectStorageService
     public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
+    public Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, string? downloadFileName, string? responseContentType = null, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
     public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
+        => throw NotConfigured();
+
+    public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, long? contentLengthBytes, CancellationToken cancellationToken = default)
         => throw NotConfigured();
 
     public Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
@@ -443,8 +459,14 @@ file sealed class DeferredObjectStorageProvider : IObjectStorageService
     public async Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetPresignedDownloadUrlAsync(objectKey, ttl, cancellationToken);
 
+    public async Task<string> GetPresignedDownloadUrlAsync(string objectKey, TimeSpan ttl, string? downloadFileName, string? responseContentType = null, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).GetPresignedDownloadUrlAsync(objectKey, ttl, downloadFileName, responseContentType, cancellationToken);
+
     public async Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, cancellationToken);
+
+    public async Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, long? contentLengthBytes, CancellationToken cancellationToken = default)
+        => await (await GetInnerAsync()).GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, contentLengthBytes, cancellationToken);
 
     public async Task<StorageObject?> GetMetadataAsync(string objectKey, CancellationToken cancellationToken = default)
         => await (await GetInnerAsync()).GetMetadataAsync(objectKey, cancellationToken);

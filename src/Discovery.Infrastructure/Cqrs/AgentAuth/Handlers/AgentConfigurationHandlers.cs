@@ -112,6 +112,7 @@ public sealed class GetAgentConfigurationHandler(
             // global true: ausência do campo no payload NÃO desliga a aba — o agent
             // só esconde quando recebe explicitamente false.
             ["updatesTabEnabled"] = siteConfig?.UpdatesTabEnabled ?? clientConfig?.UpdatesTabEnabled ?? serverConfig.UpdatesTabEnabled,
+            ["filesTabEnabled"] = siteConfig?.FilesTabEnabled ?? clientConfig?.FilesTabEnabled ?? serverConfig.FilesTabEnabled,
 
             // Página inicial do agent (herdada; vazio cai para o default "status")
             ["agentHomeTab"] = AgentHomeTabCatalog.Normalize(

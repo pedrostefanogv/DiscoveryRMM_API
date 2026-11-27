@@ -29,6 +29,12 @@ public static class TicketChatEventTypes
 
     /// <summary>Agent -> servidor: resposta ao convite (aceito/recusado).</summary>
     public const string InviteResponse = "InviteResponse";
+
+    /// <summary>Bidirecional: indicador efêmero de "digitando...".</summary>
+    public const string Typing = "Typing";
+
+    /// <summary>Servidor -> agent: pedido de ação assistida (ex.: captura de tela).</summary>
+    public const string AssistedAction = "AssistedAction";
 }
 
 /// <summary>
@@ -72,6 +78,12 @@ public class TicketChatEnvelope
 
     /// <summary>user_denied | timeout | busy | offline.</summary>
     public string? Reason { get; set; }
+
+    /// <summary>Preenchido em Typing.</summary>
+    public bool? IsTyping { get; set; }
+
+    /// <summary>Preenchido em AssistedAction (ex.: request_screenshot, request_diagnostics).</summary>
+    public string? ActionType { get; set; }
 
     public DateTime TimestampUtc { get; set; } = DateTime.UtcNow;
 }

@@ -26,6 +26,11 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
+            entity.Property(config => config.FilesTabEnabled).HasColumnName("files_tab_enabled");
+            entity.Property(config => config.PublicDownloadPageEnabled).HasColumnName("public_download_page_enabled");
+            entity.Property(config => config.PublicDownloadZeroTouchEnabled).HasColumnName("public_download_zero_touch_enabled");
+            entity.Property(config => config.PublicDownloadTitle).HasColumnName("public_download_title").HasMaxLength(200);
+            entity.Property(config => config.PublicDownloadDescription).HasColumnName("public_download_description").HasMaxLength(2000);
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
@@ -119,6 +124,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
+            entity.Property(config => config.FilesTabEnabled).HasColumnName("files_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");
@@ -182,6 +188,7 @@ public partial class DiscoveryDbContext
             entity.Property(config => config.ChatAIEnabled).HasColumnName("chat_ai_enabled");
             entity.Property(config => config.KnowledgeBaseEnabled).HasColumnName("knowledge_base_enabled");
             entity.Property(config => config.UpdatesTabEnabled).HasColumnName("updates_tab_enabled");
+            entity.Property(config => config.FilesTabEnabled).HasColumnName("files_tab_enabled");
             entity.Property(config => config.AgentHomeTab).HasColumnName("agent_home_tab").HasMaxLength(64);
             entity.Property(config => config.ZeroTouchEnabled).HasColumnName("zero_touch_enabled");
             entity.Property(config => config.KnowledgeEmbeddingEnabled).HasColumnName("knowledge_embedding_enabled");

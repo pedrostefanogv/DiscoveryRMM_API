@@ -86,6 +86,20 @@ public interface IObjectStorageService
             cancellationToken);
 
     /// <summary>
+    /// Gerar URL pré-assinada privada para download forçando
+    /// <c>response-content-disposition: attachment</c> (e opcionalmente
+    /// <c>response-content-type</c>) para evitar renderização inline de SVG/HTML
+    /// e garantir o nome de arquivo correto no navegador.
+    /// </summary>
+    Task<string> GetPresignedDownloadUrlAsync(
+        string objectKey,
+        TimeSpan ttl,
+        string? downloadFileName,
+        string? responseContentType = null,
+        CancellationToken cancellationToken = default)
+        => GetPresignedDownloadUrlAsync(objectKey, ttl, cancellationToken);
+
+    /// <summary>
     /// Gerar URL pré-assinada privada para upload direto no storage.
     /// </summary>
     /// <param name="objectKey">Chave do objeto</param>
@@ -98,6 +112,18 @@ public interface IObjectStorageService
         int ttlMinutes,
         string contentType,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gerar URL pré-assinada privada para upload direto no storage vinculando
+    /// <c>content-type</c> (e opcionalmente <c>content-length</c>) na assinatura SigV4.
+    /// </summary>
+    Task<string> GetPresignedUploadUrlAsync(
+        string objectKey,
+        int ttlMinutes,
+        string contentType,
+        long? contentLengthBytes,
+        CancellationToken cancellationToken = default)
+        => GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, cancellationToken);
 
     /// <summary>
     /// Obter metadados de um objeto sem fazer download do conteúdo.

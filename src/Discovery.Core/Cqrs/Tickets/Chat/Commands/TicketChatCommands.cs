@@ -1,5 +1,6 @@
 using Discovery.Core.Cqrs;
 using Discovery.Core.Cqrs.Tickets.Chat.Dtos;
+using Discovery.Core.Enums;
 
 namespace Discovery.Core.Cqrs.Tickets.Chat.Commands;
 
@@ -61,4 +62,39 @@ public sealed record EndTicketChatSessionCommand(
     Guid SessionId,
     string EndedBy,
     string? Reason
+) : ICommand<Result<TicketChatSessionDto>>;
+
+/// <summary>
+/// Solicita uma ação assistida ao usuário final dentro da sessão ativa
+/// (ex.: captura de tela ou coleta de diagnóstico).
+/// </summary>
+public sealed record RequestTicketChatAssistedActionCommand(
+    Guid SessionId,
+    string ActionType,
+    Guid? RequestedByUserId,
+    string? RequestedByName
+) : ICommand<Result<TicketChatMessageDto>>;
+
+/// <summary>
+/// Vincula uma sessão de chat avulsa a um chamado existente ou cria um novo chamado.
+/// </summary>
+public sealed record LinkSupportChatToTicketCommand(
+    Guid SessionId,
+    Guid? ExistingTicketId,
+    string? Title,
+    string? Description,
+    TicketPriority Priority,
+    Guid? DepartmentId,
+    Guid? RequestedByUserId,
+    string? RequestedByName
+) : ICommand<Result<TicketChatSessionDto>>;
+
+/// <summary>
+/// Transfere a responsabilidade de uma sessão de chat para outro técnico.
+/// </summary>
+public sealed record TransferTicketChatSessionCommand(
+    Guid SessionId,
+    Guid TargetUserId,
+    Guid? RequestedByUserId,
+    string? RequestedByName
 ) : ICommand<Result<TicketChatSessionDto>>;

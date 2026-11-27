@@ -120,8 +120,15 @@ public class AutoTicketEnrichmentService(
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromMilliseconds(providerTimeoutMs + CtsGraceMs));
 
+            var effectiveSystemPrompt = settings.ResolveProcedurePrompt("auto_ticket_enrichment", SystemPrompt);
+            if (!effectiveSystemPrompt.Contains("\"title\"", StringComparison.OrdinalIgnoreCase)
+                || !effectiveSystemPrompt.Contains("\"description\"", StringComparison.OrdinalIgnoreCase))
+            {
+                effectiveSystemPrompt += "\n\nResponda APENAS com JSON válido, sem texto ao redor, no formato:\n" +
+                    "{\"title\":\"título curto (máx 200 chars)\",\"description\":\"descrição em markdown\",\"evidence\":[\"fato\"],\"hypotheses\":[\"hipótese\"],\"priority\":\"Low|Medium|High|Critical\",\"departmentId\":\"guid ou null\",\"category\":\"categoria ou null\",\"confidence\":0.0}";
+            }
             var response = await llmProvider.CompleteAsync(
-                SystemPrompt,
+                effectiveSystemPrompt,
                 [new LlmMessage("user", prompt)],
                 new LlmOptions(
                     MaxTokens: DefaultMaxTokens,

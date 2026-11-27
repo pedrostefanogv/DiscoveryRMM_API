@@ -231,6 +231,9 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
         // Sensores de monitoramento (estado + séries + eventos)
         ConfigureSensors(modelBuilder);
 
+        // Central de Arquivos S3 (managed_files, share/upload links, access logs)
+        ConfigureFiles(modelBuilder);
+
         // Fallback convention: ensure any entity/column not explicitly mapped also uses snake_case.
         ApplySnakeCaseFallback(modelBuilder);
     }
@@ -260,6 +263,7 @@ public partial class DiscoveryDbContext(DbContextOptions<DiscoveryDbContext> opt
     static partial void ConfigureTicketChat(ModelBuilder modelBuilder);
     static partial void ConfigurePatches(ModelBuilder modelBuilder);
     static partial void ConfigureSensors(ModelBuilder modelBuilder);
+    static partial void ConfigureFiles(ModelBuilder modelBuilder);
 
     private static void ApplySnakeCaseFallback(ModelBuilder modelBuilder)
     {

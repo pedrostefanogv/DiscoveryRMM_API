@@ -684,9 +684,9 @@ public class AiTicketTriageService(
         // quando não há imagem aceita.
         var images = await attachmentImages.LoadTicketImagesAsync(ticket.Id, ct);
 
-        var response = await aiChat.ProcessTicketPromptJsonAsync(
-            systemPrompt, prompt, siteId,
-            budget.MaxOutputTokens, Temperature, "json_object", department.Id,
+        var response = await aiChat.ProcessProcedurePromptAsync(
+            "auto_assignment", systemPrompt, prompt, siteId,
+            budget.MaxOutputTokens, Temperature, department.Id, "json_object",
             images.Count > 0 ? images : null, ct);
 
         var parsed = ParseResponse(response.Content);

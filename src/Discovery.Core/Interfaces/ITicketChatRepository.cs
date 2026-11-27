@@ -50,6 +50,9 @@ public interface ITicketChatRepository
 
     Task<IReadOnlyList<TicketChatMessage>> GetMessagesAsync(Guid sessionId, long afterSequence, int limit, CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<TicketChatMessage>> GetMessagesBeforeAsync(Guid sessionId, long beforeSequence, int limit, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<TicketChatMessage>>([]);
+
     /// <summary>
     /// Insere a mensagem com `sequence_number` alocado em transação e vincula os
     /// anexos. Idempotente por `(session_id, client_message_id)`: quando a

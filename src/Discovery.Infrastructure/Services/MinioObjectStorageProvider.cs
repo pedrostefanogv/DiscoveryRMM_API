@@ -45,7 +45,9 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
     // complete/abort/list) e do calculo de checksum. Compartilhado para evitar
     // vazamento de sockets quando o provider é recriado pelo cache.
     private readonly HttpClient _presignHttpClient;
+    private readonly SemaphoreSlim _bucketLock = new(1, 1);
     private volatile bool _bucketVerified;
+    private const int InMemorySpoolThresholdBytes = 4 * 1024 * 1024; // 4 MiB
 
     /// <summary>
     /// Timeout das operações assinadas. O complete de um objeto montado no
@@ -137,16 +139,16 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
 
         await EnsureBucketExistsAsync(cancellationToken);
 
-        MemoryStream? buffered = null;
+        Stream? spooled = null;
         try
         {
             Stream uploadStream = content;
             if (!uploadStream.CanSeek)
             {
-                buffered = new MemoryStream();
-                await uploadStream.CopyToAsync(buffered, cancellationToken);
-                buffered.Seek(0, SeekOrigin.Begin);
-                uploadStream = buffered;
+                // Spool em memória até 4 MiB; acima disso faz spillover para arquivo
+                // temporário em disco (DeleteOnClose) evitando OOM em uploads grandes.
+                spooled = await SpoolNonSeekableStreamAsync(uploadStream, cancellationToken);
+                uploadStream = spooled;
             }
             else
             {
@@ -175,8 +177,63 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
         }
         finally
         {
-            if (buffered is not null)
-                await buffered.DisposeAsync();
+            if (spooled is not null)
+                await spooled.DisposeAsync();
+        }
+    }
+
+    private static async Task<Stream> SpoolNonSeekableStreamAsync(Stream source, CancellationToken cancellationToken)
+    {
+        var memory = new MemoryStream();
+        var buffer = new byte[81920];
+        var total = 0L;
+
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken);
+            if (read == 0)
+            {
+                memory.Seek(0, SeekOrigin.Begin);
+                return memory;
+            }
+
+            total += read;
+            if (total <= InMemorySpoolThresholdBytes)
+            {
+                await memory.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                continue;
+            }
+
+            // Excedeu 4 MiB: migra para arquivo temporário com DeleteOnClose.
+            var tempPath = Path.Combine(Path.GetTempPath(), $"discovery-s3-spool-{Guid.NewGuid():N}.tmp");
+            var tempFile = new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                81920,
+                FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+
+            try
+            {
+                memory.Seek(0, SeekOrigin.Begin);
+                await memory.CopyToAsync(tempFile, 81920, cancellationToken);
+                await memory.DisposeAsync();
+                await tempFile.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+
+                while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await tempFile.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                }
+
+                tempFile.Seek(0, SeekOrigin.Begin);
+                return tempFile;
+            }
+            catch
+            {
+                await tempFile.DisposeAsync();
+                throw;
+            }
         }
     }
 
@@ -330,6 +387,43 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
         return _presignClient.PresignedGetObjectAsync(args);
     }
 
+    public Task<string> GetPresignedDownloadUrlAsync(
+        string objectKey,
+        TimeSpan ttl,
+        string? downloadFileName,
+        string? responseContentType = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateObjectKey(objectKey);
+
+        if (ttl <= TimeSpan.Zero)
+            throw new ArgumentException("ttl must be positive", nameof(ttl));
+
+        AssertPresignEndpointReachable();
+
+        var expirySeconds = (int)Math.Clamp((long)Math.Ceiling(ttl.TotalSeconds), 1L, 7L * 24 * 3600);
+        var query = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(downloadFileName))
+            query["response-content-disposition"] = AwsSigV4Signer.BuildContentDispositionAttachment(downloadFileName);
+        if (!string.IsNullOrWhiteSpace(responseContentType))
+            query["response-content-type"] = responseContentType.Trim();
+
+        var url = AwsSigV4Signer.CreatePresignedObjectUrl(
+            "GET",
+            _presignBaseUri,
+            _bucketName,
+            objectKey,
+            query.Count > 0 ? query : null,
+            _accessKey,
+            _secretKey,
+            _region,
+            DateTimeOffset.UtcNow,
+            expirySeconds,
+            usePathStyle: EffectivePathStyle(_presignBaseUri));
+
+        return Task.FromResult(url);
+    }
+
     public Task<string> GetPresignedUploadUrlAsync(string objectKey, int ttlMinutes, string contentType, CancellationToken cancellationToken = default)
     {
         ValidateObjectKey(objectKey);
@@ -339,12 +433,51 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
 
         AssertPresignEndpointReachable();
 
+        var expirySeconds = (int)Math.Clamp((long)ttlMinutes * 60L, 60L, 7L * 24 * 3600);
         var args = new PresignedPutObjectArgs()
             .WithBucket(_bucketName)
             .WithObject(objectKey)
-            .WithExpiry(ttlMinutes * 60);
+            .WithExpiry(expirySeconds);
 
         return _presignClient.PresignedPutObjectAsync(args);
+    }
+
+    public Task<string> GetPresignedUploadUrlAsync(
+        string objectKey,
+        int ttlMinutes,
+        string contentType,
+        long? contentLengthBytes,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateObjectKey(objectKey);
+
+        if (ttlMinutes <= 0)
+            throw new ArgumentException("ttlMinutes must be positive", nameof(ttlMinutes));
+
+        AssertPresignEndpointReachable();
+
+        var expirySeconds = (int)Math.Clamp((long)ttlMinutes * 60L, 60L, 7L * 24 * 3600);
+        var signedHeaders = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(contentType))
+            signedHeaders["content-type"] = contentType.Trim();
+        if (contentLengthBytes is > 0)
+            signedHeaders["content-length"] = contentLengthBytes.Value.ToString(CultureInfo.InvariantCulture);
+
+        var url = AwsSigV4Signer.CreatePresignedObjectUrl(
+            "PUT",
+            _presignBaseUri,
+            _bucketName,
+            objectKey,
+            query: null,
+            _accessKey,
+            _secretKey,
+            _region,
+            DateTimeOffset.UtcNow,
+            expirySeconds,
+            usePathStyle: EffectivePathStyle(_presignBaseUri),
+            additionalSignedHeaders: signedHeaders.Count > 0 ? signedHeaders : null);
+
+        return Task.FromResult(url);
     }
 
     public async Task<string> CreateMultipartUploadAsync(string objectKey, string contentType, CancellationToken cancellationToken = default)
@@ -689,17 +822,38 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
         if (_bucketVerified)
             return;
 
-        var existsArgs = new BucketExistsArgs().WithBucket(_bucketName);
-        var exists = await _client.BucketExistsAsync(existsArgs, cancellationToken);
-        if (exists)
+        await _bucketLock.WaitAsync(cancellationToken);
+        try
         {
-            _bucketVerified = true;
-            return;
-        }
+            if (_bucketVerified)
+                return;
 
-        var makeArgs = new MakeBucketArgs().WithBucket(_bucketName).WithLocation(_region);
-        await _client.MakeBucketAsync(makeArgs, cancellationToken);
-        _bucketVerified = true;
+            var existsArgs = new BucketExistsArgs().WithBucket(_bucketName);
+            var exists = await _client.BucketExistsAsync(existsArgs, cancellationToken);
+            if (exists)
+            {
+                _bucketVerified = true;
+                return;
+            }
+
+            try
+            {
+                var makeArgs = new MakeBucketArgs().WithBucket(_bucketName).WithLocation(_region);
+                await _client.MakeBucketAsync(makeArgs, cancellationToken);
+            }
+            catch (MinioException ex) when (
+                ex.Message.Contains("BucketAlreadyOwnedByYou", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("BucketAlreadyExists", StringComparison.OrdinalIgnoreCase))
+            {
+                // Corrida entre processos/instâncias na criação inicial do bucket.
+            }
+
+            _bucketVerified = true;
+        }
+        finally
+        {
+            _bucketLock.Release();
+        }
     }
 
     private static void ValidateObjectKey(string objectKey)
@@ -755,6 +909,7 @@ public class MinioObjectStorageProvider : IObjectStorageService, IDisposable
 
     public void Dispose()
     {
+        _bucketLock.Dispose();
         _client.Dispose();
         if (!ReferenceEquals(_presignClient, _client))
             _presignClient.Dispose();

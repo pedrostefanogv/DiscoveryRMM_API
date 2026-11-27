@@ -43,7 +43,8 @@ public static class AwsSigV4Signer
         string secretKey,
         string region,
         DateTimeOffset now,
-        int expiresSeconds)
+        int expiresSeconds,
+        IReadOnlyDictionary<string, string>? additionalSignedHeaders = null)
     {
         if (string.IsNullOrWhiteSpace(method))
             throw new ArgumentException("Method is required", nameof(method));
@@ -56,6 +57,24 @@ public static class AwsSigV4Signer
             ? endpoint.Host
             : endpoint.Host + ":" + endpoint.Port.ToString(CultureInfo.InvariantCulture);
 
+        var headersToSign = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["host"] = host
+        };
+
+        if (additionalSignedHeaders is not null)
+        {
+            foreach (var pair in additionalSignedHeaders)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
+                    continue;
+                headersToSign[pair.Key.Trim().ToLowerInvariant()] = pair.Value.Trim();
+            }
+        }
+
+        var signedHeaders = string.Join(";", headersToSign.Keys);
+        var canonicalHeaders = string.Concat(headersToSign.Select(h => $"{h.Key}:{h.Value}\n"));
+
         var amzDate = now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
         var dateStamp = now.UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         var scope = string.Create(CultureInfo.InvariantCulture, $"{dateStamp}/{region}/{Service}/aws4_request");
@@ -66,7 +85,7 @@ public static class AwsSigV4Signer
             ["X-Amz-Credential"] = accessKey + "/" + scope,
             ["X-Amz-Date"] = amzDate,
             ["X-Amz-Expires"] = expiresSeconds.ToString(CultureInfo.InvariantCulture),
-            ["X-Amz-SignedHeaders"] = "host",
+            ["X-Amz-SignedHeaders"] = signedHeaders,
         };
 
         if (query is not null)
@@ -81,9 +100,6 @@ public static class AwsSigV4Signer
 
         var canonicalQuery = string.Join("&", parameters.Select(pair =>
             Encode(pair.Key) + "=" + Encode(pair.Value)));
-
-        var canonicalHeaders = "host:" + host + "\n";
-        const string signedHeaders = "host";
 
         var canonicalRequest = string.Join("\n",
             method.ToUpperInvariant(),
@@ -107,8 +123,7 @@ public static class AwsSigV4Signer
 
     /// <summary>
     /// URL pré-assinada para uma OPERAÇÃO sobre o objeto (POST ?uploads=1, POST
-    /// ?uploadId=…, DELETE ?uploadId=…). O path é codificado aqui — quem chama só
-    /// informa bucket/key e os parâmetros extras.
+    /// ?uploadId=…, DELETE ?uploadId=…, GET com response-content-disposition, PUT com content-type).
     /// </summary>
     public static string CreatePresignedObjectUrl(
         string method,
@@ -121,7 +136,8 @@ public static class AwsSigV4Signer
         string region,
         DateTimeOffset now,
         int expiresSeconds,
-        bool usePathStyle = true)
+        bool usePathStyle = true,
+        IReadOnlyDictionary<string, string>? additionalSignedHeaders = null)
     {
         if (string.IsNullOrWhiteSpace(bucket))
             throw new ArgumentException("bucket is required", nameof(bucket));
@@ -131,11 +147,33 @@ public static class AwsSigV4Signer
         {
             var virtualHost = new UriBuilder(endpoint.Scheme, $"{bucket}.{endpoint.Host}", endpoint.IsDefaultPort ? -1 : endpoint.Port).Uri;
             var virtualPath = string.IsNullOrEmpty(encodedKey) ? "/" : "/" + encodedKey;
-            return CreatePresignedUrl(method, virtualHost, virtualPath, query, accessKey, secretKey, region, now, expiresSeconds);
+            return CreatePresignedUrl(method, virtualHost, virtualPath, query, accessKey, secretKey, region, now, expiresSeconds, additionalSignedHeaders);
         }
 
         var path = "/" + EncodePathSegment(bucket) + "/" + encodedKey;
-        return CreatePresignedUrl(method, endpoint, path, query, accessKey, secretKey, region, now, expiresSeconds);
+        return CreatePresignedUrl(method, endpoint, path, query, accessKey, secretKey, region, now, expiresSeconds, additionalSignedHeaders);
+    }
+
+    /// <summary>
+    /// Monta o header <c>Content-Disposition: attachment</c> com fallback ASCII
+    /// e parâmetro RFC 5987 (<c>filename*=UTF-8''...</c>) seguro contra injeção de header.
+    /// </summary>
+    public static string BuildContentDispositionAttachment(string fileName)
+    {
+        var clean = Path.GetFileName((fileName ?? string.Empty).Trim())
+            .Replace("\r", string.Empty, StringComparison.Ordinal)
+            .Replace("\n", string.Empty, StringComparison.Ordinal)
+            .Replace("\"", "_", StringComparison.Ordinal);
+
+        if (string.IsNullOrWhiteSpace(clean))
+            clean = "download";
+
+        var asciiFallback = new string(clean.Select(c => c is >= ' ' and <= '~' and not ';' and not '\\' ? c : '_').ToArray());
+        if (string.IsNullOrWhiteSpace(asciiFallback))
+            asciiFallback = "download";
+
+        var encodedUtf8 = Encode(clean);
+        return $"attachment; filename=\"{asciiFallback}\"; filename*=UTF-8''{encodedUtf8}";
     }
 
     /// <summary>URL pré-assinada de UMA parte do upload multipart.</summary>

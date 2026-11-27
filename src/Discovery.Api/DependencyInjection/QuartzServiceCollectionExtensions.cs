@@ -37,6 +37,12 @@ public static class QuartzServiceCollectionExtensions
                 .WithCronSchedule("0 0 4 * * ?")
                 .WithDescription("Purge old report executions and files"));
 
+            // ── File Hub Cleanup: every 6 hours ──────────────────────────
+            q.ScheduleJob<FileHubCleanupJob>(trigger => trigger
+                .WithIdentity(FileHubCleanupJob.Key.Name, FileHubCleanupJob.Key.Group)
+                .WithCronSchedule("0 0 */6 * * ?")
+                .WithDescription("Purge expired managed files and stale multipart uploads"));
+
             // ── AI Chat Retention: daily at 2 AM ─────────────────────────
             q.ScheduleJob<AiChatRetentionJob>(trigger => trigger
                 .WithIdentity(AiChatRetentionJob.Key.Name, AiChatRetentionJob.Key.Group)

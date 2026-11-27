@@ -292,6 +292,14 @@ public class LocalObjectStorageProvider : IObjectStorageService
         CancellationToken cancellationToken = default)
         => GetPresignedDownloadUrlAsync(objectKey, Math.Max(1, (int)Math.Ceiling(ttl.TotalHours)), cancellationToken);
 
+    public Task<string> GetPresignedDownloadUrlAsync(
+        string objectKey,
+        TimeSpan ttl,
+        string? downloadFileName,
+        string? responseContentType = null,
+        CancellationToken cancellationToken = default)
+        => GetPresignedDownloadUrlAsync(objectKey, ttl, cancellationToken);
+
     /// <summary>
     /// Gerar URL "pré-assinada" de upload (local: URL fake para simulação em desenvolvimento).
     /// </summary>
@@ -312,6 +320,14 @@ public class LocalObjectStorageProvider : IObjectStorageService
 
         return Task.FromResult(fakeUrl);
     }
+
+    public Task<string> GetPresignedUploadUrlAsync(
+        string objectKey,
+        int ttlMinutes,
+        string contentType,
+        long? contentLengthBytes,
+        CancellationToken cancellationToken = default)
+        => GetPresignedUploadUrlAsync(objectKey, ttlMinutes, contentType, cancellationToken);
 
     /// <summary>
     /// Obter metadados do arquivo.

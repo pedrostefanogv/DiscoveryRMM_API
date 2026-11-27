@@ -43,6 +43,12 @@ public class SiteConfiguration
     public bool? UpdatesTabEnabled { get; set; }
 
     /// <summary>
+    /// Kill switch da aba "Arquivos" do painel do agent para este site
+    /// (null = herda do cliente/servidor, default global true).
+    /// </summary>
+    public bool? FilesTabEnabled { get; set; }
+
+    /// <summary>
     /// Página inicial do agent para este site (null/vazio = herda cliente/servidor).
     /// Ids aceitos em <see cref="AgentHomeTabCatalog"/>.
     /// </summary>

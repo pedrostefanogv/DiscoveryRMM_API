@@ -132,6 +132,29 @@ public class AiChatToolOrchestrator
         return merged;
     }
 
+    /// <summary>
+    /// Aplica overrides configurados pelo administrador às descrições/instruções das ferramentas MCP.
+    /// </summary>
+    public static List<LlmTool> ApplyToolPromptOverrides(
+        List<LlmTool> tools, IReadOnlyDictionary<string, string>? overrides)
+    {
+        if (tools.Count == 0 || overrides is null || overrides.Count == 0)
+            return tools;
+
+        var lookup = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in overrides)
+        {
+            if (!string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+                lookup[kv.Key.Trim()] = kv.Value.Trim();
+        }
+        if (lookup.Count == 0) return tools;
+
+        return tools.Select(t =>
+            lookup.TryGetValue(t.Name, out var custom)
+                ? new LlmTool(t.Name, custom, t.Schema)
+                : t).ToList();
+    }
+
     public async Task RegisterAgentToolsAsync(Guid agentId, Guid siteId,
         List<AgentToolRegistration> tools, CancellationToken ct = default)
     {

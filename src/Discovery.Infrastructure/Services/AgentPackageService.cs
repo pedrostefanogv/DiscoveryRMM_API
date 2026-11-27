@@ -13,6 +13,7 @@ public class AgentPackageService : IAgentPackageService
     private readonly IConfiguration _config;
     private readonly IConfigurationService _configurationService;
     private readonly ILogger<AgentPackageService> _logger;
+    private readonly IObjectStorageProviderFactory? _storageFactory;
     private static readonly SemaphoreSlim BuildLock = new(1, 1);
     private static readonly SemaphoreSlim InstallerBuildLock = new(1, 1);
     private static readonly SemaphoreSlim RepositorySyncLock = new(1, 1);
@@ -29,11 +30,13 @@ public class AgentPackageService : IAgentPackageService
     public AgentPackageService(
         IConfiguration config,
         IConfigurationService configurationService,
-        ILogger<AgentPackageService> logger)
+        ILogger<AgentPackageService> logger,
+        IObjectStorageProviderFactory? storageFactory = null)
     {
         _config = config;
         _configurationService = configurationService;
         _logger = logger;
+        _storageFactory = storageFactory;
     }
 
     public async Task PrebuildBaseBinaryAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
@@ -419,7 +422,48 @@ public class AgentPackageService : IAgentPackageService
 
     public async Task<(byte[] Content, string FileName)> BuildGenericInstallerAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
     {
-        var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 30;
+        var artifact = await GetGenericInstallerArtifactAsync(forceRebuild, cancellationToken);
+        var content = await File.ReadAllBytesAsync(artifact.LocalPath, cancellationToken);
+        return (content, artifact.FileName);
+    }
+
+    public Task<GenericInstallerMetadata?> GetCachedGenericInstallerMetadataAsync(CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var activeProfile = GetActiveProfileName();
+        var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
+            ?? (OperatingSystem.IsWindows() ? @"C:\Projetos\Discovery" : "/opt/discovery-agent-src");
+
+        if (!Directory.Exists(projectPath))
+            return Task.FromResult<GenericInstallerMetadata?>(null);
+
+        var cacheVersion = DetectAgentVersion(projectPath);
+        var cacheCommit = ResolveAgentGitCommit(projectPath);
+        var cacheKey = ComputeGenericInstallerCacheKey(cacheVersion, cacheCommit, activeProfile);
+        var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 0;
+
+        if (TryResolveGenericInstallerFromDisk(cacheKey, ttlMinutes, out var artifact))
+        {
+            return Task.FromResult<GenericInstallerMetadata?>(new GenericInstallerMetadata(
+                artifact.FileName,
+                artifact.SizeBytes,
+                artifact.Sha256,
+                artifact.Version,
+                artifact.CommitHash,
+                artifact.CacheKey,
+                artifact.S3ObjectKey,
+                DateTime.UtcNow));
+        }
+
+        return Task.FromResult<GenericInstallerMetadata?>(null);
+    }
+
+    public async Task<GenericInstallerArtifact> GetGenericInstallerArtifactAsync(bool forceRebuild = false, CancellationToken cancellationToken = default)
+    {
+        // Por padrão (0), o cache é invalidado apenas pela chave imutável
+        // hash(version + commit + profile) ou forceRebuild=true — evitando rebuilds
+        // periódicos de NSIS a cada 30 min quando nada mudou.
+        var ttlMinutes = _config.GetValue<int?>("AgentPackage:GenericInstallerCacheMinutes") ?? 0;
 
         var activeProfile = GetActiveProfileName();
         var projectPath = GetAgentPackageSetting("DiscoveryProjectPath")
@@ -428,27 +472,22 @@ public class AgentPackageService : IAgentPackageService
         if (!Directory.Exists(projectPath))
             throw new InvalidOperationException($"Discovery project path does not exist: {projectPath}");
 
-        // C4: chave = hash(version + commit + profile). O commit e resolvido UMA vez aqui
-        // (com timeout curto) para nao ser preciso chama-lo de novo mais tarde.
         var cacheVersion = DetectAgentVersion(projectPath);
         var cacheCommit = ResolveAgentGitCommit(projectPath);
         var cacheKey = ComputeGenericInstallerCacheKey(cacheVersion, cacheCommit, activeProfile);
 
-        // Fast-path: cache em DISCO sobrevive a restart do servico (antes era um
-        // ConcurrentDictionary em memoria -> 0% de hit entre restarts).
-        if (!forceRebuild && TryReadGenericInstallerFromDisk(cacheKey, ttlMinutes, out var diskCached))
+        if (!forceRebuild && TryResolveGenericInstallerFromDisk(cacheKey, ttlMinutes, out var diskCached))
         {
             _logger.LogInformation(
                 "Generic installer servido do cache em disco: fileName={FileName}, size={Size} bytes, key={Key}",
-                diskCached.FileName, diskCached.Content.Length, cacheKey);
+                diskCached.FileName, diskCached.SizeBytes, cacheKey);
             return diskCached;
         }
 
         await GenericBuildLock.WaitAsync(cancellationToken);
         try
         {
-            // Re-check after acquiring lock (outra thread pode ter construido enquanto esperavamos)
-            if (!forceRebuild && TryReadGenericInstallerFromDisk(cacheKey, ttlMinutes, out var lockedCached))
+            if (!forceRebuild && TryResolveGenericInstallerFromDisk(cacheKey, ttlMinutes, out var lockedCached))
                 return lockedCached;
 
             await PrebuildBaseBinaryAsync(cancellationToken: cancellationToken);
@@ -459,13 +498,24 @@ public class AgentPackageService : IAgentPackageService
                 () => BuildGenericWithNsisAsync(projectPath, activeProfile, cancellationToken),
                 cancellationToken);
 
-            TryWriteGenericInstallerToDisk(cacheKey, content, fileName, cacheVersion, cacheCommit, activeProfile);
+            var sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(content));
+            var s3ObjectKey = await TrySyncGenericInstallerToS3Async(cacheKey, fileName, content, cancellationToken);
+            var localPath = TryWriteGenericInstallerToDisk(
+                cacheKey, content, fileName, cacheVersion, cacheCommit, activeProfile, sha256, s3ObjectKey);
 
             _logger.LogInformation(
-                "Generic installer built: fileName={FileName}, size={Size} bytes, cacheKey={Key}, persisted to disk with TTL={TtlMin}m",
-                fileName, content.Length, cacheKey, ttlMinutes);
+                "Generic installer built: fileName={FileName}, size={Size} bytes, cacheKey={Key}, s3Key={S3Key}",
+                fileName, content.Length, cacheKey, s3ObjectKey ?? "(local-only)");
 
-            return (content, fileName);
+            return new GenericInstallerArtifact(
+                localPath,
+                fileName,
+                content.LongLength,
+                sha256,
+                cacheVersion ?? string.Empty,
+                cacheCommit,
+                cacheKey,
+                s3ObjectKey);
         }
         finally
         {
@@ -1292,10 +1342,10 @@ public class AgentPackageService : IAgentPackageService
         return Path.Combine(directory, $"generic-installer-{cacheKey}.exe");
     }
 
-    /// <summary>Le do disco (metadados + binario). Qualquer falha resulta em <c>false</c> e build normal.</summary>
-    private bool TryReadGenericInstallerFromDisk(string cacheKey, int ttlMinutes, out (byte[] Content, string FileName) result)
+    /// <summary>Resolve metadados + caminho do cache em disco sem carregar o arquivo em RAM.</summary>
+    private bool TryResolveGenericInstallerFromDisk(string cacheKey, int ttlMinutes, out GenericInstallerArtifact artifact)
     {
-        result = default;
+        artifact = default!;
         try
         {
             var binaryPath = GetGenericInstallerCachePath(cacheKey);
@@ -1306,26 +1356,38 @@ public class AgentPackageService : IAgentPackageService
             if (!File.Exists(binaryPath) || !File.Exists(metadataPath))
                 return false;
 
+            var fileInfo = new FileInfo(binaryPath);
+            if (fileInfo.Length <= 0)
+                return false;
+
             var metadata = JsonSerializer.Deserialize<GenericInstallerCacheMetadata>(File.ReadAllText(metadataPath));
             if (metadata is null)
                 return false;
 
             var age = DateTime.UtcNow - metadata.CreatedAtUtc;
-            if (age < TimeSpan.Zero || age >= TimeSpan.FromMinutes(ttlMinutes))
+            if (ttlMinutes > 0 && (age < TimeSpan.Zero || age >= TimeSpan.FromMinutes(ttlMinutes)))
             {
                 _logger.LogInformation("Cache em disco do instalador generico expirado (age={Age}s, ttl={TtlMin}m); rebuild.", (int)age.TotalSeconds, ttlMinutes);
                 return false;
             }
 
-            var content = File.ReadAllBytes(binaryPath);
-            if (content.Length == 0)
-                return false;
-
             var fileName = string.IsNullOrWhiteSpace(metadata.FileName) ? "discovery-agent-install.exe" : metadata.FileName;
-            result = (content, fileName);
-            _logger.LogInformation(
-                "Cache HIT (disco) do instalador generico: key={Key}, version={Version}, commit={Commit}, profile={Profile}, age={Age}s",
-                cacheKey, metadata.Version, metadata.Commit, metadata.Profile, (int)age.TotalSeconds);
+            var sha256 = metadata.Sha256;
+            if (string.IsNullOrWhiteSpace(sha256))
+            {
+                using var stream = File.OpenRead(binaryPath);
+                sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
+            }
+
+            artifact = new GenericInstallerArtifact(
+                binaryPath,
+                fileName,
+                fileInfo.Length,
+                sha256,
+                metadata.Version,
+                metadata.Commit,
+                cacheKey,
+                string.IsNullOrWhiteSpace(metadata.S3ObjectKey) ? null : metadata.S3ObjectKey);
             return true;
         }
         catch (Exception ex)
@@ -1335,14 +1397,46 @@ public class AgentPackageService : IAgentPackageService
         }
     }
 
-    /// <summary>Persiste o artefato + metadados. Best-effort: falha de disco nao quebra o build.</summary>
-    private void TryWriteGenericInstallerToDisk(string cacheKey, byte[] content, string fileName, string? version, string? commit, string profile)
+    private async Task<string?> TrySyncGenericInstallerToS3Async(
+        string cacheKey,
+        string fileName,
+        byte[] content,
+        CancellationToken cancellationToken)
     {
+        if (_storageFactory is null)
+            return null;
+
         try
         {
-            var binaryPath = GetGenericInstallerCachePath(cacheKey);
+            var storage = await _storageFactory.CreateObjectStorageServiceAsync(cancellationToken);
+            var objectKey = $"system/zerotouch/{cacheKey}/{fileName}";
+            await using var ms = new MemoryStream(content, writable: false);
+            await storage.UploadAsync(objectKey, ms, "application/x-msdownload", cancellationToken);
+            return objectKey;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Sincronizacao opcional do Zero-Touch para S3 ignorada (fallback em disco ativo).");
+            return null;
+        }
+    }
+
+    /// <summary>Persiste o artefato + metadados. Best-effort: falha de disco nao quebra o build.</summary>
+    private string TryWriteGenericInstallerToDisk(
+        string cacheKey,
+        byte[] content,
+        string fileName,
+        string? version,
+        string? commit,
+        string profile,
+        string sha256,
+        string? s3ObjectKey)
+    {
+        var binaryPath = GetGenericInstallerCachePath(cacheKey);
+        try
+        {
             if (string.IsNullOrWhiteSpace(binaryPath))
-                return;
+                return string.Empty;
 
             var directory = Path.GetDirectoryName(binaryPath);
             if (!string.IsNullOrWhiteSpace(directory))
@@ -1361,7 +1455,9 @@ public class AgentPackageService : IAgentPackageService
                 Profile = profile ?? string.Empty,
                 CreatedAtUtc = DateTime.UtcNow,
                 FileName = fileName,
-                SizeBytes = content.LongLength
+                SizeBytes = content.LongLength,
+                Sha256 = sha256,
+                S3ObjectKey = s3ObjectKey
             };
 
             File.WriteAllText(binaryPath + ".json", JsonSerializer.Serialize(metadata));
@@ -1369,10 +1465,12 @@ public class AgentPackageService : IAgentPackageService
             _logger.LogInformation(
                 "Instalador generico persistido em disco: path={Path}, size={Size} bytes, key={Key}",
                 binaryPath, content.LongLength, cacheKey);
+            return binaryPath;
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Falha ao persistir cache em disco do instalador generico ({Error}); build segue valido.", ex.Message);
+            return binaryPath;
         }
     }
 
@@ -1385,6 +1483,8 @@ public class AgentPackageService : IAgentPackageService
         public DateTime CreatedAtUtc { get; set; }
         public string FileName { get; set; } = string.Empty;
         public long SizeBytes { get; set; }
+        public string Sha256 { get; set; } = string.Empty;
+        public string? S3ObjectKey { get; set; }
     }
     private static async Task<T> RunExclusiveInstallerBuildAsync<T>(Func<Task<T>> buildAction, CancellationToken cancellationToken)
     {

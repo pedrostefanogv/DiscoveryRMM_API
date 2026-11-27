@@ -34,6 +34,7 @@ public class TicketsController(
     INotificationService notificationService,
     ITicketAccessPolicy accessPolicy,
     IWorkflowRepository workflowRepository,
+    IFileLinkService fileLinkService,
     ILogger<TicketsController> logger) : ControllerBase
 {
     private string Username => HttpContext.Items["Username"] as string ?? "api";
@@ -770,6 +771,61 @@ public class TicketsController(
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    // ── Links de Upload Externo (receber arquivos de máquinas sem Agent) ──
+
+    [HttpGet("{id:guid}/upload-links")]
+    [RequirePermission(ResourceType.Tickets, ActionType.View, ScopeSource.AccessList)]
+    public async Task<IActionResult> GetUploadLinks(Guid id, CancellationToken ct)
+    {
+        if (!await CanAccessTicketAsync(id, ct))
+            return NotFound();
+
+        return Ok(await fileLinkService.ListUploadLinksAsync(ticketId: id, ct: ct));
+    }
+
+    [HttpPost("{id:guid}/upload-links")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> CreateUploadLink(Guid id, [FromBody] CreateUploadLinkRequest request, CancellationToken ct)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, ct))
+            return NotFound();
+
+        var ticket = await ticketRepository.GetByIdAsync(id);
+        if (ticket is null)
+            return NotFound();
+
+        try
+        {
+            var scopedRequest = request with
+            {
+                ClientId = ticket.ClientId,
+                SiteId = ticket.SiteId,
+                TargetFolderPath = $"/chamados/{id:N}",
+                TicketId = id
+            };
+            return Ok(await fileLinkService.CreateUploadLinkAsync(scopedRequest, Username, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpDelete("{id:guid}/upload-links/{linkId:guid}")]
+    [RequirePermission(ResourceType.Tickets, ActionType.Edit, ScopeSource.AccessList)]
+    public async Task<IActionResult> RevokeUploadLink(Guid id, Guid linkId, CancellationToken ct)
+    {
+        if (!await CanAccessTicketAsync(id, ActionType.Edit, ct))
+            return NotFound();
+
+        var links = await fileLinkService.ListUploadLinksAsync(ticketId: id, ct: ct);
+        if (!links.Any(l => l.Id == linkId))
+            return NotFound(new { error = "Link não pertence a este chamado." });
+
+        await fileLinkService.RevokeUploadLinkAsync(linkId, Username, ct);
+        return NoContent();
     }
 
     // ── Anexos de COMENTÁRIO (nível conversa) ────────────────────────────

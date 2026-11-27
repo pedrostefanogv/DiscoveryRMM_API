@@ -27,6 +27,7 @@ public class AgentSupportChatController(
     ITicketChatRepository chatRepository,
     IAttachmentService attachmentService,
     IAttachmentRepository attachmentRepository,
+    ITicketChatEnvelopePublisher envelopePublisher,
     ILogger<AgentSupportChatController> logger) : ControllerBase
 {
     private const string ChatEntityType = "TicketChat";
@@ -138,6 +139,24 @@ public class AgentSupportChatController(
         var reason = string.IsNullOrWhiteSpace(request?.Reason) ? "user_closed" : request!.Reason!;
         var result = await mediator.Send(new EndTicketChatSessionCommand(sessionId, "user", reason), ct);
         return MapResult(result, Ok);
+    }
+
+    /// <summary>Sinal efêmero de "digitando..." do usuário final para o suporte.</summary>
+    [HttpPost("sessions/{sessionId:guid}/typing")]
+    public async Task<IActionResult> SendTyping(Guid sessionId, [FromBody] AgentTicketChatTypingRequest? request, CancellationToken ct = default)
+    {
+        if (!TryGetAgentId(out var agentId))
+            return Unauthorized(new { error = "Agent não autenticado." });
+
+        var session = await chatRepository.GetByIdAsync(sessionId, ct);
+        if (session is null || session.AgentId != agentId)
+            return NotFound();
+
+        if (session.Status != Discovery.Core.Enums.TicketChatSessionStatus.Active)
+            return Conflict(new { code = "session_not_active", error = "A conversa não está ativa." });
+
+        await envelopePublisher.PublishTypingAsync(session, "enduser", request?.AuthorName, request?.IsTyping ?? true, ct);
+        return NoContent();
     }
 
     // ── Anexos ────────────────────────────────────────────────────────────
@@ -286,11 +305,13 @@ public class AgentSupportChatController(
 
         var scope = await ResolveAttachmentScopeAsync(ownership.Session!, ct);
         var attachment = await attachmentRepository.GetByIdAsync(attachmentId, ct);
-        if (scope is null
-            || attachment is null
-            || attachment.IsDeleted
-            || !string.Equals(attachment.EntityType, scope.Value.EntityType, StringComparison.OrdinalIgnoreCase)
-            || attachment.EntityId != scope.Value.EntityId)
+        if (scope is null || attachment is null || attachment.IsDeleted)
+            return NotFound();
+
+        var matchesScope =
+            (string.Equals(attachment.EntityType, scope.Value.EntityType, StringComparison.OrdinalIgnoreCase) && attachment.EntityId == scope.Value.EntityId)
+            || (string.Equals(attachment.EntityType, AdHocChatEntityType, StringComparison.OrdinalIgnoreCase) && attachment.EntityId == sessionId);
+        if (!matchesScope)
         {
             return NotFound();
         }
@@ -372,6 +393,8 @@ public record AgentSendTicketChatMessageRequest(
 public record AgentTicketChatInviteResponse(bool Accepted, string? Reason = null);
 
 public record AgentTicketChatEndRequest(string? Reason = null);
+
+public record AgentTicketChatTypingRequest(bool IsTyping = true, string? AuthorName = null);
 
 public record AgentPresignedUploadRequest(string FileName, string ContentType, long SizeBytes);
 

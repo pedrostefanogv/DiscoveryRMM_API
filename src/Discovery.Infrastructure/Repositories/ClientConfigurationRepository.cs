@@ -44,6 +44,7 @@ public class ClientConfigurationRepository : IClientConfigurationRepository
         existingConfig.ChatAIEnabled = config.ChatAIEnabled;
         existingConfig.KnowledgeBaseEnabled = config.KnowledgeBaseEnabled;
         existingConfig.UpdatesTabEnabled = config.UpdatesTabEnabled;
+        existingConfig.FilesTabEnabled = config.FilesTabEnabled;
         existingConfig.AgentHomeTab = config.AgentHomeTab;
         existingConfig.ZeroTouchEnabled = config.ZeroTouchEnabled;
         // Override do job de embeddings da KB por cliente: lido pelo

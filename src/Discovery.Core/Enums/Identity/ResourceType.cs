@@ -38,5 +38,8 @@ public enum ResourceType
     // Recurso próprio porque LER o registro (diagnóstico frequente, baixo risco)
     // e ALTERAR (risco de quebrar o SO) são privilégios diferentes: View e
     // Execute são concedidos separadamente no RBAC.
-    Registry
+    Registry,
+
+    // Central de Arquivos S3 (portal público /download, links temporários e aba Arquivos do agent).
+    Files
 }

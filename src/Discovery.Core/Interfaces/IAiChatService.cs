@@ -89,6 +89,25 @@ public interface IAiChatService
             systemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, departmentId, ct);
 
     /// <summary>
+    /// Resolve o override de prompt configurado para <paramref name="procedureKey"/> (quando existir)
+    /// e executa o fluxo de ticket/procedimento com ou sem imagens/response_format.
+    /// </summary>
+    Task<LlmResponse> ProcessProcedurePromptAsync(
+        string procedureKey,
+        string defaultSystemPrompt,
+        string userMessage,
+        Guid siteId,
+        int maxTokens,
+        double temperature,
+        Guid? departmentId = null,
+        string? responseFormat = null,
+        IReadOnlyList<string>? images = null,
+        CancellationToken ct = default)
+        => responseFormat is null && images is null
+            ? ProcessTicketPromptAsync(defaultSystemPrompt, userMessage, siteId, maxTokens, temperature, departmentId, ct)
+            : ProcessTicketPromptJsonAsync(defaultSystemPrompt, userMessage, siteId, maxTokens, temperature, responseFormat, departmentId, images, ct);
+
+    /// <summary>
     /// Responde via SSE streaming — emite chunks incrementais enquanto o LLM gera tokens.
     /// Suporta tool calls (loop de MCP tools) e RAG departamental.
     /// </summary>

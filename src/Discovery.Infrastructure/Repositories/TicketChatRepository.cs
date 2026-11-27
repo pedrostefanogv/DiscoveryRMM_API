@@ -64,7 +64,34 @@ public class TicketChatRepository(DiscoveryDbContext db) : ITicketChatRepository
             .Take(Math.Clamp(take, 1, 100))
             .ToListAsync(cancellationToken);
 
-    public async Task<IReadOnlyList<TicketChatMessage>> GetMessagesAsync(Guid sessionId, long afterSequence, int limit, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<TicketChatMessage>> GetMessagesBeforeAsync(
+        Guid sessionId,
+        long beforeSequence,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var take = Math.Clamp(limit, 1, 500);
+        if (beforeSequence <= 0)
+            return [];
+
+        // Paginação reversa: devolve as N mensagens imediatamente anteriores a `beforeSequence`
+        // em ordem cronológica ascendente.
+        var older = await db.TicketChatMessages
+            .AsNoTracking()
+            .Where(m => m.SessionId == sessionId && m.SequenceNumber < beforeSequence)
+            .OrderByDescending(m => m.SequenceNumber)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        older.Reverse();
+        return older;
+    }
+
+    public async Task<IReadOnlyList<TicketChatMessage>> GetMessagesAsync(
+        Guid sessionId,
+        long afterSequence,
+        int limit,
+        CancellationToken cancellationToken = default)
     {
         var take = Math.Clamp(limit, 1, 500);
 

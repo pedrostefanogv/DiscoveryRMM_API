@@ -118,6 +118,21 @@ public class NotificationChannelDispatcher(
         var username = root.TryGetProperty("username", out var un) ? un.GetString() : null;
         var password = root.TryGetProperty("password", out var pw) ? pw.GetString() : null;
         var recipients = ReadRecipients(root);
+        if (request.RecipientUserId.HasValue)
+        {
+            var userEmail = await db.Users
+                .AsNoTracking()
+                .Where(u => u.Id == request.RecipientUserId.Value && u.IsActive)
+                .Select(u => u.Email)
+                .FirstOrDefaultAsync(ct);
+
+            if (!string.IsNullOrWhiteSpace(userEmail)
+                && !recipients.Contains(userEmail.Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                recipients.Add(userEmail.Trim());
+            }
+        }
+
         if (recipients.Count == 0)
         {
             logger.LogWarning("Canal de e-mail {ChannelId} sem destinatários", channel.Id);

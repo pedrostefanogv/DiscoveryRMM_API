@@ -18,6 +18,9 @@ public class TicketChatEnvelopePublisher(
     /// <summary>Evento canônico do dashboard para atividade de chat (sem corpo).</summary>
     public const string ActivityEventType = "TicketChatActivity";
 
+    /// <summary>Evento efêmero do dashboard para indicador de "digitando...".</summary>
+    public const string TypingEventType = "TicketChatTyping";
+
     public async Task PublishSessionOpenedAsync(TicketChatSession session, CancellationToken cancellationToken = default)
         => await PublishToAgentAsync(session, new TicketChatEnvelope
         {
@@ -115,6 +118,51 @@ public class TicketChatEnvelopePublisher(
             sessionId = session.Id,
             authorKind = "system",
             status = session.Status.ToString().ToLowerInvariant()
+        }, cancellationToken);
+
+    public async Task PublishTypingAsync(TicketChatSession session, string authorKind, string? authorName, bool isTyping, CancellationToken cancellationToken = default)
+    {
+        if (string.Equals(authorKind, "support", StringComparison.OrdinalIgnoreCase))
+        {
+            await PublishToAgentAsync(session, new TicketChatEnvelope
+            {
+                EventType = TicketChatEventTypes.Typing,
+                SessionId = session.Id,
+                TicketId = session.TicketId,
+                AgentId = session.AgentId ?? Guid.Empty,
+                AuthorKind = "support",
+                AuthorName = authorName,
+                IsTyping = isTyping,
+                TimestampUtc = DateTime.UtcNow
+            }, cancellationToken);
+            return;
+        }
+
+        var (clientId, siteId) = await ResolveTenantAsync(session, cancellationToken);
+        await messaging.PublishDashboardEventAsync(
+            DashboardEventMessage.Create(TypingEventType, new
+            {
+                ticketId = session.TicketId,
+                sessionId = session.Id,
+                authorKind = "enduser",
+                authorName,
+                isTyping
+            }, clientId, siteId),
+            cancellationToken);
+    }
+
+    public async Task PublishAssistedActionToAgentAsync(TicketChatSession session, string actionType, string? requestedByName, string? label, CancellationToken cancellationToken = default)
+        => await PublishToAgentAsync(session, new TicketChatEnvelope
+        {
+            EventType = TicketChatEventTypes.AssistedAction,
+            SessionId = session.Id,
+            TicketId = session.TicketId,
+            AgentId = session.AgentId ?? Guid.Empty,
+            AuthorKind = "support",
+            AuthorName = requestedByName,
+            ActionType = actionType,
+            Body = label,
+            TimestampUtc = DateTime.UtcNow
         }, cancellationToken);
 
     private async Task PublishToAgentAsync(TicketChatSession session, TicketChatEnvelope envelope, CancellationToken cancellationToken)

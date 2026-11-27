@@ -37,6 +37,12 @@ public class ResolvedConfiguration
     /// </summary>
     public bool UpdatesTabEnabled { get; set; }
 
+    /// <summary>
+    /// Kill switch da aba "Arquivos" do painel do agent já resolvido
+    /// (servidor → cliente → site). Default global = true.
+    /// </summary>
+    public bool FilesTabEnabled { get; set; } = true;
+
     public bool ZeroTouchEnabled { get; set; }
 
     /// <summary>

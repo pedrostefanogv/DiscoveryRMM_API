@@ -109,7 +109,7 @@ public abstract class TicketAiHandlerBase(
     }
 
     protected async Task<Result<T>> ExecutePromptAsync<T>(
-        Guid ticketId, string systemPrompt, Func<Ticket, CancellationToken, Task<string>> buildMessageAsync,
+        Guid ticketId, string procedureKey, string systemPrompt, Func<Ticket, CancellationToken, Task<string>> buildMessageAsync,
         int maxTokens, double temperature, Func<LlmResponse, T> map, CancellationToken ct)
         where T : notnull
     {
@@ -128,8 +128,8 @@ public abstract class TicketAiHandlerBase(
             var userMessage = TruncatePrompt(rawContext, budget.MaxPromptChars);
             var effectiveMaxTokens = Math.Min(maxTokens, budget.MaxOutputTokens);
 
-            var response = await aiChat.ProcessTicketPromptAsync(
-                systemPrompt, userMessage, siteId.Value, effectiveMaxTokens, temperature, null, ct);
+            var response = await aiChat.ProcessProcedurePromptAsync(
+                procedureKey, systemPrompt, userMessage, siteId.Value, effectiveMaxTokens, temperature, null, null, null, ct);
 
             return Result<T>.Success(map(response));
         }
@@ -162,7 +162,7 @@ public sealed class TicketAiTriageCommandHandler(
     public async Task<Result<TicketAiTriageResult>> Handle(TicketAiTriageCommand cmd, CancellationToken ct)
     {
         var prompt = "Você é um assistente de triagem de tickets de TI. Analise o ticket (e seus comentários) e sugira: categoria, prioridade (Low/Medium/High/Critical), departamento apropriado (escolha apenas dentre os Departamentos válidos informados) e um breve resumo. Responda em português.";
-        return await ExecutePromptAsync(cmd.TicketId, prompt, FormatTicketContextAsync,
+        return await ExecutePromptAsync(cmd.TicketId, "ticket_triage", prompt, FormatTicketContextAsync,
             DefaultMaxTokens, DefaultTemperature,
             r => new TicketAiTriageResult(r.Content, r.TokensUsed, r.ModelVersion), ct);
     }
@@ -176,7 +176,7 @@ public sealed class TicketAiSummarizeCommandHandler(
     public async Task<Result<TicketAiSummaryResult>> Handle(TicketAiSummarizeCommand cmd, CancellationToken ct)
     {
         var prompt = "Você é um assistente de resumo de tickets de TI. Gere um resumo executivo conciso do ticket, destacando: problema, impacto, ações já tomadas (se não houver ações registradas no histórico, declare explicitamente 'Nenhuma ação registrada') e próximos passos. Nunca invente ações não registradas. Responda em português.";
-        return await ExecutePromptAsync(cmd.TicketId, prompt, FormatTicketContextAsync,
+        return await ExecutePromptAsync(cmd.TicketId, "ticket_summary", prompt, FormatTicketContextAsync,
             DefaultMaxTokens, DefaultTemperature,
             r => new TicketAiSummaryResult(r.Content, r.TokensUsed, r.ModelVersion), ct);
     }
@@ -190,7 +190,7 @@ public sealed class TicketAiSuggestReplyCommandHandler(
     public async Task<Result<TicketAiSuggestedReplyResult>> Handle(TicketAiSuggestReplyCommand cmd, CancellationToken ct)
     {
         var prompt = "Você é um assistente técnico respondendo a um chamado de TI. Gere uma resposta profissional e empática para o cliente, abordando o problema relatado e o histórico. Nunca invente prazos ou ETAs que não estejam explícitos no contexto (use apenas o Prazo SLA se informado). Responda em português.";
-        return await ExecutePromptAsync(cmd.TicketId, prompt, FormatTicketContextAsync,
+        return await ExecutePromptAsync(cmd.TicketId, "ticket_suggest_reply", prompt, FormatTicketContextAsync,
             DefaultMaxTokens * 2, 0.5,
             r => new TicketAiSuggestedReplyResult(r.Content, r.TokensUsed, r.ModelVersion), ct);
     }
@@ -204,7 +204,7 @@ public sealed class TicketAiDraftKbArticleCommandHandler(
     public async Task<Result<TicketAiDraftKbResult>> Handle(TicketAiDraftKbArticleCommand cmd, CancellationToken ct)
     {
         var prompt = "Você é um redator técnico criando artigos para base de conhecimento de TI. Com base no ticket e no histórico, crie um artigo estruturado em Markdown com: título (# Título), sintoma, causa, solução e tags. Remova/anonimize dados pessoais (nomes, IPs privados, senhas). Se a solução ainda não estiver registrada, marque como rascunho pendente de validação. Responda em português.";
-        var res = await ExecutePromptAsync(cmd.TicketId, prompt, FormatTicketContextAsync,
+        var res = await ExecutePromptAsync(cmd.TicketId, "ticket_draft_kb", prompt, FormatTicketContextAsync,
             DefaultMaxTokens * 2, 0.4,
             r => new TicketAiDraftKbResult(r.Content, r.TokensUsed, r.ModelVersion), ct);
 

@@ -32,4 +32,12 @@ public interface ITicketChatEnvelopePublisher
 
     /// <summary>Servidor -> console: mudança de estado da sessão (aceite/recusa/encerramento).</summary>
     Task PublishSessionStatusSignalAsync(TicketChatSession session, CancellationToken cancellationToken = default);
+
+    /// <summary>Sinal efêmero de "digitando..." (suporte -> agent ou usuário -> console).</summary>
+    Task PublishTypingAsync(TicketChatSession session, string authorKind, string? authorName, bool isTyping, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <summary>Servidor -> agent: solicitação de ação assistida dentro do chat (ex.: captura de tela).</summary>
+    Task PublishAssistedActionToAgentAsync(TicketChatSession session, string actionType, string? requestedByName, string? label, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }
