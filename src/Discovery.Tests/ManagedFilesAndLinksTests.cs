@@ -375,6 +375,81 @@ public class ManagedFilesAndLinksTests
     }
 
     [Test]
+    public async Task ManagedFileService_PublicWebOnly_And_DynamicFolderShareLink()
+    {
+        await using var db = CreateDb();
+        var fileService = new ManagedFileService(db, new StubStorageFactory(new InMemoryStubStorage()), NullLogger<ManagedFileService>.Instance);
+        var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        var linkService = new FileLinkService(db, new StubStorageFactory(new InMemoryStubStorage()), config, NullLogger<FileLinkService>.Instance);
+
+        // 1. Pasta PublicWebOnly aparece no /download, NÃO aparece nos agents e é bloqueada no File Drop
+        var webFolder = await fileService.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "WebOnly",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.PublicWebOnly), "admin");
+
+        var webFile = MakeFile("catalogo-pdf", FileScope.Global, null, null, FileVisibility.PublicWebOnly);
+        webFile.FolderPath = webFolder.Path;
+        db.ManagedFiles.Add(webFile);
+        await db.SaveChangesAsync();
+
+        var (pubFiles, _, pubFolders) = await fileService.ListPublicFilesAsync(null, null);
+        Assert.That(pubFiles.Select(f => f.Name), Does.Contain("catalogo-pdf"));
+        Assert.That(pubFolders.Select(f => f.Path), Does.Contain("/WebOnly"));
+
+        var agentFiles = await fileService.ListForAgentAsync(Guid.NewGuid(), Guid.NewGuid());
+        Assert.That(agentFiles.Select(f => f.Name), Does.Not.Contain("catalogo-pdf"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await linkService.CreateUploadLinkAsync(new CreateUploadLinkRequest(
+                "Drop WebOnly", null, null, null, webFolder.Path, DateTime.UtcNow.AddDays(1),
+                false, null, true, 5, 10_000_000, 50_000_000, null, null, null, false), "admin"));
+
+        // 2. Link de Download dinâmico por pasta: rejeita "/" e reflete arquivos adicionados depois
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await linkService.CreateShareLinkAsync(new CreateShareLinkRequest(
+                "Raiz proibida", null, null, null, null, DateTime.UtcNow.AddDays(1),
+                false, null, null, FolderPath: "/"), "admin"));
+
+        var pastaShare = await fileService.CreateFolderAsync(new CreateManagedFileFolderRequest(
+            Name: "PastaShare",
+            ParentPath: "/",
+            Description: null,
+            Scope: FileScope.Global,
+            ClientId: null,
+            SiteId: null,
+            Visibility: FileVisibility.Private), "admin");
+
+        var share = await linkService.CreateShareLinkAsync(new CreateShareLinkRequest(
+            "Link Dinâmico", null, null, null, null, DateTime.UtcNow.AddDays(1),
+            false, null, null, FolderPath: pastaShare.Path, FolderScope: FileScope.Global), "admin");
+
+        Assert.That(share.FolderPath, Is.EqualTo("/PastaShare"));
+        Assert.That(share.Files, Is.Empty);
+
+        // Adiciona arquivo em /PastaShare e outro em /OutraPrivada após criar o link
+        var addedInFolder = MakeFile("relatorio-novo", FileScope.Global, null, null, FileVisibility.Private);
+        addedInFolder.FolderPath = "/PastaShare";
+        var outsideFile = MakeFile("segredo-fora", FileScope.Global, null, null, FileVisibility.Private);
+        outsideFile.FolderPath = "/OutraPrivada";
+        db.ManagedFiles.AddRange(addedInFolder, outsideFile);
+        await db.SaveChangesAsync();
+
+        var publicInfo = await linkService.GetPublicShareInfoAsync(share.ShortCode, null);
+        Assert.That(publicInfo.Files.Select(f => f.Name), Is.EquivalentTo(new[] { "relatorio-novo" }));
+
+        var dlOk = await linkService.DownloadShareFileAsync(share.ShortCode, addedInFolder.Id, null, "1.2.3.4", "ua");
+        Assert.That(dlOk.DownloadUrl, Does.Contain(addedInFolder.StorageObjectKey));
+
+        await Assert.ThrowsAsync<FileNotFoundException>(async () =>
+            await linkService.DownloadShareFileAsync(share.ShortCode, outsideFile.Id, null, "1.2.3.4", "ua"));
+    }
+
+    [Test]
     public async Task FileLinkService_ShareLink_EnforcesPasscodeLockoutAndMaxDownloads()
     {
         await using var db = CreateDb();

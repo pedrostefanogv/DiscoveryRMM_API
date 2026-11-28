@@ -1,7 +1,9 @@
+using Discovery.Core.Enums;
+
 namespace Discovery.Core.Entities;
 
 /// <summary>
-/// Link temporário de download (1 ou N arquivos) para compartilhamento externo
+/// Link temporário de download (1 ou N arquivos, ou pasta dinâmica) para compartilhamento externo
 /// com data de validade, limite de downloads e contra-senha opcional.
 /// </summary>
 public class FileShareLink
@@ -13,6 +15,8 @@ public class FileShareLink
 
     public Guid? ClientId { get; set; }
     public Guid? SiteId { get; set; }
+    public string? FolderPath { get; set; }
+    public FileScope? FolderScope { get; set; }
 
     public bool RequirePasscode { get; set; }
     public string? PasscodeHash { get; set; }

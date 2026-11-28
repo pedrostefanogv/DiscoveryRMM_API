@@ -50,27 +50,38 @@ public sealed class FileLinkService(
         var rows = await query.OrderByDescending(l => l.CreatedAt).Take(200).ToListAsync(ct);
         var now = DateTime.UtcNow;
 
-        return rows.Select(l => new FileShareLinkDto(
-            Id: l.Id,
-            ShortCode: l.ShortCode,
-            Title: l.Title,
-            Message: l.Message,
-            ClientId: l.ClientId,
-            ClientName: null,
-            SiteId: l.SiteId,
-            SiteName: null,
-            RequirePasscode: l.RequirePasscode,
-            ExpiresAtUtc: l.ExpiresAtUtc,
-            MaxDownloads: l.MaxDownloads,
-            DownloadCount: l.DownloadCount,
-            IsRevoked: l.IsRevoked,
-            IsExpired: l.ExpiresAtUtc <= now,
-            Files: l.Items
-                .Where(i => i.ManagedFile is not null && i.ManagedFile.DeletedAt == null)
-                .Select(i => ManagedFileService.ToSummary(i.ManagedFile!))
-                .ToArray(),
-            CreatedBy: l.CreatedBy,
-            CreatedAt: l.CreatedAt)).ToArray();
+        var result = new List<FileShareLinkDto>(rows.Count);
+        foreach (var l in rows)
+        {
+            var files = !string.IsNullOrWhiteSpace(l.FolderPath)
+                ? await ResolveDynamicFolderFilesAsync(l, ct)
+                : l.Items
+                    .Where(i => i.ManagedFile is not null && i.ManagedFile.DeletedAt == null && i.ManagedFile.IsActive)
+                    .Select(i => ManagedFileService.ToSummary(i.ManagedFile!))
+                    .ToArray();
+
+            result.Add(new FileShareLinkDto(
+                Id: l.Id,
+                ShortCode: l.ShortCode,
+                Title: l.Title,
+                Message: l.Message,
+                ClientId: l.ClientId,
+                ClientName: null,
+                SiteId: l.SiteId,
+                SiteName: null,
+                RequirePasscode: l.RequirePasscode,
+                ExpiresAtUtc: l.ExpiresAtUtc,
+                MaxDownloads: l.MaxDownloads,
+                DownloadCount: l.DownloadCount,
+                IsRevoked: l.IsRevoked,
+                IsExpired: l.ExpiresAtUtc <= now,
+                Files: files,
+                CreatedBy: l.CreatedBy,
+                CreatedAt: l.CreatedAt,
+                FolderPath: l.FolderPath));
+        }
+
+        return result;
     }
 
     public async Task<FileShareLinkDto> CreateShareLinkAsync(
@@ -80,20 +91,38 @@ public sealed class FileLinkService(
     {
         if (string.IsNullOrWhiteSpace(request.Title))
             throw new InvalidOperationException("Título do link é obrigatório.");
-        if (request.FileIds is null || request.FileIds.Count == 0)
-            throw new InvalidOperationException("Selecione ao menos um arquivo.");
         if (request.ExpiresAtUtc.ToUniversalTime() <= DateTime.UtcNow)
             throw new InvalidOperationException("A data de validade deve ser futura.");
         if (request.RequirePasscode && string.IsNullOrWhiteSpace(request.Passcode))
             throw new InvalidOperationException("Informe a contra-senha quando a proteção por senha estiver habilitada.");
 
-        var fileIds = request.FileIds.Distinct().ToArray();
-        var files = await db.ManagedFiles
-            .Where(f => fileIds.Contains(f.Id) && f.DeletedAt == null && f.IsActive)
-            .ToListAsync(ct);
+        string? normalizedFolder = null;
+        FileScope? folderScope = null;
+        List<ManagedFile> staticFiles = [];
 
-        if (files.Count != fileIds.Length)
-            throw new InvalidOperationException("Um ou mais arquivos selecionados não existem ou estão inativos.");
+        if (!string.IsNullOrWhiteSpace(request.FolderPath))
+        {
+            normalizedFolder = FileValidationHelper.NormalizeFolderPath(request.FolderPath);
+            if (normalizedFolder == "/")
+                throw new InvalidOperationException("Não é permitido compartilhar a pasta raiz. Selecione uma pasta específica ou arquivos específicos.");
+
+            folderScope = request.FolderScope ?? (request.SiteId.HasValue
+                ? FileScope.Site
+                : request.ClientId.HasValue ? FileScope.Client : FileScope.Global);
+        }
+        else
+        {
+            if (request.FileIds is null || request.FileIds.Count == 0)
+                throw new InvalidOperationException("Selecione ao menos um arquivo ou uma pasta específica.");
+
+            var fileIds = request.FileIds.Distinct().ToArray();
+            staticFiles = await db.ManagedFiles
+                .Where(f => fileIds.Contains(f.Id) && f.DeletedAt == null && f.IsActive)
+                .ToListAsync(ct);
+
+            if (staticFiles.Count != fileIds.Length)
+                throw new InvalidOperationException("Um ou mais arquivos selecionados não existem ou estão inativos.");
+        }
 
         var link = new FileShareLink
         {
@@ -103,6 +132,8 @@ public sealed class FileLinkService(
             Message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim(),
             ClientId = request.ClientId,
             SiteId = request.SiteId,
+            FolderPath = normalizedFolder,
+            FolderScope = folderScope,
             RequirePasscode = request.RequirePasscode,
             PasscodeHash = request.RequirePasscode ? HashPasscode(request.Passcode!.Trim()) : null,
             ExpiresAtUtc = request.ExpiresAtUtc.ToUniversalTime(),
@@ -111,7 +142,7 @@ public sealed class FileLinkService(
             CreatedAt = DateTime.UtcNow
         };
 
-        foreach (var file in files)
+        foreach (var file in staticFiles)
         {
             link.Items.Add(new FileShareLinkItem
             {
@@ -123,12 +154,16 @@ public sealed class FileLinkService(
         db.FileShareLinks.Add(link);
         await db.SaveChangesAsync(ct);
 
+        var summaryFiles = normalizedFolder is not null
+            ? await ResolveDynamicFolderFilesAsync(link, ct)
+            : staticFiles.Select(ManagedFileService.ToSummary).ToArray();
+
         return new FileShareLinkDto(
             link.Id, link.ShortCode, link.Title, link.Message, link.ClientId, null, link.SiteId, null,
             link.RequirePasscode, link.ExpiresAtUtc, link.MaxDownloads, link.DownloadCount,
             link.IsRevoked, IsExpired: false,
-            files.Select(ManagedFileService.ToSummary).ToArray(),
-            link.CreatedBy, link.CreatedAt);
+            summaryFiles,
+            link.CreatedBy, link.CreatedAt, link.FolderPath);
     }
 
     public async Task RevokeShareLinkAsync(Guid id, string? actor, CancellationToken ct = default)
@@ -206,7 +241,7 @@ public sealed class FileLinkService(
         if (targetFolderPath != "/")
         {
             var publicFolders = await db.ManagedFileFolders.AsNoTracking()
-                .Where(f => f.Visibility == FileVisibility.Public
+                .Where(f => (f.Visibility == FileVisibility.Public || f.Visibility == FileVisibility.PublicWebOnly)
                             && (f.Scope == FileScope.Global
                                 || (request.ClientId.HasValue && f.ClientId == request.ClientId)
                                 || (request.SiteId.HasValue && f.SiteId == request.SiteId)))
@@ -301,16 +336,18 @@ public sealed class FileLinkService(
         var unlocked = !link.RequirePasscode || ValidateSessionToken(sessionToken, "share", link.ShortCode);
 
         var files = unlocked && !link.IsRevoked && !isExpired && !isLimitReached
-            ? link.Items
-                .Where(i => i.ManagedFile is not null && i.ManagedFile.DeletedAt == null && i.ManagedFile.IsActive)
-                .Select(i => ManagedFileService.ToSummary(i.ManagedFile!))
-                .ToArray()
+            ? (!string.IsNullOrWhiteSpace(link.FolderPath)
+                ? await ResolveDynamicFolderFilesAsync(link, ct)
+                : link.Items
+                    .Where(i => i.ManagedFile is not null && i.ManagedFile.DeletedAt == null && i.ManagedFile.IsActive)
+                    .Select(i => ManagedFileService.ToSummary(i.ManagedFile!))
+                    .ToArray())
             : Array.Empty<ManagedFileSummaryDto>();
 
         return new PublicShareInfoDto(
             link.ShortCode, link.Title, link.Message, link.RequirePasscode, unlocked,
             isExpired, link.IsRevoked, isLimitReached, isLocked, link.LockedUntilUtc,
-            link.ExpiresAtUtc, link.MaxDownloads, link.DownloadCount, files);
+            link.ExpiresAtUtc, link.MaxDownloads, link.DownloadCount, files, link.FolderPath);
     }
 
     public async Task<VerifyPasscodeResponse> VerifySharePasscodeAsync(
@@ -389,9 +426,22 @@ public sealed class FileLinkService(
         if (link.RequirePasscode && !ValidateSessionToken(sessionToken, "share", link.ShortCode))
             throw new UnauthorizedAccessException("Contra-senha necessária ou sessão expirada.");
 
-        var item = link.Items.FirstOrDefault(i => i.ManagedFileId == fileId)
-            ?? throw new FileNotFoundException("Arquivo não pertence a este link.");
-        var file = item.ManagedFile;
+        ManagedFile? file;
+        if (!string.IsNullOrWhiteSpace(link.FolderPath))
+        {
+            var folderFiles = await ResolveDynamicFolderFilesAsync(link, ct);
+            if (!folderFiles.Any(f => f.Id == fileId))
+                throw new FileNotFoundException("Arquivo não pertence a esta pasta compartilhada.");
+
+            file = await db.ManagedFiles.FirstOrDefaultAsync(f => f.Id == fileId && f.DeletedAt == null && f.IsActive, ct);
+        }
+        else
+        {
+            var item = link.Items.FirstOrDefault(i => i.ManagedFileId == fileId)
+                ?? throw new FileNotFoundException("Arquivo não pertence a este link.");
+            file = item.ManagedFile;
+        }
+
         if (file is null || file.DeletedAt != null || !file.IsActive)
             throw new FileNotFoundException("Arquivo indisponível.");
 
@@ -417,6 +467,43 @@ public sealed class FileLinkService(
     }
 
     // ── Public: Upload Links (File Drop) ─────────────────────────────────────
+
+    private async Task<IReadOnlyList<ManagedFileSummaryDto>> ResolveDynamicFolderFilesAsync(
+        FileShareLink link,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(link.FolderPath))
+            return Array.Empty<ManagedFileSummaryDto>();
+
+        var now = DateTime.UtcNow;
+        var normFolder = FileValidationHelper.NormalizeFolderPath(link.FolderPath);
+        var folderPrefix = normFolder + "/";
+
+        var query = db.ManagedFiles.AsNoTracking()
+            .Where(f => f.DeletedAt == null
+                        && f.IsActive
+                        && (f.ExpiresAtUtc == null || f.ExpiresAtUtc > now));
+
+        if (link.FolderScope.HasValue)
+        {
+            query = query.Where(f => f.Scope == link.FolderScope.Value);
+            if (link.FolderScope.Value == FileScope.Client)
+                query = query.Where(f => f.ClientId == link.ClientId);
+            else if (link.FolderScope.Value == FileScope.Site)
+                query = query.Where(f => f.SiteId == link.SiteId);
+        }
+
+        var candidates = await query.OrderBy(f => f.Name).ToListAsync(ct);
+        return candidates
+            .Where(f =>
+            {
+                var fp = FileValidationHelper.NormalizeFolderPath(f.FolderPath);
+                return string.Equals(fp, normFolder, StringComparison.OrdinalIgnoreCase)
+                       || fp.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(ManagedFileService.ToSummary)
+            .ToArray();
+    }
 
     public async Task<PublicUploadInfoDto> GetPublicUploadInfoAsync(
         string shortCode,

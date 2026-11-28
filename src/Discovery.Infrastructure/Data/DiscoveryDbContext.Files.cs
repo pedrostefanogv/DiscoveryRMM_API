@@ -78,6 +78,8 @@ public partial class DiscoveryDbContext
             entity.Property(l => l.Message).HasColumnName("message").HasMaxLength(4000);
             entity.Property(l => l.ClientId).HasColumnName("client_id");
             entity.Property(l => l.SiteId).HasColumnName("site_id");
+            entity.Property(l => l.FolderPath).HasColumnName("folder_path").HasMaxLength(500);
+            entity.Property(l => l.FolderScope).HasColumnName("folder_scope").HasConversion<short?>();
             entity.Property(l => l.RequirePasscode).HasColumnName("require_passcode");
             entity.Property(l => l.PasscodeHash).HasColumnName("passcode_hash").HasMaxLength(512);
             entity.Property(l => l.FailedPasscodeAttempts).HasColumnName("failed_passcode_attempts");

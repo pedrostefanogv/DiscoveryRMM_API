@@ -122,11 +122,13 @@ public sealed record CreateShareLinkRequest(
     string? Message,
     Guid? ClientId,
     Guid? SiteId,
-    IReadOnlyList<Guid> FileIds,
+    IReadOnlyList<Guid>? FileIds,
     DateTime ExpiresAtUtc,
     bool RequirePasscode,
     string? Passcode,
-    int? MaxDownloads);
+    int? MaxDownloads,
+    string? FolderPath = null,
+    FileScope? FolderScope = null);
 
 public sealed record FileShareLinkDto(
     Guid Id,
@@ -145,7 +147,8 @@ public sealed record FileShareLinkDto(
     bool IsExpired,
     IReadOnlyList<ManagedFileSummaryDto> Files,
     string? CreatedBy,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    string? FolderPath = null);
 
 public sealed record ManagedFileSummaryDto(
     Guid Id,
@@ -284,7 +287,8 @@ public sealed record PublicShareInfoDto(
     DateTime ExpiresAtUtc,
     int? MaxDownloads,
     int DownloadCount,
-    IReadOnlyList<ManagedFileSummaryDto> Files);
+    IReadOnlyList<ManagedFileSummaryDto> Files,
+    string? FolderPath = null);
 
 public sealed record PublicUploadInfoDto(
     string ShortCode,

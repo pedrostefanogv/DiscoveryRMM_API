@@ -18,7 +18,10 @@ public enum FileVisibility
     AgentOnly = 1,
 
     /// <summary>Visível no portal público /download, nos agents e no console.</summary>
-    Public = 2
+    Public = 2,
+
+    /// <summary>Visível apenas no portal público /download e no console (não aparece nos agents).</summary>
+    PublicWebOnly = 3
 }
 
 /// <summary>Origem do arquivo no catálogo.</summary>

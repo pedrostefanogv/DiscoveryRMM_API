@@ -457,7 +457,7 @@ public sealed class ManagedFileService(
         var baseQuery = db.ManagedFiles.AsNoTracking()
             .Where(f => f.DeletedAt == null
                         && f.IsActive
-                        && f.Visibility == FileVisibility.Public
+                        && (f.Visibility == FileVisibility.Public || f.Visibility == FileVisibility.PublicWebOnly)
                         && (f.ExpiresAtUtc == null || f.ExpiresAtUtc > now));
 
         var allPublicFiles = await baseQuery
@@ -472,7 +472,7 @@ public sealed class ManagedFileService(
             .ToList();
 
         var explicitFolders = await db.ManagedFileFolders.AsNoTracking()
-            .Where(f => f.Visibility == FileVisibility.Public)
+            .Where(f => f.Visibility == FileVisibility.Public || f.Visibility == FileVisibility.PublicWebOnly)
             .ToListAsync(ct);
 
         var folderMap = new Dictionary<string, (string Name, string ParentPath, string? Description)>(StringComparer.OrdinalIgnoreCase);
@@ -795,6 +795,31 @@ public sealed class ManagedFileService(
         };
 
         db.ManagedFileFolders.Add(entity);
+
+        // Ao criar/promover uma pasta raiz (ex.: pasta virtual /recebidos), sincroniza
+        // a visibilidade de arquivos já existentes nela e em suas subpastas.
+        if (parentPath == "/")
+        {
+            var fullPrefix = fullPath + "/";
+            var existingFilesInFolder = await db.ManagedFiles
+                .Where(f => f.DeletedAt == null
+                            && f.Scope == request.Scope
+                            && f.ClientId == effectiveClientId
+                            && f.SiteId == effectiveSiteId)
+                .ToListAsync(ct);
+
+            foreach (var file in existingFilesInFolder)
+            {
+                var fp = FileValidationHelper.NormalizeFolderPath(file.FolderPath);
+                if (string.Equals(fp, fullPath, StringComparison.OrdinalIgnoreCase)
+                    || fp.StartsWith(fullPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    file.Visibility = effectiveVisibility;
+                    file.UpdatedAt = now;
+                }
+            }
+        }
+
         await db.SaveChangesAsync(ct);
 
         return await MapFolderDtoAsync(entity, ct);
@@ -1090,7 +1115,7 @@ public sealed class ManagedFileService(
             f => f.Id == id
                  && f.DeletedAt == null
                  && f.IsActive
-                 && f.Visibility == FileVisibility.Public
+                 && (f.Visibility == FileVisibility.Public || f.Visibility == FileVisibility.PublicWebOnly)
                  && (f.ExpiresAtUtc == null || f.ExpiresAtUtc > now),
             ct)
             ?? throw new FileNotFoundException("Arquivo público não encontrado ou expirado.");
