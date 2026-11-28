@@ -1,5 +1,6 @@
 using Asp.Versioning;
 using Discovery.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Discovery.Api.Controllers;
@@ -15,10 +16,16 @@ namespace Discovery.Api.Controllers;
 /// <c>HttpContext.Items["AgentId"]</c> nunca era preenchido e a requisição caía no
 /// UserAuthMiddleware (JWT de portal) — o agente recebia
 /// 401 {"message":"Autenticação necessária."} e a aba nunca listava nada.
+///
+/// Também precisa de <c>[AllowAnonymous]</c> para fazer opt-out do filtro global
+/// <c>RequireUserAuthAttribute</c> (que exige sessão de usuário do portal em
+/// <c>HttpContext.Items["UserId"]</c>); a autenticação do agent é garantida pelo
+/// <c>AgentAuthMiddleware</c> + <see cref="TryGetAgentId"/>.
 /// </summary>
 [ApiController]
 [ApiVersion(1.0)]
 [Route("api/v{version:apiVersion}/agent-auth/me/files")]
+[AllowAnonymous]
 public class AgentFilesController(
     IManagedFileService fileService,
     IAgentRepository agentRepository,

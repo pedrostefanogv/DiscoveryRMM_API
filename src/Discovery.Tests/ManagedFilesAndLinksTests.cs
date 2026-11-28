@@ -854,6 +854,18 @@ public class ManagedFilesAndLinksTests
         Assert.That(recorder.Published, Is.Empty);
     }
 
+    [Test]
+    public void AgentFilesController_HasAllowAnonymous_ToBypassPortalRequireUserAuth()
+    {
+        var controllerType = typeof(Discovery.Api.Controllers.AgentFilesController);
+        var hasAllowAnonymous = controllerType
+            .GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), inherit: true)
+            .Any();
+
+        Assert.That(hasAllowAnonymous, Is.True,
+            "AgentFilesController precisa de [AllowAnonymous] para não ser bloqueado pelo filtro global RequireUserAuthAttribute (401 Autenticação necessária).");
+    }
+
     private sealed class RecordingNotificationService : INotificationService
     {
         public List<NotificationPublishRequest> Published { get; } = [];
