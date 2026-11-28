@@ -48,6 +48,11 @@ public sealed class ManagedFileService(
         if (filter.Source.HasValue)
             query = query.Where(f => f.Source == filter.Source.Value);
 
+        // Arquivos enviados por um link específico (File Drop). É apenas mais um
+        // predicado AND: o recorte multi-tenant abaixo continua sendo aplicado.
+        if (filter.SourceUploadLinkId.HasValue)
+            query = query.Where(f => f.SourceUploadLinkId == filter.SourceUploadLinkId.Value);
+
         if (!string.IsNullOrWhiteSpace(filter.Category))
         {
             var cat = filter.Category.Trim();

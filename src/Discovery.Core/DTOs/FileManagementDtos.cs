@@ -34,6 +34,10 @@ public sealed record ManagedFileFilter(
     Guid? SiteId = null,
     FileVisibility? Visibility = null,
     FileSource? Source = null,
+    // Filtro da Central de Arquivos por link de upload (File Drop): permite listar
+    // apenas os arquivos recebidos por um FileUploadLink específico.
+    // Opcional: quando nulo, o comportamento da listagem é idêntico ao anterior.
+    Guid? SourceUploadLinkId = null,
     string? Category = null,
     string? FolderPath = null,
     string? Search = null,

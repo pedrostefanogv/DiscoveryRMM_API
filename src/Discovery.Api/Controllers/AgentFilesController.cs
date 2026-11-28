@@ -8,10 +8,17 @@ namespace Discovery.Api.Controllers;
 /// Endpoints autenticados por JWT de Agent para a aba "Arquivos" do painel local.
 /// Respeita o kill switch herdável <c>FilesTabEnabled</c> (Global → Client → Site)
 /// e a herança aditiva de arquivos.
+///
+/// A rota PRECISA ficar sob <c>/agent-auth</c>: o AgentAuthMiddleware só trata
+/// caminhos que começam no prefixo <c>/api/v1/agent-auth</c> (AgentAuth:PathPrefix).
+/// Com a rota antiga (<c>/api/v1/agent-files</c>) o middleware pulava a requisição,
+/// <c>HttpContext.Items["AgentId"]</c> nunca era preenchido e a requisição caía no
+/// UserAuthMiddleware (JWT de portal) — o agente recebia
+/// 401 {"message":"Autenticação necessária."} e a aba nunca listava nada.
 /// </summary>
 [ApiController]
 [ApiVersion(1.0)]
-[Route("api/v{version:apiVersion}/agent-files")]
+[Route("api/v{version:apiVersion}/agent-auth/me/files")]
 public class AgentFilesController(
     IManagedFileService fileService,
     IAgentRepository agentRepository,

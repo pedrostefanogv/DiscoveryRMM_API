@@ -343,52 +343,9 @@ builder.Services.AddDiscoveryApiVersioning();
 // CQRS infrastructure (MediatR, pipeline behaviors)
 builder.Services.AddDiscoveryCqrs();
 
-builder.Services.Configure<ForwardedHeadersOptions>(options =>
-{
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-
-    // Default trusted proxies: Cloudflare IPv4/IPv6 ranges + localhost for local nginx dev
-    var defaultTrustedProxies = new[]
-    {
-        // Cloudflare IPv4 ranges (https://www.cloudflare.com/ips/)
-        "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
-        "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
-        "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
-        "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-        // Cloudflare IPv6 ranges
-        "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
-        "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
-        // Localhost for local nginx reverse proxy
-        "127.0.0.1", "::1"
-    };
-
-    var trustedProxies = builder.Configuration.GetSection("Security:TrustedProxies").Get<string[]>() ?? [];
-    var trustedNetworks = builder.Configuration.GetSection("Security:TrustedProxyNetworks").Get<string[]>() ?? [];
-
-    // Merge defaults with config (config takes precedence if explicitly set)
-    var allProxies = trustedProxies.Length > 0 ? trustedProxies : defaultTrustedProxies;
-    var allNetworks = trustedNetworks.Length > 0 ? trustedNetworks : defaultTrustedProxies.Where(p => p.Contains('/')).ToArray();
-
-    options.KnownProxies.Clear();
-    options.KnownIPNetworks.Clear();
-
-    foreach (var ip in allProxies.Where(p => !p.Contains('/')).Distinct())
-    {
-        if (System.Net.IPAddress.TryParse(ip, out var parsed))
-            options.KnownProxies.Add(parsed);
-    }
-    foreach (var cidr in allNetworks.Distinct())
-    {
-        var parts = cidr.Split('/');
-        if (parts.Length == 2
-            && System.Net.IPAddress.TryParse(parts[0], out var netAddr)
-            && int.TryParse(parts[1], out var prefix)
-            && prefix >= 0 && prefix <= 128)
-        {
-            options.KnownIPNetworks.Add(new System.Net.IPNetwork(netAddr, prefix));
-        }
-    }
-});
+// IP real do cliente atrás do Cloudflare -> nginx -> API. A política (allow-list de
+// proxies + ForwardLimit) mora em ForwardedHeadersServiceCollectionExtensions.
+builder.Services.AddDiscoveryForwardedHeaders(builder.Configuration);
 
 builder.Services.AddDiscoveryRateLimiting(builder.Configuration);
 builder.Services.AddDiscoveryCors(builder.Configuration, isDevelopment);

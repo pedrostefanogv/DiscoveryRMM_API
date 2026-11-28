@@ -3,12 +3,18 @@ using Discovery.Core.Entities;
 using Discovery.Core.Enums;
 using Discovery.Core.Helpers;
 using Discovery.Core.Interfaces;
+using System.Net;
+using Discovery.Api.DependencyInjection;
 using Discovery.Core.ValueObjects;
 using Discovery.Infrastructure.Data;
 using Discovery.Infrastructure.Services;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Discovery.Tests;
 
@@ -99,6 +105,132 @@ public class ManagedFilesAndLinksTests
         Assert.That(header, Does.Contain("filename*=UTF-8''"));
         Assert.That(header, Does.Not.Contain("\r"));
         Assert.That(header, Does.Not.Contain("\n"));
+    }
+
+    [Test]
+    public async Task ManagedFileService_List_FiltersBySourceUploadLinkId()
+    {
+        await using var db = CreateDb();
+        var linkA = Guid.NewGuid();
+        var linkB = Guid.NewGuid();
+
+        var dropA1 = MakeFile("drop-A-1", FileScope.Global, null, null, FileVisibility.Private);
+        dropA1.Source = FileSource.ClientUploadLink;
+        dropA1.SourceUploadLinkId = linkA;
+        dropA1.Category = "Recebidos";
+
+        var dropA2 = MakeFile("drop-A-2", FileScope.Global, null, null, FileVisibility.Private);
+        dropA2.Source = FileSource.ClientUploadLink;
+        dropA2.SourceUploadLinkId = linkA;
+        dropA2.Category = "Recebidos";
+
+        var dropB1 = MakeFile("drop-B-1", FileScope.Global, null, null, FileVisibility.Private);
+        dropB1.Source = FileSource.ClientUploadLink;
+        dropB1.SourceUploadLinkId = linkB;
+
+        var adminUpload = MakeFile("admin-upload", FileScope.Global, null, null, FileVisibility.Private);
+
+        db.ManagedFiles.AddRange(dropA1, dropA2, dropB1, adminUpload);
+        await db.SaveChangesAsync();
+
+        var service = new ManagedFileService(db, new StubStorageFactory(new InMemoryStubStorage()), NullLogger<ManagedFileService>.Instance);
+
+        var byLink = await service.ListAsync(new ManagedFileFilter(SourceUploadLinkId: linkA));
+        Assert.Multiple(() =>
+        {
+            Assert.That(byLink.TotalCount, Is.EqualTo(2));
+            Assert.That(byLink.Items.Select(f => f.Name), Is.EquivalentTo(new[] { "drop-A-1", "drop-A-2" }));
+            Assert.That(byLink.Items.All(f => f.SourceUploadLinkId == linkA), Is.True);
+        });
+
+        // Sem o parâmetro o comportamento é idêntico ao anterior (compatibilidade).
+        var unfiltered = await service.ListAsync(new ManagedFileFilter());
+        Assert.That(unfiltered.TotalCount, Is.EqualTo(4));
+
+        // O novo filtro não pode furar o recorte multi-tenant já aplicado aos demais filtros:
+        // um arquivo do link linkA pertencente a outro cliente continua fora do resultado.
+        var otherClient = Guid.NewGuid();
+        var dropFromOtherClient = MakeFile("drop-outro-cliente", FileScope.Client, otherClient, null, FileVisibility.Private);
+        dropFromOtherClient.Source = FileSource.ClientUploadLink;
+        dropFromOtherClient.SourceUploadLinkId = linkA;
+        db.ManagedFiles.Add(dropFromOtherClient);
+        await db.SaveChangesAsync();
+
+        var scoped = await service.ListAsync(
+            new ManagedFileFilter(SourceUploadLinkId: linkA),
+            allowedClientIds: [Guid.NewGuid()],
+            allowedSiteIds: []);
+
+        Assert.That(scoped.Items.Select(f => f.Name), Is.EquivalentTo(new[] { "drop-A-1", "drop-A-2" }));
+    }
+
+    [Test]
+    public async Task ForwardedHeaders_ResolvesRealClientIpBehindCloudflareEdge()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        var options = new ForwardedHeadersOptions();
+        ForwardedHeadersServiceCollectionExtensions.ApplyDiscoveryForwardedHeaders(options, config);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.ForwardLimit, Is.Null, "ForwardLimit=1 (default) só olhava a última entrada do XFF (o edge do Cloudflare).");
+            Assert.That(options.ForwardedHeaders, Is.EqualTo(ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto));
+        });
+
+        // peer = nginx (loopback); XFF = "<cliente>, <edge Cloudflare em 172.64.0.0/13>".
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = IPAddress.Parse("127.0.0.1");
+        ctx.Request.Headers["X-Forwarded-For"] = "203.0.113.7, 172.68.10.5";
+
+        var middleware = new ForwardedHeadersMiddleware(
+            _ => Task.CompletedTask, NullLoggerFactory.Instance, Options.Create(options));
+        await middleware.Invoke(ctx);
+
+        Assert.That(ctx.Connection.RemoteIpAddress, Is.EqualTo(IPAddress.Parse("203.0.113.7")));
+    }
+
+    [Test]
+    public async Task ForwardedHeaders_IgnoresForgedEntriesLeftOfTheRealClient()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        var options = new ForwardedHeadersOptions();
+        ForwardedHeadersServiceCollectionExtensions.ApplyDiscoveryForwardedHeaders(options, config);
+
+        // O cliente mandou "198.51.100.200" no XFF; Cloudflare e nginx apenas anexam o
+        // peer real à direita. A varredura da direita para a esquerda tem que parar no
+        // IP real (203.0.113.7) e nunca aceitar a entrada forjada mais à esquerda.
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = IPAddress.Parse("127.0.0.1");
+        ctx.Request.Headers["X-Forwarded-For"] = "198.51.100.200, 203.0.113.7, 172.68.10.5";
+
+        var middleware = new ForwardedHeadersMiddleware(
+            _ => Task.CompletedTask, NullLoggerFactory.Instance, Options.Create(options));
+        await middleware.Invoke(ctx);
+
+        Assert.That(ctx.Connection.RemoteIpAddress, Is.EqualTo(IPAddress.Parse("203.0.113.7")));
+    }
+
+    [Test]
+    public void ForwardedHeaders_ConfiguredProxiesAreMergedWithCloudflareDefaults()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:TrustedProxies:0"] = "10.0.0.5",
+            ["Security:TrustedProxyNetworks:0"] = "10.10.0.0/16"
+        }).Build();
+
+        var options = new ForwardedHeadersOptions();
+        ForwardedHeadersServiceCollectionExtensions.ApplyDiscoveryForwardedHeaders(options, config);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(options.KnownProxies, Does.Contain(IPAddress.Parse("10.0.0.5")));
+            Assert.That(options.KnownProxies, Does.Contain(IPAddress.Parse("127.0.0.1")),
+                "os defaults do loopback não podem ser substituídos pela configuração");
+            Assert.That(options.KnownIPNetworks.Select(n => n.BaseAddress.ToString()), Does.Contain("172.64.0.0"),
+                "os ranges do Cloudflare não podem ser substituídos pela configuração");
+            Assert.That(options.KnownIPNetworks.Select(n => n.BaseAddress.ToString()), Does.Contain("10.10.0.0"));
+        });
     }
 
     [Test]
