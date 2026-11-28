@@ -103,8 +103,10 @@ public class AiChatSingleRoundStreamer
             scopeClientId = site.ClientId;
             aiSettings = await resolveAiSettings(agent.SiteId, ct);
 
-            if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled)
-                throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
+            if (!aiSettings.Enabled)
+                throw new InvalidOperationException("A Integração com IA está desabilitada neste servidor.");
+            if (!aiSettings.ChatAIEnabled)
+                throw new InvalidOperationException("O Chat IA está desabilitado para este escopo (ligue em Funcionalidades do Sistema > Chat IA).");
 
             maxIterations = AiChatHelpers.ResolveMaxToolIterations(aiSettings);
             maxTokens = await _capabilities.ResolveChatMaxTokensAsync(scopeSiteId, aiSettings, ct);

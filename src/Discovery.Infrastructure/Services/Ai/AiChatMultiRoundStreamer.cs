@@ -81,7 +81,8 @@ public class AiChatMultiRoundStreamer
         if (session == null) { yield return new AiChatStreamChunk(Type: "error", Error: $"Sessão {sessionId} não encontrada."); yield break; }
 
         var aiSettings = await resolveAiSettings(session.SiteId, ct);
-        if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled) { yield return new AiChatStreamChunk(Type: "error", Error: "Chat IA desabilitado."); yield break; }
+        if (!aiSettings.Enabled) { yield return new AiChatStreamChunk(Type: "error", Error: "A Integração com IA está desabilitada neste servidor."); yield break; }
+        if (!aiSettings.ChatAIEnabled) { yield return new AiChatStreamChunk(Type: "error", Error: "O Chat IA está desabilitado para este escopo (ligue em Funcionalidades do Sistema > Chat IA)."); yield break; }
 
         var costAcquired = false;
         if (_costControl is not null)

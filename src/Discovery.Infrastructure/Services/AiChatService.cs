@@ -114,8 +114,13 @@ public class AiChatService : IAiChatService
             var scopeClientId = site.ClientId;
             var aiSettings = await ResolveAiSettingsAsync(scopeSiteId, ct);
 
-            if (!aiSettings.Enabled || !aiSettings.ChatAIEnabled)
-                throw new InvalidOperationException("Chat IA está desabilitado para este escopo.");
+            // Mensagens DISTINTAS: o texto unico escondia qual dos dois interruptores estava
+            // desligado (Integracao com IA x Chat IA por escopo) — foi o que tornou o
+            // diagnostico do incidente de 28/11/2026 lento.
+            if (!aiSettings.Enabled)
+                throw new InvalidOperationException("A Integração com IA está desabilitada neste servidor.");
+            if (!aiSettings.ChatAIEnabled)
+                throw new InvalidOperationException("O Chat IA está desabilitado para este escopo (ligue em Funcionalidades do Sistema > Chat IA).");
 
             if (aiSettings.CostControlEnabled)
             {

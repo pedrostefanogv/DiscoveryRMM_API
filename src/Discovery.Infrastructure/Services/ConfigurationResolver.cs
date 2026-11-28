@@ -277,6 +277,17 @@ public class ConfigurationResolver : IConfigurationResolver
         var ai = ResolveAI(site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson, server.AIIntegrationSettingsJson);
         var aiSource = ResolveObjectSource("AIIntegrationSettingsJson", blocked, site?.AIIntegrationSettingsJson, client?.AIIntegrationSettingsJson);
 
+        // FONTE UNICA dos kill switches de IA (incidente 28/11/2026): "Chat IA" e
+        // "Base de Conhecimento" tem DUAS representacoes — as colunas resolvidas por
+        // escopo (server -> client -> site), que e o que o console mostra em
+        // "Funcionalidades do Sistema", e os campos de mesmo nome dentro do JSON de
+        // integracao de IA. As telas nunca as sincronizavam: o card aparecia LIGADO
+        // (coluna true) e a API respondia 400 "Chat IA esta desabilitado para este
+        // escopo" (JSON false). O valor da coluna e a verdade; o JSON carrega apenas a
+        // configuracao de provedor/modelos.
+        ai.ChatAIEnabled = chatAi.Value;
+        ai.KnowledgeBaseEnabled = knowledge.Value;
+
         // Processamentos em segundo plano: Global -> Cliente (site NÃO participa por
         // decisão de produto). O campo pode ser bloqueado como qualquer outro.
         var backgroundProcessing = ResolveBackgroundProcessing(

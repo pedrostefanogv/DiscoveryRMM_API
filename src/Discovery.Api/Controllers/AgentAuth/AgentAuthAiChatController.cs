@@ -192,7 +192,20 @@ public class AgentAuthAiChatController : AgentAuthControllerBase
         if (!TryGetAgentId(out var id)) return Unauthorized();
         var (_, blocked) = await GetAgentOrBlockAsync(id, false);
         if (blocked is not null) return blocked;
-        return MapResult(await _mediator.Send(cmd with { AgentId = id, ClientIp = ResolveAgentClientIp() }, ct), Ok);
+        try
+        {
+            return MapResult(await _mediator.Send(cmd with { AgentId = id, ClientIp = ResolveAgentClientIp() }, ct), Ok);
+        }
+        catch (Exception ex)
+        {
+            // Mesmo contrato do /me/ai-chat/stream: falha do provedor LLM vira 502 com o
+            // texto real. Antes, o 402 de creditos do OpenRouter subia como 500 "Erro
+            // interno do servidor" com message=null e o usuario nao sabia o motivo.
+            // Excecoes inesperadas (detail null) seguem para o ExceptionHandlingMiddleware.
+            var (status, detail) = DescribeChatStreamFailure(ex);
+            if (detail is null) throw;
+            return StatusCode(status, new { error = detail });
+        }
     }
 
     [HttpPost("me/ai-chat/async")]
