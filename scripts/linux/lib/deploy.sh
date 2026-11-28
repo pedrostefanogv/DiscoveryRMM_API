@@ -1182,14 +1182,28 @@ OSEOF
     setup_agent_mtls_ca || warn "Falha ao garantir CA mTLS de agents (enrollment/P2P)"
   fi
 
-  # O nginx NAO pede certificado cliente. O gate correspondente na API
-  # (AgentMtls:StrictMode) e opt-in e esta desligado; pedir o certificado aqui nao
-  # tem efeito atras do Cloudflare (a borda termina o TLS e nao repassa o
-  # certificado cliente a origem) e, quando o gate esteve ligado por default, essa
-  # combinacao derrubou todos os agentes com 401 MTLS_CERT_REQUIRED (27/11/2026).
-  # Se o gate voltar a ser usado, exponha um caminho DIRETO ate a origem e
-  # reintroduza as diretivas (ssl_client_certificate / ssl_verify_client optional).
+  # O nginx so pede certificado cliente quando o gate HTTP esta LIGADO
+  # (AGENT_MTLS_STRICT=1), que tambem liga AgentMtls:StrictMode no discovery.env:
+  # os dois precisam andar juntos, senao o gate exige um certificado que o nginx
+  # nunca pede (foi o estado que derrubou a frota com 401 MTLS_CERT_REQUIRED em
+  # 27/11/2026). Atras do Cloudflare (proxy laranja) o certificado cliente NAO
+  # chega a origem: so ligue isso com um caminho DIRETO ate a origem (hostname
+  # DNS-only/porta dedicada). Este bloco e regenerado a cada update, por isso as
+  # diretivas sao emitidas aqui e nao adicionadas a mao.
   local agent_mtls_directives=""
+  if [[ "${AGENT_MTLS_STRICT:-0}" == "1" || "${AGENT_MTLS_STRICT:-0}" == "true" ]]; then
+    if sudo test -s /etc/discovery-api/certs/agent-ca.crt; then
+      agent_mtls_directives="$(cat <<'MTLS_EOF'
+  ssl_client_certificate /etc/discovery-api/certs/agent-ca.crt;
+  ssl_verify_client optional;
+  ssl_verify_depth 2;
+MTLS_EOF
+)"
+      warn "AGENT_MTLS_STRICT=1: nginx passa a pedir certificado cliente. Isso so funciona com acesso DIRETO a origem (sem proxy que encerre o TLS)."
+    else
+      fail "AGENT_MTLS_STRICT=1 mas a CA /etc/discovery-api/certs/agent-ca.crt nao existe: o gate HTTP rejeitaria todos os agentes."
+    fi
+  fi
 
   local rendered_conf; rendered_conf="$(mktemp)"
   awk \
