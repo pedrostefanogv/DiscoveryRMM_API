@@ -27,7 +27,13 @@ public class AgentAuthMiddleware
         _next = next;
         _logger = logger;
         _agentAuthPathPrefix = configuration.GetValue<string>("AgentAuth:PathPrefix") ?? DefaultPathPrefix;
-        _strictMtls = configuration.GetValue<bool?>("AgentMtls:StrictMode") ?? true;
+        // mTLS é ENTRE AGENTES (handshake libp2p + gates de artefato no P2P), não
+        // no HTTP. O TLS dos agentes termina na borda do Cloudflare (proxy laranja),
+        // que não envia CertificateRequest nem repassa o certificado cliente à
+        // origem: exigir mTLS aqui deixava TODOS os agentes em 401
+        // MTLS_CERT_REQUIRED (incidente 27/11/2026) sem que o certificado pudesse
+        // chegar ao servidor. Por isso o gate no HTTP é OPT-IN (default false).
+        _strictMtls = configuration.GetValue<bool?>("AgentMtls:StrictMode") ?? false;
     }
 
     public async Task InvokeAsync(

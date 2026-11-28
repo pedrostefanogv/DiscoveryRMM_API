@@ -1,9 +1,12 @@
+using System.Security.Cryptography.X509Certificates;
 using Discovery.Api.Middleware;
 using Discovery.Core.Entities;
 using Discovery.Core.Interfaces;
+using Discovery.Core.Interfaces.Security;
 using Discovery.Infrastructure.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Discovery.Tests;
@@ -501,6 +504,89 @@ public class AgentAuthMiddlewareTests
         public Task TransferSiteAsync(Guid agentId, Guid newSiteId) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id) => throw new NotSupportedException();
         public Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Gate OPCIONAL de mTLS no HTTP (incidente 27/11/2026): o mTLS é ENTRE
+    // AGENTES (P2P/libp2p). No HTTP ele nunca funciona atrás do Cloudflare (proxy
+    // laranja), que encerra o TLS e não repassa o certificado cliente à origem —
+    // ligado por default, deixou TODOS os agentes em 401 MTLS_CERT_REQUIRED.
+    // Por isso o default é DESLIGADO.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Test]
+    public async Task InvokeAsync_MtlsGateDisabledByDefault_ShouldCallNext_WithoutClientCertificate()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/tickets", "mdz_valid");
+        context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
+        context.RequestServices = BuildServicesWithFakeCaService();
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(nextCalled, Is.True,
+                "sem AgentMtls:StrictMode o gate mTLS no HTTP deve ficar DESLIGADO (regressao do incidente 27/11/2026)");
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_MtlsGateEnabled_ShouldReturnMtlsCertRequired_WhenClientCertificateMissing()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = new AgentAuthMiddleware(
+            _ => { nextCalled = true; return Task.CompletedTask; },
+            BuildConfiguration(("AgentMtls:StrictMode", "true")),
+            NullLogger<AgentAuthMiddleware>.Instance);
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me/tickets", "mdz_valid");
+        context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
+        context.RequestServices = BuildServicesWithFakeCaService();
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        context.Response.Body.Seek(0, SeekOrigin.Begin);
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            Assert.That(nextCalled, Is.False);
+            Assert.That(body, Does.Contain("MTLS_CERT_REQUIRED"));
+        });
+    }
+
+    private static IConfiguration BuildConfiguration(params (string Key, string Value)[] values)
+        => new ConfigurationBuilder()
+            .AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value)))
+            .Build();
+
+    private static IServiceProvider BuildServicesWithFakeCaService()
+        => new ServiceCollection().AddSingleton<IAgentCaService, FakeAgentCaService>().BuildServiceProvider();
+
+    private sealed class FakeAgentCaService : IAgentCaService
+    {
+        public string GetCaCertificatePem() => "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----";
+
+        public X509Certificate2 GetCaCertificate() => throw new NotSupportedException();
+
+        public AgentMtlsEnrollmentResult SignAgentCsr(Guid agentId, Guid clientId, string csrPem)
+            => throw new NotSupportedException();
+
+        public AgentMtlsValidationResult ValidateClientCertificate(X509Certificate2? cert, Guid expectedAgentId)
+            => cert is null
+                ? new AgentMtlsValidationResult(false, "Certificado cliente mTLS ausente.", null, null)
+                : new AgentMtlsValidationResult(true, null, expectedAgentId, null);
     }
 
     private static DefaultHttpContext CreateAgentApiContext(string path, string rawToken)

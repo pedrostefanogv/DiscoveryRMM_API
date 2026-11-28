@@ -548,6 +548,17 @@ app.UseSecurityHeaders();
 // Agent token auth middleware (para rotas /api/agent-auth/*)
 app.UseAgentAuth();
 
+// Gate OPCIONAL de mTLS no HTTP (ver AgentAuthMiddleware): o mTLS de agentes e
+// entre agentes (P2P), nao contra a API. Se alguem ligar AgentMtls:StrictMode,
+// avisa no startup — foi ligando isso em silencio que o incidente de 27/11/2026
+// (401 MTLS_CERT_REQUIRED em toda a frota) passou despercebido.
+if (builder.Configuration.GetValue<bool?>("AgentMtls:StrictMode") ?? false)
+{
+    app.Logger.LogWarning(
+        "[AgentAuth] AgentMtls:StrictMode=true: exigindo certificado cliente mTLS em /api/v1/agent-auth/*. " +
+        "Isso so funciona se o trafego do agente chegar DIRETO a origem (sem proxy que encerre o TLS, ex. Cloudflare).");
+}
+
 // API key e JWT user auth (para todos os demais endpoints)
 app.UseApiTokenAuth();
 app.UseUserAuth();

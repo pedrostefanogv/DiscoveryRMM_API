@@ -664,6 +664,15 @@ Nats__FanoutStream__Name=${NATS_JS_FANOUT_STREAM_NAME:-DISCOVERY_FANOUT_COMMANDS
 ${fanout_subject_lines}Nats__FanoutStream__MaxAge=${NATS_JS_FANOUT_STREAM_MAX_AGE:-24h}
 Nats__FanoutStream__MaxBytes=${NATS_JS_FANOUT_STREAM_MAX_BYTES:-33554432}
 Nats__FanoutStream__DuplicateWindow=${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}
+# ── Gate mTLS no HTTP do agent (OPT-IN; default DESLIGADO) ─────────────────
+# O mTLS de agentes e ENTRE AGENTES (P2P/libp2p), nao no HTTP: atras do
+# Cloudflare (proxy laranja) a borda termina o TLS e o certificado cliente nunca
+# chega a origem — exigir mTLS aqui deixou TODOS os agentes em 401
+# MTLS_CERT_REQUIRED (incidente 27/11/2026). Ligue (AGENT_MTLS_STRICT=1) apenas
+# com um caminho DIRETO ate a origem E as diretivas de certificado cliente no
+# nginx (ver write_site_proxy_config). Esta chave e reescrita a cada update:
+# por isso precisa ser emitida aqui, e nao adicionada a mao no discovery.env.
+AgentMtls__StrictMode=$( [[ "${AGENT_MTLS_STRICT:-0}" == "1" || "${AGENT_MTLS_STRICT:-0}" == "true" ]] && echo true || echo false )
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
 AgentPackage__Profiles__linux__DiscoveryProjectPath=${DISCOVERY_AGENT_SRC}
@@ -1167,21 +1176,20 @@ OSEOF
   fi
   [[ -f "$NGINX_TEMPLATE_PATH" ]] || fail "Template Nginx nao encontrado: $NGINX_TEMPLATE_PATH"
 
+  # A CA interna dos agentes continua sendo garantida: ela assina o certificado
+  # consumido pelo mTLS ENTRE AGENTES (P2P/libp2p) e pelo endpoint de enrollment.
   if declare -F setup_agent_mtls_ca >/dev/null 2>&1; then
-    setup_agent_mtls_ca || warn "Falha ao garantir CA mTLS de agents (prosseguindo sem ssl_client_certificate)"
+    setup_agent_mtls_ca || warn "Falha ao garantir CA mTLS de agents (enrollment/P2P)"
   fi
 
+  # O nginx NAO pede certificado cliente. O gate correspondente na API
+  # (AgentMtls:StrictMode) e opt-in e esta desligado; pedir o certificado aqui nao
+  # tem efeito atras do Cloudflare (a borda termina o TLS e nao repassa o
+  # certificado cliente a origem) e, quando o gate esteve ligado por default, essa
+  # combinacao derrubou todos os agentes com 401 MTLS_CERT_REQUIRED (27/11/2026).
+  # Se o gate voltar a ser usado, exponha um caminho DIRETO ate a origem e
+  # reintroduza as diretivas (ssl_client_certificate / ssl_verify_client optional).
   local agent_mtls_directives=""
-  if sudo test -s /etc/discovery-api/certs/agent-ca.crt; then
-    agent_mtls_directives="$(cat <<'MTLS_EOF'
-  ssl_client_certificate /etc/discovery-api/certs/agent-ca.crt;
-  ssl_verify_client optional;
-  ssl_verify_depth 2;
-MTLS_EOF
-)"
-  else
-    warn "CA mTLS /etc/discovery-api/certs/agent-ca.crt ausente; mantendo nginx sem ssl_client_certificate."
-  fi
 
   local rendered_conf; rendered_conf="$(mktemp)"
   awk \
