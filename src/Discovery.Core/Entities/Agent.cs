@@ -69,6 +69,10 @@ public class Agent
     public DateTime? MaintenanceChangedAt { get; set; }
     public Guid? MaintenanceChangedByUserId { get; set; }
 
+    // ── Certificado mTLS (P2P entre agentes) ──────────────────────────────
+    public string? MtlsCertSerial { get; set; }
+    public DateTime? MtlsCertExpiresAtUtc { get; set; }
+
     [JsonIgnore]
     public AgentStatus EffectiveStatus => MaintenanceEnabled ? AgentStatus.Maintenance : Status;
 }

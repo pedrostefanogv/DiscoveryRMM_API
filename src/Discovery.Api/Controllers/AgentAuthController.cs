@@ -56,6 +56,7 @@ public class AgentAuthController : AgentAuthControllerBase
         try
         {
             var result = _agentCaService.SignAgentCsr(agent.Id, clientId, request.CsrPem);
+            await _agentRepo.UpdateMtlsCertAsync(agent.Id, result.SerialNumber, result.ExpiresAtUtc, ct);
             return Ok(result);
         }
         catch (ArgumentException ex)

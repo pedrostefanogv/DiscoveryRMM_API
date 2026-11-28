@@ -234,6 +234,7 @@ public class AgentAuthMiddlewareTests
         var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
 
         var context = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        context.Request.Method = HttpMethods.Get;
         context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
 
         await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
@@ -264,6 +265,7 @@ public class AgentAuthMiddlewareTests
         var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
 
         var context = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        context.Request.Method = HttpMethods.Delete;
         context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
 
         await middleware.InvokeAsync(context, authService, repo);
@@ -431,6 +433,7 @@ public class AgentAuthMiddlewareTests
         var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
 
         var context = CreateAgentApiContext("/api/v1/agent-auth/me", rawToken);
+        context.Request.Method = HttpMethods.Delete;
         context.Request.Headers.Append("X-Agent-ID", agentId.ToString());
         await middleware.InvokeAsync(context, authService, agentRepo);
 
@@ -551,6 +554,97 @@ public class AgentAuthMiddlewareTests
 
         var context = CreateAgentApiContext("/api/v1/agent-auth/me/tickets", "mdz_valid");
         context.Request.Headers.Append("X-Agent-ID", token.AgentId.ToString());
+        context.RequestServices = BuildServicesWithFakeCaService();
+
+        await middleware.InvokeAsync(context, authService, new FakeAgentRepository());
+
+        context.Response.Body.Seek(0, SeekOrigin.Begin);
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status401Unauthorized));
+            Assert.That(nextCalled, Is.False);
+            Assert.That(body, Does.Contain("MTLS_CERT_REQUIRED"));
+        });
+    }
+
+    [Test]
+    public async Task InvokeAsync_TrashedAgent_OnSelfIdentityOrAgentToolsWithoutHeader_ShouldReturnForbidden()
+    {
+        var agentId = Guid.NewGuid();
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = agentId };
+        var authService = new FakeAgentAuthService(token);
+        var agentRepo = new FakeAgentRepository
+        {
+            Agent = new Agent { Id = agentId, DeletedAt = DateTime.UtcNow.AddMinutes(-5) }
+        };
+
+        foreach (var path in new[] { "/api/v1/agent-auth/me", "/api/v1/agent-auth/agent-tools/registry" })
+        {
+            var nextCalled = false;
+            var middleware = CreateMiddleware(_ => { nextCalled = true; return Task.CompletedTask; });
+            var context = CreateAgentApiContext(path, "mdz_valid");
+            context.Request.Method = HttpMethods.Get;
+
+            await middleware.InvokeAsync(context, authService, agentRepo);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(context.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden), $"GET {path}");
+                Assert.That(nextCalled, Is.False, $"GET {path}");
+            });
+        }
+    }
+
+    [Test]
+    public async Task InvokeAsync_TrashedAgent_DeleteMeAllowed_GetMeBlocked()
+    {
+        var agentId = Guid.NewGuid();
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = agentId };
+        var authService = new FakeAgentAuthService(token);
+        var agentRepo = new FakeAgentRepository
+        {
+            Agent = new Agent { Id = agentId, DeletedAt = DateTime.UtcNow.AddMinutes(-5) }
+        };
+
+        // GET /me deve ser bloqueado (apenas DELETE /me é decommission)
+        var getCalled = false;
+        var getMiddleware = CreateMiddleware(_ => { getCalled = true; return Task.CompletedTask; });
+        var getCtx = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        getCtx.Request.Method = HttpMethods.Get;
+        getCtx.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await getMiddleware.InvokeAsync(getCtx, authService, agentRepo);
+
+        Assert.That(getCtx.Response.StatusCode, Is.EqualTo(StatusCodes.Status403Forbidden));
+        Assert.That(getCalled, Is.False);
+
+        // DELETE /me continua permitido para o descomissionamento concluir
+        var deleteCalled = false;
+        var deleteMiddleware = CreateMiddleware(_ => { deleteCalled = true; return Task.CompletedTask; });
+        var deleteCtx = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        deleteCtx.Request.Method = HttpMethods.Delete;
+        deleteCtx.Request.Headers.Append("X-Agent-ID", agentId.ToString());
+        await deleteMiddleware.InvokeAsync(deleteCtx, authService, agentRepo);
+
+        Assert.That(deleteCtx.Response.StatusCode, Is.EqualTo(StatusCodes.Status200OK));
+        Assert.That(deleteCalled, Is.True);
+    }
+
+    [Test]
+    public async Task InvokeAsync_MtlsGateEnabled_SelfIdentityWithoutHeader_ShouldStillRequireMtlsCert()
+    {
+        var token = new AgentToken { Id = Guid.NewGuid(), AgentId = Guid.NewGuid() };
+        var authService = new FakeAgentAuthService(token);
+
+        var nextCalled = false;
+        var middleware = new AgentAuthMiddleware(
+            _ => { nextCalled = true; return Task.CompletedTask; },
+            BuildConfiguration(("AgentMtls:StrictMode", "true")),
+            NullLogger<AgentAuthMiddleware>.Instance);
+
+        var context = CreateAgentApiContext("/api/v1/agent-auth/me", "mdz_valid");
+        context.Request.Method = HttpMethods.Get;
         context.RequestServices = BuildServicesWithFakeCaService();
 
         await middleware.InvokeAsync(context, authService, new FakeAgentRepository());

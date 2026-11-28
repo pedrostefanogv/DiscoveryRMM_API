@@ -86,47 +86,42 @@ public class AgentAuthMiddleware
                     _logger.LogInformation(
                         "[AgentAuth] Self-identity endpoint sem X-Agent-ID, usando AgentId do token: {AgentId} ({Path})",
                         token.AgentId, path);
-                    context.Items["AgentId"] = token.AgentId;
-                    context.Items["TokenId"] = token.Id;
-                    await _next(context);
-                    return;
                 }
-
-                // ── Fallback: endpoints de registro de tools/status podem usar o AgentId do token ──
-                if (path.Value?.Contains("agent-tools/registry", StringComparison.OrdinalIgnoreCase) == true
+                else if (path.Value?.Contains("agent-tools/registry", StringComparison.OrdinalIgnoreCase) == true
                     || path.Value?.Contains("agent-tools", StringComparison.OrdinalIgnoreCase) == true)
                 {
+                    // Fallback: endpoints de registro de tools/status podem usar o AgentId do token
                     _logger.LogInformation("[AgentAuth] Registry endpoint sem X-Agent-ID, usando AgentId do token: {AgentId}",
                         token.AgentId);
-                    context.Items["AgentId"] = token.AgentId;
-                    context.Items["TokenId"] = token.Id;
-                    await _next(context);
+                }
+                else
+                {
+                    _logger.LogWarning("[AgentAuth] 401: Missing X-Agent-ID header for {Path} (token AgentId={AgentId})",
+                        path, token.AgentId);
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsJsonAsync(new { error = "Missing X-Agent-ID header." });
+                    return;
+                }
+            }
+            else
+            {
+                if (!Guid.TryParse(rawAgentIdHeader, out var headerAgentId))
+                {
+                    _logger.LogWarning("[AgentAuth] 400: Invalid X-Agent-ID format for {Path}: '{Value}'",
+                        path, rawAgentIdHeader);
+                    context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    await context.Response.WriteAsJsonAsync(new { error = "Invalid X-Agent-ID header." });
                     return;
                 }
 
-                _logger.LogWarning("[AgentAuth] 401: Missing X-Agent-ID header for {Path} (token AgentId={AgentId})",
-                    path, token.AgentId);
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsJsonAsync(new { error = "Missing X-Agent-ID header." });
-                return;
-            }
-
-            if (!Guid.TryParse(rawAgentIdHeader, out var headerAgentId))
-            {
-                _logger.LogWarning("[AgentAuth] 400: Invalid X-Agent-ID format for {Path}: '{Value}'",
-                    path, rawAgentIdHeader);
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsJsonAsync(new { error = "Invalid X-Agent-ID header." });
-                return;
-            }
-
-            if (headerAgentId != token.AgentId)
-            {
-                _logger.LogWarning("[AgentAuth] 401: X-Agent-ID mismatch for {Path}: header={HeaderId}, token={TokenId}",
-                    path, headerAgentId, token.AgentId);
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                await context.Response.WriteAsJsonAsync(new { error = "X-Agent-ID does not match authenticated token." });
-                return;
+                if (headerAgentId != token.AgentId)
+                {
+                    _logger.LogWarning("[AgentAuth] 401: X-Agent-ID mismatch for {Path}: header={HeaderId}, token={TokenId}",
+                        path, headerAgentId, token.AgentId);
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    await context.Response.WriteAsJsonAsync(new { error = "X-Agent-ID does not match authenticated token." });
+                    return;
+                }
             }
         }
 
@@ -140,7 +135,7 @@ public class AgentAuthMiddleware
         var isTrashed = validation.IsAgentTrashed ?? await IsTrashedAgentAsync(token.AgentId, agentLookup);
         if (isTrashed)
         {
-            if (!IsDecommissionEndpoint(path))
+            if (!IsDecommissionEndpoint(context.Request))
             {
                 _logger.LogWarning(
                     "[AgentAuth] 403: agente {AgentId} está na lixeira e só pode acessar o próprio descomissionamento (pedido: {Path}).",
@@ -157,7 +152,7 @@ public class AgentAuthMiddleware
         context.Items["AgentId"] = token.AgentId;
         context.Items["TokenId"] = token.Id;
 
-        if (_strictMtls && !IsMtlsExemptEndpoint(path) && !IsDecommissionEndpoint(path))
+        if (_strictMtls && !IsMtlsExemptEndpoint(path) && !IsDecommissionEndpoint(context.Request))
         {
             var agentCaService = context.RequestServices.GetService<IAgentCaService>();
             if (agentCaService is not null)
@@ -275,13 +270,14 @@ public class AgentAuthMiddleware
     /// Único endpoint que um agente na lixeira pode chamar: o DELETE do próprio
     /// registro (<c>/api/v1/agent-auth/me</c>), usado pelo descomissionamento.
     /// </summary>
-    private static bool IsDecommissionEndpoint(PathString path)
+    private bool IsDecommissionEndpoint(HttpRequest request)
     {
-        if (!path.HasValue)
+        if (!HttpMethods.IsDelete(request.Method) || !request.Path.HasValue)
             return false;
 
-        var value = path.Value!.TrimEnd('/');
-        return value.EndsWith("/agent-auth/me", StringComparison.OrdinalIgnoreCase);
+        var value = request.Path.Value!.TrimEnd('/');
+        var prefix = _agentAuthPathPrefix.TrimEnd('/');
+        return string.Equals(value, prefix + "/me", StringComparison.OrdinalIgnoreCase);
     }
 }
 

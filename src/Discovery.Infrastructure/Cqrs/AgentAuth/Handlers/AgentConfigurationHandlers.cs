@@ -18,7 +18,8 @@ public sealed class GetAgentConfigurationHandler(
     IAgentTlsCertificateProbe tlsProbe,
     IMcpToolPolicyRepository mcpPolicyRepo,
     IPatchRepository patchRepo,
-    ILogger<GetAgentConfigurationHandler> logger
+    ILogger<GetAgentConfigurationHandler> logger,
+    Microsoft.Extensions.Configuration.IConfiguration? configuration = null
 ) : IRequestHandler<GetAgentConfigurationQuery, Result<object>>
 {
     public async Task<Result<object>> Handle(GetAgentConfigurationQuery q, CancellationToken ct)
@@ -118,6 +119,7 @@ public sealed class GetAgentConfigurationHandler(
             ["agentHomeTab"] = AgentHomeTabCatalog.Normalize(
                 FirstNonEmpty(siteConfig?.AgentHomeTab, clientConfig?.AgentHomeTab, serverConfig.AgentHomeTab)),
             ["p2pFilesEnabled"] = siteConfig?.P2PFilesEnabled ?? clientConfig?.P2PFilesEnabled ?? serverConfig.P2PFilesEnabled,
+            ["p2pMtlsMode"] = NormalizeP2pMtlsMode(configuration?["AgentMtls:P2pMode"]),
             // Cofre TPM de credenciais de conexão do agent (servidor → cliente →
             // site; default false = opt-in). true = o agent grava as credenciais
             // no TPM; false = o cofre é limpo (ver AGENT_INTEGRATION_GUIDE).
@@ -250,6 +252,14 @@ public sealed class GetAgentConfigurationHandler(
                 .ToArray(),
         };
     }
+
+    private static string NormalizeP2pMtlsMode(string? raw)
+        => raw?.Trim().ToLowerInvariant() switch
+        {
+            "off" => "off",
+            "enforce" => "enforce",
+            _ => "compat"
+        };
 
     private static object? TryDeserializeJson(string? json)
     {

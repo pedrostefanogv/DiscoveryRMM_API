@@ -673,6 +673,7 @@ Nats__FanoutStream__DuplicateWindow=${NATS_JS_FANOUT_STREAM_DUPE_WINDOW:-2m}
 # nginx (ver write_site_proxy_config). Esta chave e reescrita a cada update:
 # por isso precisa ser emitida aqui, e nao adicionada a mao no discovery.env.
 AgentMtls__StrictMode=$( [[ "${AGENT_MTLS_STRICT:-0}" == "1" || "${AGENT_MTLS_STRICT:-0}" == "true" ]] && echo true || echo false )
+AgentMtls__P2pMode=${AGENT_P2P_MTLS_MODE:-compat}
 AgentPackage__PublicApiScheme=https
 AgentPackage__PublicApiServer=${public_host}
 AgentPackage__Profiles__linux__DiscoveryProjectPath=${DISCOVERY_AGENT_SRC}

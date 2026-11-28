@@ -139,6 +139,15 @@ public class AgentRepository : IAgentRepository, IAgentSensorSyncRepository
                 .SetProperty(agent => agent.LastSensorSyncAt, _ => syncedAt), ct);
     }
 
+    public async Task UpdateMtlsCertAsync(Guid id, string serialNumber, DateTime expiresAtUtc, CancellationToken ct = default)
+    {
+        await _db.Agents
+            .Where(agent => agent.Id == id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(agent => agent.MtlsCertSerial, _ => serialNumber)
+                .SetProperty(agent => agent.MtlsCertExpiresAtUtc, _ => expiresAtUtc), ct);
+    }
+
     public async Task ApproveZeroTouchAsync(Guid agentId)
     {
         var now = DateTime.UtcNow;

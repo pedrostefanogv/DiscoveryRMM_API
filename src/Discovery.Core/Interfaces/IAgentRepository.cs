@@ -49,4 +49,10 @@ public interface IAgentRepository
     /// Usado pela Recuperação de Dispositivos para reutilizar um agent já registrado.
     /// </summary>
     Task<IReadOnlyList<Agent>> FindByFingerprintAsync(string fingerprintHash, Guid clientId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Registra o serial e expiração do último certificado mTLS emitido para o agent.
+    /// </summary>
+    Task UpdateMtlsCertAsync(Guid id, string serialNumber, DateTime expiresAtUtc, CancellationToken ct = default)
+        => Task.CompletedTask;
 }

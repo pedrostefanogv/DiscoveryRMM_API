@@ -168,6 +168,13 @@ public partial class DiscoveryDbContext
             entity.Property(agent => agent.MaintenanceChangedByUserId)
                 .HasColumnName("maintenance_changed_by_user_id");
 
+            entity.Property(agent => agent.MtlsCertSerial)
+                .HasColumnName("mtls_cert_serial")
+                .HasMaxLength(128);
+            entity.Property(agent => agent.MtlsCertExpiresAtUtc)
+                .HasColumnName("mtls_cert_expires_at_utc")
+                .HasColumnType("timestamptz");
+
             entity.Ignore(agent => agent.EffectiveStatus);
 
             entity.HasOne<Site>()

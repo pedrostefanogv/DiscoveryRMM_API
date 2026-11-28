@@ -155,6 +155,8 @@ client_max_body_size 64m;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-SSL-Client-Cert $ssl_client_escaped_cert;
+    proxy_set_header X-SSL-Client-Verify $ssl_client_verify;
     proxy_read_timeout 180s;
     proxy_buffering off;
   }

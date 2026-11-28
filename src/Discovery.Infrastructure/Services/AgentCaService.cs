@@ -16,6 +16,7 @@ public sealed class AgentCaService : IAgentCaService, IDisposable
     private readonly string _caCertPath;
     private readonly string _caKeyPath;
     private readonly int _agentCertValidityDays;
+    private readonly bool _allowAutoGenerateCa;
     private readonly ILogger<AgentCaService> _logger;
     private readonly object _lock = new();
 
@@ -35,6 +36,7 @@ public sealed class AgentCaService : IAgentCaService, IDisposable
         _caKeyPath = configuration["AgentMtls:CaKeyPath"] ?? Path.Combine(defaultDir, "agent-ca.key");
         var days = configuration.GetValue<int?>("AgentMtls:AgentCertValidityDays") ?? 30;
         _agentCertValidityDays = Math.Clamp(days, 1, 365);
+        _allowAutoGenerateCa = configuration.GetValue<bool?>("AgentMtls:AutoGenerateCa") ?? !OperatingSystem.IsLinux();
 
         EnsureCaLoaded();
     }
@@ -240,6 +242,13 @@ public sealed class AgentCaService : IAgentCaService, IDisposable
             _caCert = loaded;
             _caCertPem = certPem;
             return;
+        }
+
+        if (!_allowAutoGenerateCa)
+        {
+            throw new InvalidOperationException(
+                $"CA mTLS de agentes não encontrada em '{_caCertPath}' e '{_caKeyPath}'. " +
+                "Execute setup_agent_mtls_ca no servidor ou habilite AgentMtls:AutoGenerateCa em desenvolvimento.");
         }
 
         var dir = Path.GetDirectoryName(_caCertPath);
